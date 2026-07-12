@@ -183,7 +183,7 @@ function autofixSeg(seg, rules, glob) {
 }
 
 /* ---------- engine ---------- */
-function computeEngine(DEM, ftCov, includePT, floorVal, SPANS, maxFleet) {
+function computeEngine(DEM, ftCov, includePT, minVeh, SPANS, maxFleet) {
   const perDay = {};
   let weekEvents = 0, weekSupSlots = 0;
   for (const d of DAYS) {
@@ -230,7 +230,7 @@ function computeEngine(DEM, ftCov, includePT, floorVal, SPANS, maxFleet) {
     let fc = null;
     for (let i = 0; i < N; i++) {
       const t = SLOT(i);
-      if (t >= s0 && t < s1 && p.sup[i] < floorVal) {
+      if (t >= s0 && t < s1 && p.sup[i] < minVeh) {
         if (!fc) fc = { from: i, to: i, min: p.sup[i] };
         else { fc.to = i; fc.min = Math.min(fc.min, p.sup[i]); }
       } else if (fc) { floorViol.push(fc); fc = null; }
@@ -356,7 +356,7 @@ function findSuggestions(board, eng, DEM, rules, glob) {
 }
 
 /* ---------- auto-builder ---------- */
-function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, floorVal, includePT) {
+function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, includePT) {
   let evaluated = 0;
   let weekEv = 0;
   for (const d of DAYS) weekEv += DEM[d].reduce((a, b) => a + b, 0);
@@ -425,7 +425,7 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, floorVal, 
       for (let i = 0; i < N; i++) {
         let g = Math.max(0, Math.min(1, target[d][i] - sup[d][i]));
         const t = SLOT(i);
-        if (t >= s0 && t < s1 && sup[d][i] < floorVal) g += 0.5;
+        if (t >= s0 && t < s1 && sup[d][i] < minVeh) g += 0.5;
         pg[i + 1] = pg[i] + g;
         pc[i + 1] = pc[i] + (glob.maxFleet > 0 && sup[d][i] >= glob.maxFleet ? 1 : 0);
       }
@@ -498,13 +498,13 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, floorVal, 
 }
 
 function optimizeToConvergence(board0, engine0Args, rules, glob, maxIter = 25) {
-  // engine0Args = (DEM, includePT, floorVal, spans, maxFleet)
-  const [DEM, includePT, floorVal, spans, maxFleet] = engine0Args;
+  // engine0Args = (DEM, includePT, minVeh, spans, maxFleet)
+  const [DEM, includePT, minVeh, spans, maxFleet] = engine0Args;
   let board = board0.map((s) => ({ ...s, b: s.b ? [...s.b] : null, days: [...s.days] }));
   let applied = 0, iter = 0, evaluated = 0;
   while (iter < maxIter) {
     iter++;
-    const eng = computeEngine(DEM, buildSupply(board), includePT, floorVal, spans, maxFleet);
+    const eng = computeEngine(DEM, buildSupply(board), includePT, minVeh, spans, maxFleet);
     const sugs = findSuggestions(board, eng, DEM, rules, glob);
     evaluated += sugs.evaluated || 0;
     if (!sugs.length) break;
@@ -522,12 +522,12 @@ function optimizeToConvergence(board0, engine0Args, rules, glob, maxIter = 25) {
 function deepOptimize(board0, engineArgs, rules, glob) {
   let board = board0;
   let moves = 0, evaluated = 0, created = 0, passes = 0;
-  const [DEM, includePT, floorVal, spans, maxFleet] = engineArgs;
+  const [DEM, includePT, minVeh, spans, maxFleet] = engineArgs;
   for (let round = 0; round < 4; round++) {
     passes++;
     const r1 = optimizeToConvergence(board, engineArgs, rules, glob);
     board = r1.board; moves += r1.applied; evaluated += r1.evaluated;
-    const r2 = refinePerDay(board, rules, glob, DEM, includePT, floorVal, spans);
+    const r2 = refinePerDay(board, rules, glob, DEM, includePT, minVeh, spans);
     board = r2.board; moves += r2.moves; created += r2.created; evaluated += r2.evaluated;
     if (r1.applied + r2.moves === 0) break;
   }
@@ -670,7 +670,7 @@ function autoPackage(board, rules, glob) {
 }
 
 /* ---------- per-day refinement ---------- */
-function refinePerDay(board0, rules, glob, DEM, includePT, floorVal, spans) {
+function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans) {
   let board = board0.map(cloneSeg);
   const maxVar = glob.maxStartVar || 60;
   const maxPull = glob.maxPullout || 0;
@@ -877,7 +877,7 @@ function Sketcher({ raw, setRaw, trips }) {
 }
 
 /* ---------- coverage chart ---------- */
-function CoverageChart({ P, day, floorVal, fleetCap, showBookout, height = 320, selBand }) {
+function CoverageChart({ P, day, minVeh, fleetCap, showBookout, height = 320, selBand }) {
   const data = useMemo(() => {
     const bk = RAW.bookout[day];
     const bkMap = {};
@@ -915,7 +915,7 @@ function CoverageChart({ P, day, floorVal, fleetCap, showBookout, height = 320, 
         <Area type="stepAfter" dataKey="gap" name="Gap" stroke="none" fill={gapRed} fillOpacity={0.22} legendType="none" />
         <Area type="stepAfter" dataKey="covered" name="Aligned" stroke="none" fill={supplyTeal} fillOpacity={0.16} legendType="none" />
         <Line type="stepAfter" dataKey="sup" name="Supply" stroke={supplyTeal} strokeWidth={2.2} dot={false} />
-        <ReferenceLine y={floorVal} stroke={demandAmber} strokeDasharray="4 4" label={{ value: `floor ${floorVal}`, position: "right", fontSize: 10, fill: demandAmber }} />
+        <ReferenceLine y={minVeh} stroke={demandAmber} strokeDasharray="4 4" label={{ value: `min ${minVeh}`, position: "right", fontSize: 10, fill: demandAmber }} />
         {fleetCap > 0 && <ReferenceLine y={fleetCap} stroke={gapRed} strokeDasharray="6 3" label={{ value: `fleet ${fleetCap}`, position: "right", fontSize: 10, fill: gapRed }} />}
         {selBand && <ReferenceLine x={fmt(selBand[0])} stroke={ink} strokeDasharray="3 3" />}
         {selBand && <ReferenceLine x={fmt(Math.min(selBand[1], T1 - 5))} stroke={ink} strokeDasharray="3 3" />}
@@ -930,7 +930,6 @@ function CoverageChart({ P, day, floorVal, fleetCap, showBookout, height = 320, 
 export default function App() {
   const [tab, setTab] = useState("coverage");
   const [day, setDay] = useState("Wednesday");
-  const [floorVal, setFloorVal] = useState(3);
   const [showBookout, setShowBookout] = useState(false);
   const [includePT, setIncludePT] = useState(true);
   const [totalSigned, setTotalSigned] = useState(50);
@@ -992,7 +991,7 @@ export default function App() {
     const payload = {
       v: 1, savedAt: new Date().toISOString(),
       demSource, sketch, trips, board, rules, glob, spans,
-      floorVal, totalSigned, blockSize, includePT,
+      totalSigned, blockSize, includePT,
     };
     const blob = new Blob([JSON.stringify(payload, null, 1)], { type: "application/json" });
     const a = document.createElement("a");
@@ -1065,12 +1064,11 @@ export default function App() {
         if (!p || !Array.isArray(p.board)) throw new Error("bad file");
         setBoard(p.board.map(cloneSeg));
         if (p.rules) setRules(p.rules);
-        if (p.glob) setGlob(p.glob);
+        if (p.glob) setGlob({ minVeh: p.floorVal ?? DEFAULT_GLOBAL.minVeh, ...p.glob });
         if (p.spans) setSpans(p.spans);
         if (p.sketch) setSketch(p.sketch);
         if (p.trips) setTrips(p.trips);
         if (p.demSource) setDemSource(p.demSource);
-        if (p.floorVal != null) setFloorVal(p.floorVal);
         if (p.totalSigned != null) setTotalSigned(p.totalSigned);
         if (p.blockSize != null) setBlockSize(p.blockSize);
         if (p.includePT != null) setIncludePT(p.includePT);
@@ -1083,8 +1081,8 @@ export default function App() {
   };
 
   const ftCov = useMemo(() => buildSupply(board), [board]);
-  const eng = useMemo(() => computeEngine(DEM, ftCov, includePT, floorVal, spans, glob.maxFleet), [DEM, ftCov, includePT, floorVal, spans, glob.maxFleet]);
-  const base = useMemo(() => computeEngine(DEM, buildSupply(RAW.segments), includePT, floorVal, spans, glob.maxFleet), [DEM, includePT, floorVal, spans, glob.maxFleet]);
+  const eng = useMemo(() => computeEngine(DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet), [DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet]);
+  const base = useMemo(() => computeEngine(DEM, buildSupply(RAW.segments), includePT, glob.minVeh, spans, glob.maxFleet), [DEM, includePT, glob.minVeh, spans, glob.maxFleet]);
   const P = eng.perDay[day];
 
   const changedCount = useMemo(() => {
@@ -1257,13 +1255,13 @@ export default function App() {
 
         {/* tabs */}
         <div style={{ display: "flex", gap: 6, margin: "12px 0", flexWrap: "wrap" }}>
+          <div className={"tabbtn" + (tab === "rules" ? " on" : "")} onClick={() => setTab("rules")}>RULES</div>
           <div className={"tabbtn" + (tab === "demand" ? " on" : "")} onClick={() => setTab("demand")}>DEMAND</div>
           <div className={"tabbtn" + (tab === "build" ? " on" : "")} onClick={() => setTab("build")}>AUTO-BUILD</div>
           <div className={"tabbtn" + (tab === "coverage" ? " on" : "")} onClick={() => setTab("coverage")}>COVERAGE</div>
           <div className={"tabbtn" + (tab === "board" ? " on" : "")} onClick={() => setTab("board")}>BOARD DESIGNER</div>
           <div className={"tabbtn" + (tab === "pack" ? " on" : "")} onClick={() => setTab("pack")}>PACKAGING</div>
           <div className={"tabbtn" + (tab === "suggest" ? " on" : "")} onClick={() => setTab("suggest")}>SUGGESTIONS</div>
-          <div className={"tabbtn" + (tab === "rules" ? " on" : "")} onClick={() => setTab("rules")}>RULES</div>
           <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
             <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={exportBoard}>Export board</button>
             <button style={nudgeBtn} onClick={saveProject}>Save project</button>
@@ -1406,9 +1404,9 @@ export default function App() {
                   onClick={() => {
                     setBuildBusy(true);
                     setTimeout(() => {
-                      const a = generateBoard(glob.max10, buildN, rules, glob, DEM, spans, floorVal, includePT);
-                      const b = generateBoard(0, buildN, rules, glob, DEM, spans, floorVal, includePT);
-                      const score = (segs) => computeEngine(DEM, buildSupply(segs), includePT, floorVal, spans, glob.maxFleet).weekScore;
+                      const a = generateBoard(glob.max10, buildN, rules, glob, DEM, spans, glob.minVeh, includePT);
+                      const b = generateBoard(0, buildN, rules, glob, DEM, spans, glob.minVeh, includePT);
+                      const score = (segs) => computeEngine(DEM, buildSupply(segs), includePT, glob.minVeh, spans, glob.maxFleet).weekScore;
                       setBuilds({ ten: { ...a, score: score(a.segs) }, value: { ...b, score: score(b.segs) } });
                       setBuildBusy(false);
                     }, 30);
@@ -1417,7 +1415,7 @@ export default function App() {
                 </button>
               </div>
               <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 6 }}>
-                Builds whole weekly packages: each placement chooses a shift type, a start time on the 5-minute grid, and a consecutive days-off pattern together, so every generated shift is signable by construction — consistent report times all week, legal rest, no orphan runs. <b>Fill mode</b> commits the full 10-hour allowance before any 8-hour work; <b>value mode</b> lets the coverage score decide the mix. Break-taking types are explored at every legal length (30 min to 4 h) and position, so long midday breaks that stretch a shift across both peaks are found automatically. The fleet cap, span floor, and sign-in stagger steer every placement. Set the count to your designed-run envelope ({designed} currently). Loading a build replaces the current board — save your project first.
+                Builds whole weekly packages: each placement chooses a shift type, a start time on the 5-minute grid, and a consecutive days-off pattern together, so every generated shift is signable by construction — consistent report times all week, legal rest, no orphan runs. <b>Fill mode</b> commits the full 10-hour allowance before any 8-hour work; <b>value mode</b> lets the coverage score decide the mix. Break-taking types are explored at every legal length (30 min to 4 h) and position, so long midday breaks that stretch a shift across both peaks are found automatically. The fleet cap, minimum-vehicle floor, and sign-in stagger steer every placement. Set the count to your designed-run envelope ({designed} currently). Loading a build replaces the current board — save your project first.
               </div>
             </div>
 
@@ -1469,8 +1467,8 @@ export default function App() {
                       for (let t = 0; t <= glob.max10; t += step) targets.push(t);
                       if (targets[targets.length - 1] !== glob.max10) targets.push(glob.max10);
                       const rows = targets.map((t) => {
-                        const g = generateBoard(t, buildN, rules, glob, DEM, spans, floorVal, includePT);
-                        const score = computeEngine(DEM, buildSupply(g.segs), includePT, floorVal, spans, glob.maxFleet).weekScore;
+                        const g = generateBoard(t, buildN, rules, glob, DEM, spans, glob.minVeh, includePT);
+                        const score = computeEngine(DEM, buildSupply(g.segs), includePT, glob.minVeh, spans, glob.maxFleet).weekScore;
                         return { target: t, ...g, score };
                       });
                       rows.sort((a, b) => b.score - a.score);
@@ -1512,12 +1510,6 @@ export default function App() {
         {tab === "coverage" && (
           <>
             <div style={{ display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap", background: card, border: "1px solid #E2E8EA", padding: "10px 14px", marginBottom: 12 }}>
-              <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
-                Coverage floor
-                <input type="number" inputMode="numeric" min={0} max={10} value={floorVal}
-                  onChange={(e) => setFloorVal(parseInt(e.target.value || "0"))}
-                  style={{ ...numInput, width: 58, borderColor: "#D7DFE2" }} />
-              </label>
               <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 7 }}>
                 <input type="checkbox" checked={includePT} onChange={(e) => setIncludePT(e.target.checked)} />
                 Include supplemental runs (part-time board)
@@ -1560,9 +1552,9 @@ export default function App() {
 
             {P.floorViol.length > 0 && (
               <div style={{ background: "#FDF3E7", border: `1px solid ${demandAmber}`, padding: "8px 12px", marginBottom: 12, fontSize: 12.5 }}>
-                <b>Floor check ({day}):</b>{" "}
+                <b>Minimum vehicles check ({day}):</b>{" "}
                 {P.floorViol.map((v, i) => (
-                  <span key={i}>{fmt(SLOT(v.from))}–{fmt(SLOT(v.to) + 5)} runs {v.min} (floor {floorVal}){i < P.floorViol.length - 1 ? "; " : ""}</span>
+                  <span key={i}>{fmt(SLOT(v.from))}–{fmt(SLOT(v.to) + 5)} runs {v.min} (minimum {glob.minVeh}){i < P.floorViol.length - 1 ? "; " : ""}</span>
                 ))}
               </div>
             )}
@@ -1589,7 +1581,7 @@ export default function App() {
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
                 {day} — service hours vs demand-aligned target
               </div>
-              <CoverageChart P={P} day={day} floorVal={floorVal} fleetCap={glob.maxFleet} showBookout={showBookout} height={340} />
+              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} height={340} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
                 The dark line shows where {day}'s {P.supVH.toFixed(0)} service hours would sit if they exactly followed the demand pattern. Red = times you're lighter than demand suggests; teal above the line = heavier.
               </div>
@@ -1777,7 +1769,7 @@ export default function App() {
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
                 Live {day} coverage
               </div>
-              <CoverageChart P={P} day={day} floorVal={floorVal} fleetCap={glob.maxFleet} showBookout={showBookout} height={280}
+              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} height={280}
                 selBand={sel ? [sel.s, sel.e] : null} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
                 Dashed lines mark the selected shift. The KPI strip stays pinned while you scroll.
@@ -1820,8 +1812,8 @@ export default function App() {
                       setRefineBusy(true);
                       setTimeout(() => {
                         const before = eng.weekScore;
-                        const r = refinePerDay(board, rules, glob, DEM, includePT, floorVal, spans);
-                        const after = computeEngine(DEM, buildSupply(r.board), includePT, floorVal, spans, glob.maxFleet).weekScore;
+                        const r = refinePerDay(board, rules, glob, DEM, includePT, glob.minVeh, spans);
+                        const after = computeEngine(DEM, buildSupply(r.board), includePT, glob.minVeh, spans, glob.maxFleet).weekScore;
                         mutate(() => r.board);
                         setRefineResult({ moves: r.moves, created: r.created, evaluated: r.evaluated, gained: (after - before) * 100 });
                         setSelId(null);
@@ -1903,8 +1895,8 @@ export default function App() {
                     setOptBusy(true);
                     setTimeout(() => {
                       const before = eng.weekScore;
-                      const r = deepOptimize(board, [DEM, includePT, floorVal, spans, glob.maxFleet], rules, glob);
-                      const after = computeEngine(DEM, buildSupply(r.board), includePT, floorVal, spans, glob.maxFleet).weekScore;
+                      const r = deepOptimize(board, [DEM, includePT, glob.minVeh, spans, glob.maxFleet], rules, glob);
+                      const after = computeEngine(DEM, buildSupply(r.board), includePT, glob.minVeh, spans, glob.maxFleet).weekScore;
                       mutate(() => r.board);
                       setOptResult({ applied: r.moves, evaluated: r.evaluated, created: r.created, passes: r.passes, gained: (after - before) * 100 });
                       setSugs(null); setSugsStale(false); setOptBusy(false);
@@ -2021,7 +2013,6 @@ export default function App() {
                   setRules(JSON.parse(JSON.stringify(DEFAULT_RULES)));
                   setGlob(JSON.parse(JSON.stringify(DEFAULT_GLOBAL)));
                   setSpans(JSON.parse(JSON.stringify(DEFAULT_SPANS)));
-                  setFloorVal(3);
                 }}>
                 Reset to CA defaults
               </button>
@@ -2115,8 +2106,8 @@ export default function App() {
                 <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "10px 12px", alignItems: "center", fontSize: 13 }}>
                   <span>Max 10-hour shifts on board</span>
                   <NumField value={glob.max10} onCommit={(v) => setGlob((g) => ({ ...g, max10: v }))} />
-                  <span>Coverage floor (vehicles in span)</span>
-                  <NumField value={floorVal} onCommit={(v) => setFloorVal(v)} />
+                  <span>Minimum vehicles in service (span)</span>
+                  <NumField value={glob.minVeh} onCommit={(v) => setGlob((g) => ({ ...g, minVeh: v }))} />
                   <span>Max vehicles in service (fleet cap)</span>
                   <NumField value={glob.maxFleet} onCommit={(v) => setGlob((g) => ({ ...g, maxFleet: v }))} />
                   <span>Max sign-ins per 5 min (stagger)</span>
@@ -2158,7 +2149,7 @@ export default function App() {
                   ))}
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
-                  The floor applies inside the span; the demand model itself is unaffected.
+                  The minimum-vehicles rule applies inside the span; the demand model itself is unaffected.
                 </div>
               </div>
             </div>
