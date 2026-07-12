@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid,
@@ -84,6 +84,35 @@ function NumField({ value, onCommit, width = 58, step = 1 }) {
         color: "#182430", borderRadius: 2, fontSize: 13, textAlign: "center",
       }} />
   );
+}
+
+/* ---------- signup period & statutory holidays ---------- */
+function computeHolidaysInRange(hd, startISO, endISO) {
+  const startY = +startISO.slice(0, 4), endY = +endISO.slice(0, 4);
+  const byDate = new Map();
+  for (let y = startY; y <= endY; y++) {
+    for (const h of hd.getHolidays(y)) {
+      if (h.type !== "public") continue;
+      const d = h.date.slice(0, 10);
+      if (d < startISO || d > endISO) continue;
+      if (!byDate.has(d)) byDate.set(d, h.name);
+    }
+  }
+  return [...byDate.entries()].map(([date, name]) => ({ date, name })).sort((a, b) => (a.date < b.date ? -1 : 1));
+}
+
+function mergeHolidayEdits(detected, existing) {
+  const customDates = new Set(existing.filter((h) => h.source === "custom").map((h) => h.date));
+  const prevAuto = new Map(existing.filter((h) => h.source === "auto").map((h) => [h.date, h]));
+  const merged = detected
+    .filter((d) => !customDates.has(d.date))
+    .map((d) =>
+      prevAuto.has(d.date)
+        ? { ...prevAuto.get(d.date), name: d.name }
+        : { id: "auto:" + d.date, date: d.date, name: d.name, source: "auto", runsAs: null }
+    );
+  const custom = existing.filter((h) => h.source === "custom");
+  return [...merged, ...custom].sort((a, b) => (a.date < b.date ? -1 : 1));
 }
 
 /* ---------- supply from a board ---------- */
@@ -961,6 +990,16 @@ export default function App() {
   const nextId = useRef(RAW.segments.length + 1000);
   const designed = totalSigned - blockSize;
 
+  const [signupPeriod, setSignupPeriod] = useState({ start: "", end: "", country: "CA", region: "" });
+  const [holidays, setHolidays] = useState([]);
+  const [hdCtor, setHdCtor] = useState(null);
+  const [hdCountries, setHdCountries] = useState(null);
+  const [hdRegions, setHdRegions] = useState({});
+  const [hdLoading, setHdLoading] = useState(false);
+  const [hdError, setHdError] = useState(null);
+  const [customDraft, setCustomDraft] = useState({ date: "", name: "", runsAs: "" });
+  const hdImportStarted = useRef(false);
+
   const mutate = (fn) => {
     setHist((h) => [...h.slice(-49), board]);
     setBoard(fn);
@@ -987,11 +1026,42 @@ export default function App() {
     return o;
   }, [demSource, sketch, trips]);
 
+  // lazy-load date-holidays only once the user opens Rules, so its bundled
+  // per-country data doesn't inflate the main chunk for users who never touch it
+  useEffect(() => {
+    if (tab !== "rules" || hdImportStarted.current) return;
+    hdImportStarted.current = true;
+    setHdLoading(true);
+    import("date-holidays")
+      .then((m) => {
+        setHdCtor(() => m.default);
+        setHdCountries(new m.default().getCountries());
+        setHdLoading(false);
+      })
+      .catch((err) => { setHdError(String(err)); setHdLoading(false); });
+  }, [tab]);
+
+  useEffect(() => {
+    if (!hdCtor) return;
+    const regions = new hdCtor(signupPeriod.country).getStates(signupPeriod.country) || {};
+    setHdRegions(regions);
+    if (signupPeriod.region && !regions[signupPeriod.region]) {
+      setSignupPeriod((p) => ({ ...p, region: "" }));
+    }
+  }, [hdCtor, signupPeriod.country]);
+
+  useEffect(() => {
+    if (!hdCtor || !signupPeriod.start || !signupPeriod.end) return;
+    const hd = new hdCtor(signupPeriod.country, signupPeriod.region || undefined);
+    const detected = computeHolidaysInRange(hd, signupPeriod.start, signupPeriod.end);
+    setHolidays((hs) => mergeHolidayEdits(detected, hs));
+  }, [hdCtor, signupPeriod.start, signupPeriod.end, signupPeriod.country, signupPeriod.region]);
+
   const saveProject = () => {
     const payload = {
       v: 1, savedAt: new Date().toISOString(),
       demSource, sketch, trips, board, rules, glob, spans,
-      totalSigned, blockSize, includePT,
+      totalSigned, blockSize, includePT, signupPeriod, holidays,
     };
     const blob = new Blob([JSON.stringify(payload, null, 1)], { type: "application/json" });
     const a = document.createElement("a");
@@ -1053,6 +1123,20 @@ export default function App() {
     const ws2 = XLSX.utils.aoa_to_sheet(sum);
     ws2["!cols"] = [{ wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
     XLSX.utils.book_append_sheet(wb, ws2, "Summary");
+    // exceptions sheet (only when a signup period is configured)
+    if (signupPeriod.start && signupPeriod.end) {
+      const exc = [["Signup period & exception days"], [],
+        ["Signup period", `${signupPeriod.start} – ${signupPeriod.end}`],
+        ["Jurisdiction", `${hdCountries?.[signupPeriod.country] || signupPeriod.country}${signupPeriod.region ? " / " + (hdRegions?.[signupPeriod.region] || signupPeriod.region) : ""}`],
+        [],
+        ["Date", "Weekday", "Holiday", "Runs as", "Source"]];
+      for (const h of holidays) {
+        exc.push([h.date, DAYS[new Date(h.date + "T00:00:00").getDay()], h.name, h.runsAs || "Regular", h.source]);
+      }
+      const ws3 = XLSX.utils.aoa_to_sheet(exc);
+      ws3["!cols"] = [{ wch: 12 }, { wch: 10 }, { wch: 26 }, { wch: 12 }, { wch: 8 }];
+      XLSX.utils.book_append_sheet(wb, ws3, "Exceptions");
+    }
     XLSX.writeFile(wb, "signup-board.xlsx");
   };
 
@@ -1072,6 +1156,8 @@ export default function App() {
         if (p.totalSigned != null) setTotalSigned(p.totalSigned);
         if (p.blockSize != null) setBlockSize(p.blockSize);
         if (p.includePT != null) setIncludePT(p.includePT);
+        if (p.signupPeriod) setSignupPeriod(p.signupPeriod);
+        if (Array.isArray(p.holidays)) setHolidays(p.holidays);
         setHist([]); setSelId(null); setSugs(null); setSugsStale(false);
       } catch (err) {
         alert("Could not read that project file.");
@@ -1080,6 +1166,7 @@ export default function App() {
     rd.readAsText(file);
   };
 
+  const holidayCountForDay = useMemo(() => holidays.filter((h) => h.runsAs === day).length, [holidays, day]);
   const ftCov = useMemo(() => buildSupply(board), [board]);
   const eng = useMemo(() => computeEngine(DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet), [DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet]);
   const base = useMemo(() => computeEngine(DEM, buildSupply(RAW.segments), includePT, glob.minVeh, spans, glob.maxFleet), [DEM, includePT, glob.minVeh, spans, glob.maxFleet]);
@@ -1643,6 +1730,9 @@ export default function App() {
               <div className="kpi"><span className="l">10-hour</span><span className="v" style={{ color: tenCount > glob.max10 ? "#F09E93" : "#fff" }}>{tenCount}/{glob.max10}</span></div>
               <div className="kpi"><span className="l">runs</span><span className="v">{distinctShifts}</span></div>
               <div className="kpi"><span className="l">changes</span><span className="v">{changedCount}</span></div>
+              {holidayCountForDay > 0 && (
+                <div className="kpi"><span className="l">exception dates run as {day}</span><span className="v" style={{ color: demandAmber }}>{holidayCountForDay}</span></div>
+              )}
             </div>
 
             {fixResult && (
@@ -2154,6 +2244,130 @@ export default function App() {
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
                   The minimum-vehicles rule applies inside the span; the demand model itself is unaffected.
                 </div>
+              </div>
+            </div>
+
+            <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginTop: 14 }}>
+              <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
+                Signup period &amp; exception days
+              </div>
+              <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-end" }}>
+                <label style={{ fontSize: 12.5 }}>
+                  <div style={{ color: "#5B6B75", marginBottom: 4 }}>Period start</div>
+                  <input type="date" value={signupPeriod.start}
+                    onChange={(e) => setSignupPeriod((p) => ({ ...p, start: e.target.value }))}
+                    style={{ ...numInput, width: 150, fontSize: 14, fontWeight: 500, textAlign: "left" }} />
+                </label>
+                <label style={{ fontSize: 12.5 }}>
+                  <div style={{ color: "#5B6B75", marginBottom: 4 }}>Period end</div>
+                  <input type="date" value={signupPeriod.end}
+                    onChange={(e) => setSignupPeriod((p) => ({ ...p, end: e.target.value }))}
+                    style={{ ...numInput, width: 150, fontSize: 14, fontWeight: 500, textAlign: "left" }} />
+                </label>
+                <label style={{ fontSize: 12.5 }}>
+                  <div style={{ color: "#5B6B75", marginBottom: 4 }}>Country</div>
+                  <select value={signupPeriod.country} disabled={!hdCountries}
+                    onChange={(e) => setSignupPeriod((p) => ({ ...p, country: e.target.value, region: "" }))}>
+                    {hdCountries
+                      ? Object.entries(hdCountries).map(([code, name]) => <option key={code} value={code}>{name}</option>)
+                      : <option>{hdLoading ? "Loading…" : "—"}</option>}
+                  </select>
+                </label>
+                <label style={{ fontSize: 12.5 }}>
+                  <div style={{ color: "#5B6B75", marginBottom: 4 }}>Province / state</div>
+                  <select value={signupPeriod.region} disabled={!hdCtor}
+                    onChange={(e) => setSignupPeriod((p) => ({ ...p, region: e.target.value }))}>
+                    <option value="">All / nationwide only</option>
+                    {Object.entries(hdRegions).map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+                  </select>
+                </label>
+              </div>
+              <div style={{ fontSize: 11.5, color: hdError ? gapRed : "#5B6B75", marginTop: 10 }}>
+                {hdError
+                  ? `Couldn't load holiday data: ${hdError}`
+                  : !signupPeriod.start || !signupPeriod.end
+                    ? "Set a start and end date to detect statutory holidays for the selected jurisdiction."
+                    : `${holidays.length} date${holidays.length === 1 ? "" : "s"} found in range. "Runs as" assigns which weekday's board pattern governs that date; it doesn't change the board itself.`}
+              </div>
+
+              {holidays.length > 0 && (
+                <div style={{ overflowX: "auto", marginTop: 10 }}>
+                  <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 640 }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid #E2E8EA" }}>
+                        {["Date", "Weekday", "Holiday", "Runs as", "Source", ""].map((h) => (
+                          <th key={h} style={{ padding: "5px 8px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.06em", color: "#5B6B75", textAlign: "left" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {holidays.map((h) => {
+                        const weekday = DAYS[new Date(h.date + "T00:00:00").getDay()];
+                        return (
+                          <tr key={h.id} style={{ borderBottom: "1px solid #EDF1F3" }}>
+                            <td style={{ padding: "5px 8px", fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>{h.date}</td>
+                            <td style={{ padding: "5px 8px", fontSize: 12.5 }}>{weekday}</td>
+                            <td style={{ padding: "5px 8px", fontSize: 12.5 }}>
+                              {h.source === "custom"
+                                ? <input value={h.name} onChange={(e) => setHolidays((hs) => hs.map((x) => (x.id === h.id ? { ...x, name: e.target.value } : x)))}
+                                    style={{ padding: "3px 6px", border: "1px solid #B9C6CC", borderRadius: 2, fontSize: 12.5, width: 160 }} />
+                                : h.name}
+                            </td>
+                            <td style={{ padding: "5px 8px" }}>
+                              <select value={h.runsAs || ""} onChange={(e) => setHolidays((hs) => hs.map((x) => (x.id === h.id ? { ...x, runsAs: e.target.value || null } : x)))}>
+                                <option value="">Regular (not observed)</option>
+                                {DAYS.map((d) => <option key={d} value={d}>{d}</option>)}
+                              </select>
+                            </td>
+                            <td style={{ padding: "5px 8px" }}>
+                              <span style={{ fontSize: 10.5, padding: "1px 6px", background: h.source === "custom" ? demandAmber : ink, color: "#fff", borderRadius: 2 }}>{h.source}</span>
+                            </td>
+                            <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>
+                              <button style={{ ...nudgeBtn, padding: "3px 8px", fontSize: 12 }}
+                                onClick={() => { setDay(h.runsAs || weekday); setTab("board"); }}>
+                                View board
+                              </button>
+                              {h.source === "custom" && (
+                                <button style={{ ...nudgeBtn, padding: "3px 8px", fontSize: 12, color: gapRed, borderColor: gapRed, marginLeft: 6 }}
+                                  onClick={() => setHolidays((hs) => hs.filter((x) => x.id !== h.id))}>
+                                  remove
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginTop: 12, flexWrap: "wrap" }}>
+                <label style={{ fontSize: 12.5 }}>
+                  <div style={{ color: "#5B6B75", marginBottom: 4 }}>Date</div>
+                  <input type="date" value={customDraft.date}
+                    onChange={(e) => setCustomDraft((d) => ({ ...d, date: e.target.value }))}
+                    style={{ ...numInput, width: 150, fontSize: 14, fontWeight: 500, textAlign: "left" }} />
+                </label>
+                <input placeholder="Closure name" value={customDraft.name}
+                  onChange={(e) => setCustomDraft((d) => ({ ...d, name: e.target.value }))}
+                  style={{ padding: "6px 8px", border: "1px solid #B9C6CC", borderRadius: 2, fontSize: 13, width: 170, background: "#fff", color: ink }} />
+                <select value={customDraft.runsAs} onChange={(e) => setCustomDraft((d) => ({ ...d, runsAs: e.target.value }))}>
+                  <option value="">Regular (not observed)</option>
+                  {DAYS.map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
+                <button style={nudgeBtn} disabled={!customDraft.date}
+                  onClick={() => {
+                    if (!customDraft.date) return;
+                    setHolidays((hs) => [...hs.filter((x) => x.date !== customDraft.date), {
+                      id: "custom:" + customDraft.date + ":" + Date.now(),
+                      date: customDraft.date, name: customDraft.name || "Custom closure",
+                      source: "custom", runsAs: customDraft.runsAs || null,
+                    }].sort((a, b) => (a.date < b.date ? -1 : 1)));
+                    setCustomDraft({ date: "", name: "", runsAs: "" });
+                  }}>
+                  + Add custom date
+                </button>
               </div>
             </div>
           </>
