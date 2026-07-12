@@ -1221,7 +1221,7 @@ export default function App() {
         .glabel { font-size:10.5px; width:118px; flex:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums; }
         .gtrack { position:relative; flex:1; height:14px; background:#EFF3F4; }
         .gbar { position:absolute; top:0; height:14px; border-radius:2px; }
-        .gbrk { position:absolute; top:0; height:14px; background:#fff; border-left:1px solid rgba(0,0,0,.25); border-right:1px solid rgba(0,0,0,.25); }
+        .gbrk { position:absolute; top:0; height:14px; background:repeating-linear-gradient(45deg,#fff,#fff 3px,#AEBAC0 3px,#AEBAC0 6px); border-left:1px solid rgba(0,0,0,.35); border-right:1px solid rgba(0,0,0,.35); }
         .daychip { cursor:pointer; padding:5px 8px; border:1px solid #B9C6CC; font-size:11.5px; border-radius:2px; user-select:none; }
         .daychip.on { background:${supplyTeal}; color:#fff; border-color:${supplyTeal}; }
         .kpistrip { position:sticky; top:0; z-index:5; display:flex; gap:14px; align-items:center; flex-wrap:wrap; background:${ink}; color:#fff; padding:8px 14px; margin-bottom:12px; }
@@ -1730,12 +1730,15 @@ export default function App() {
                 {daySegs.map((sg) => {
                   const bad = validateSeg(sg, rules, glob).length > 0;
                   const isSel = sg.id === selId;
+                  const brkMin = sg.b ? sg.b[1] - sg.b[0] : 0;
+                  const workHrs = ((sg.e - sg.s - brkMin) / 60).toFixed(2);
+                  const barTitle = `${fmt(sg.s)}–${fmt(sg.e)} · ${workHrs}h working${sg.b ? ` · ${brkMin}m break (${fmt(sg.b[0])}–${fmt(sg.b[1])})` : ""}`;
                   return (
                     <div key={sg.id} className="ganttrow" onClick={() => setSelId(sg.id)}>
                       <div className="glabel" style={{ fontWeight: isSel ? 700 : 400, color: bad ? gapRed : undefined }}>
                         {sg.shift}·{sg.run} {sg.type}
                       </div>
-                      <div className="gtrack">
+                      <div className="gtrack" title={barTitle}>
                         {[360, 600, 840, 1080, 1320].map((m) => (
                           <div key={m} style={{ position: "absolute", left: `${pctPos(m)}%`, top: 0, bottom: 0, width: 1, background: "#E2E8EA" }} />
                         ))}
@@ -1760,7 +1763,7 @@ export default function App() {
                     <span style={{ width: 12, height: 10, background: TYPE_COLOR[t], display: "inline-block", borderRadius: 2 }} />{t}
                   </span>
                 ))}
-                <span style={{ fontSize: 11, color: "#5B6B75" }}>white notch = break · red outline = rule flag</span>
+                <span style={{ fontSize: 11, color: "#5B6B75" }}>hatched notch = break · red outline = rule flag · hover a bar for hours</span>
               </div>
             </div>
 
