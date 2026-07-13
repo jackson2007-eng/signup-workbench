@@ -1637,44 +1637,46 @@ export default function App() {
           </div>
         )}
 
-        {/* envelope */}
-        <div style={{ border: "1px solid #E2E8EA", marginBottom: 12, position: "sticky", top: 0, zIndex: 10, background: paper }}>
-          <div style={{ background: ink, color: "#fff", padding: "10px 14px" }}>
-            <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-              <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 600 }}>SIGNUP PACKAGE</div>
-              <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 8 }}>
-                Total signed
-                <NumField value={totalSigned} onCommit={(v) => setTotalSigned(Math.round(v))} style={numInput} />
-              </label>
-              <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 8 }}>
-                Extra board
-                <NumField value={blockSize} onCommit={(v) => setBlockSize(Math.round(v))} style={numInput} />
-              </label>
-              <div style={{ fontSize: 13 }}>
-                → <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 21, fontWeight: 700 }}>{designed}</span> designed runs
-                {designed !== distinctShifts && <span style={{ color: "#F5C16C" }}> (board has {distinctShifts})</span>}
-              </div>
-              <div style={{ fontSize: 11.5, opacity: 0.8, marginLeft: "auto" }}>
-                Loaded board: {distinctShifts} runs · sample data — Load project to work on your own board{changedCount > 0 ? ` · ${changedCount} local change${changedCount > 1 ? "s" : ""}` : ""}
+        {/* envelope + day paddles, locked together while scrolling */}
+        <div style={{ position: "sticky", top: 0, zIndex: 10, background: paper, marginBottom: 12 }}>
+          <div style={{ border: "1px solid #E2E8EA" }}>
+            <div style={{ background: ink, color: "#fff", padding: "10px 14px" }}>
+              <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+                <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 600 }}>SIGNUP PACKAGE</div>
+                <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 8 }}>
+                  Total signed
+                  <NumField value={totalSigned} onCommit={(v) => setTotalSigned(Math.round(v))} style={numInput} />
+                </label>
+                <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 8 }}>
+                  Extra board
+                  <NumField value={blockSize} onCommit={(v) => setBlockSize(Math.round(v))} style={numInput} />
+                </label>
+                <div style={{ fontSize: 13 }}>
+                  → <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 21, fontWeight: 700 }}>{designed}</span> designed runs
+                  {designed !== distinctShifts && <span style={{ color: "#F5C16C" }}> (board has {distinctShifts})</span>}
+                </div>
+                <div style={{ fontSize: 11.5, opacity: 0.8, marginLeft: "auto" }}>
+                  Loaded board: {distinctShifts} runs · sample data — Load project to work on your own board{changedCount > 0 ? ` · ${changedCount} local change${changedCount > 1 ? "s" : ""}` : ""}
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        {/* day paddles */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 5, marginBottom: 12 }}>
-          {DAYS.map((d) => {
-            const p = eng.perDay[d];
-            return (
-              <div key={d} className={"paddle" + (d === day ? " on" : "")} onClick={() => { setDay(d); }}>
-                <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 600, fontSize: 14 }}>{d.slice(0, 3).toUpperCase()}</div>
-                <div style={{ fontSize: 9.5, opacity: .75 }}>demand {(p.demandShare * 100).toFixed(1)}%</div>
-                <div style={{ fontSize: 10.5, marginTop: 2, fontWeight: 600, color: d === day ? "#fff" : (p.dayScore >= 0.9 ? supplyTeal : demandAmber) }}>
-                  cov {(p.dayScore * 100).toFixed(1)}%
+          {/* day paddles */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 5, marginTop: 8 }}>
+            {DAYS.map((d) => {
+              const p = eng.perDay[d];
+              return (
+                <div key={d} className={"paddle" + (d === day ? " on" : "")} onClick={() => { setDay(d); }}>
+                  <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 600, fontSize: 14 }}>{d.slice(0, 3).toUpperCase()}</div>
+                  <div style={{ fontSize: 9.5, opacity: .75 }}>demand {(p.demandShare * 100).toFixed(1)}%</div>
+                  <div style={{ fontSize: 10.5, marginTop: 2, fontWeight: 600, color: d === day ? "#fff" : (p.dayScore >= 0.9 ? supplyTeal : demandAmber) }}>
+                    cov {(p.dayScore * 100).toFixed(1)}%
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
 
         {tab === "demand" && (
