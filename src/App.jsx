@@ -64,6 +64,8 @@ const SIGNUP_HEADER_ALIASES = {
   type: ["type", "shift type"],
   splitType: ["split type", "split shift type"],
   brk: ["break", "split"],
+  breakStart: ["break start"],
+  breakEnd: ["break end"],
   daysWorked: ["days worked"],
   start: ["report time"],
   end: ["off"],
@@ -117,7 +119,19 @@ function parseSignupWorkbook(wb, sheetName) {
     if (end < start) end += 1440;
 
     let b = null;
-    if (colIndex.brk >= 0) {
+    if (colIndex.breakStart >= 0 && colIndex.breakEnd >= 0) {
+      const bStartRaw = String(row[colIndex.breakStart] || "").trim();
+      const bEndRaw = String(row[colIndex.breakEnd] || "").trim();
+      if (bStartRaw && bEndRaw) {
+        const b0 = parseHM(bStartRaw);
+        let b1 = parseHM(bEndRaw);
+        if (b0 != null && b1 != null) {
+          if (b1 < b0) b1 += 1440;
+          b = [b0, b1];
+        }
+      }
+    }
+    if (!b && colIndex.brk >= 0) {
       const bm = /^\s*(\d{1,2})(\d{2})\s*-\s*(\d{1,2})(\d{2})\s*$/.exec(String(row[colIndex.brk] || "").trim());
       if (bm) {
         const b0 = parseInt(bm[1]) * 60 + parseInt(bm[2]);
@@ -1412,17 +1426,17 @@ export default function App() {
       ["One row per shift. If a shift's report/off times differ on some days (day-variant), add one row per distinct time pattern — every row shares the same Shift No."],
       ["Days Worked: space-separated 2-letter weekday codes, e.g. \"MO TU WE TH FR\"."],
       ["Report Time / Off are the paid on-duty start/end (24h, e.g. 14:30). If a shift runs past midnight, Off can be earlier than Report Time (e.g. 0:00) — it's read as the next day."],
-      ["Break (optional): military time range with no colon, e.g. 1310-1410. Leave blank for a straight run with no break."],
+      ["Break Start / Break End (optional): same 24h format as Report Time, e.g. 13:10 to 14:10. Leave both blank for a straight run with no break."],
       ["Days Off / Split Type are optional — Days Off is inferred from Days Worked if left blank."],
       ["No operator names or badge numbers — this tool only tracks shift structure."],
     ];
     const wsI = XLSX.utils.aoa_to_sheet(instr);
     wsI["!cols"] = [{ wch: 90 }];
     XLSX.utils.book_append_sheet(wb, wsI, "Instructions");
-    const header = ["Shift No", "Run", "Days Off", "Type", "Split Type", "Break", "Days Worked", "Report Time", "Off"];
-    const rows = [header, [101, "101", "SU-SA", "AM", "Straight", "", "MO TU WE TH FR", "5:15", "13:15"]];
+    const header = ["Shift No", "Run", "Days Off", "Type", "Split Type", "Break Start", "Break End", "Days Worked", "Report Time", "Off"];
+    const rows = [header, [101, "101", "SU-SA", "AM", "Straight", "", "", "MO TU WE TH FR", "5:15", "13:15"]];
     const ws = XLSX.utils.aoa_to_sheet(rows);
-    ws["!cols"] = [{ wch: 9 }, { wch: 7 }, { wch: 10 }, { wch: 7 }, { wch: 12 }, { wch: 11 }, { wch: 18 }, { wch: 11 }, { wch: 8 }];
+    ws["!cols"] = [{ wch: 9 }, { wch: 7 }, { wch: 10 }, { wch: 7 }, { wch: 12 }, { wch: 11 }, { wch: 11 }, { wch: 18 }, { wch: 11 }, { wch: 8 }];
     XLSX.utils.book_append_sheet(wb, ws, "Signup");
     XLSX.writeFile(wb, "signup-template.xlsx");
   };
@@ -1805,7 +1819,7 @@ export default function App() {
           const PHASES = [
             { label: "Phase 1 · Setup", steps: [
               { key: "rules", label: "RULES", done: !!(signupPeriod.start && signupPeriod.end), reason: "Set a period and jurisdiction in Rules" },
-              { key: "signup", label: "SIGNUP", done: signupSource === "uploaded", reason: "Still using the shipped sample signup — upload your real signup to compare against it" },
+              { key: "signup", label: "SIGNUP", done: signupSource === "uploaded", reason: "Still using Sample Signup — upload your real signup to compare against it" },
               { key: "demand", label: "DEMAND", done: demSource !== "imported", reason: "Still using shipped sample data — sketch your own or upload real data in Demand" },
             ] },
             { label: "Phase 2 · Build", steps: [
@@ -1914,7 +1928,7 @@ export default function App() {
             <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14 }}>
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>Signup source</div>
               <span style={{ fontSize: 13.5 }}>
-                Working from: <b>{signupSource === "uploaded" ? "your uploaded signup" : "the shipped sample signup"}</b>
+                Working from: <b>{signupSource === "uploaded" ? "your uploaded signup" : "Sample Signup"}</b>
               </span>
               <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
                 <button style={nudgeBtn} onClick={downloadSignupTemplate}>Download template</button>
@@ -1924,7 +1938,7 @@ export default function App() {
                   onChange={(e) => { if (e.target.files && e.target.files[0]) uploadSignup(e.target.files[0]); e.target.value = ""; }} />
               </div>
               <div style={{ fontSize: 12, color: "#5B6B75", flexBasis: "100%" }}>
-                Load a real current or previous signup to work off of instead of the shipped sample — the coverage-score deltas shown throughout the tool ("vs signed") will measure improvement against it instead of synthetic data. Download the template, fill in your real shifts (one row per shift, or one row per day-variant time pattern), and upload it. No operator names or badge numbers are read or stored — only shift structure.
+                Load a real current or previous signup to work off of instead of Sample Signup — the coverage-score deltas shown throughout the tool ("vs signed") will measure improvement against it instead of synthetic data. Download the template, fill in your real shifts (one row per shift, or one row per day-variant time pattern), and upload it. No operator names or badge numbers are read or stored — only shift structure.
               </div>
               {signupUploadResult && (
                 <div style={{ background: "#F2F8F7", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
