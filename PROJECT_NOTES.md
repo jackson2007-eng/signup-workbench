@@ -41,7 +41,7 @@ A **scheduler's workbench** for designing paratransit/microtransit operator sign
 - Surplus above the demand pattern earns zero (the `min()`). Proportional day-shares are a *diagnostic*, not an objective — the score handles allocation automatically.
 - The chart's "demand-aligned target" line = the day's own vehicle-hours redistributed to follow the demand shape. It is not a requirement; it's a mirror.
 
-**Hard constraints, separate from the score:** coverage floor (min vehicles within service span), fleet cap (max vehicles simultaneously in service), sign-in stagger (max sign-ins per 5-min slot — garages bottleneck), the 10-hour package cap, and all classification/packaging rules. Constraints are checked and flagged; the score never absorbs them.
+**Hard constraints, separate from the score:** minimum vehicles in service (`minVeh`, within the service span — renamed from an earlier "coverage floor" to avoid confusion with the unrelated sign-in stagger constraint below), fleet cap (max vehicles simultaneously in service), sign-in stagger (max sign-ins per 5-min slot — garages bottleneck), the 10-hour package cap, and all classification/packaging rules. Constraints are checked and flagged; the score never absorbs them.
 
 ---
 
@@ -53,17 +53,18 @@ A **scheduler's workbench** for designing paratransit/microtransit operator sign
 - **Shift types** (editable in Rules; these are the shipped defaults): AM, NN (8h straights), AX (8h split), NN10 (10h STRAIGHT — no scheduled break), AX10 (10h split), BST (8h straight evening), BX (8h split late). Key semantics: `brk: true` means a break is **ALLOWED, not required** — "Float Break" shifts have operationally real but unscheduled breaks and must not be flagged for lacking one.
 - **Packaging rules**: min rest between shifts (default 10h), max consecutive working days (5), max report-time variation within a package (60 min), consecutive days-off blocks. 8h types → 5-day weeks; 10h types → 4-day weeks (both = 40 paid hours — this equality matters, see §5).
 - **Seniority desirability order** (for future bid-attractiveness features): NN10 → AM 8h → AX10 → AX 8h → BST → BX. Straight work and 3-day weekends are prized; splits keep the bus during breaks (no garage return).
+- **Signup period & statutory holidays**: a start/end calendar-date range plus jurisdiction (country/region), used to auto-detect public holidays. This is the only place calendar dates enter the app — the engine and every other tab stay day-of-week only. A holiday's `runsAs` is either an existing weekday name (reuses that day's board pattern — the fast default) or `"custom"`, which unlocks a tiny independent one-off shift list (`segs: []`, shape `{id, type, s, e, b}`) editable in the EXCEPTIONS tab: same per-shift legality checks as the main board, but no weekly-package rules and no coverage score, since a one-off date isn't a recurring week.
 
 ---
 
 ## 4. Engine components (all in src/App.jsx)
 
-- `computeEngine(DEM, ftCov, includePT, floorVal, spans, maxFleet)` — scores a supply against demand; returns per-day {score, target, gaps, floorViol, fleetViol, shares} and weekScore.
+- `computeEngine(DEM, ftCov, includePT, minVeh, spans, maxFleet)` — scores a supply against demand; returns per-day {score, target, gaps, floorViol, fleetViol, shares} and weekScore.
 - `buildSupply(board)` — segments → per-day vehicle counts (breaks netted out).
-- `validateSeg(seg, rules, glob)` — classification rules; returns issue strings. Flags, never blocks.
-- `packageInfo(segs, rules, glob)` — package-level checks (day counts, days-off contiguity, rest, consecutive days, start variance).
+- `validateSeg(seg, rules, glob)` — classification rules; returns issue strings. Flags, never blocks. Also reused (unmodified) for one-off holiday shifts — see §3.
+- `packageInfo(segs, rules, glob)` — package-level checks (day counts, days-off contiguity, rest, consecutive days, start variance). Weekly-package-only; deliberately not used for one-off holiday shifts.
 - `autofixSeg(seg, rules, glob)` — smallest-legal-adjustment repair; returns null if the type's windows can't accommodate (UI then suggests retype or rule change).
-- `generateBoard(tenTarget, nPackages, ...)` — **package-native greedy builder**: each placement picks (type × 5-min-grid start × break length 30–240 in 30s × break offset × consecutive days-off pattern) maximizing marginal gain via per-day prefix sums (O(1) per candidate-day). Forces 10-hour packages while `used10 < tenTarget`. Respects fleet cap, floor bonus, stagger cap + soft stagger penalty (0.15/existing start). Generates packages, not runs, so output is packageable **by construction**.
+- `generateBoard(tenTarget, nPackages, ...)` — **package-native greedy builder**: each placement picks (type × 5-min-grid start × break length 30–240 in 30s × break offset × consecutive days-off pattern) maximizing marginal gain via per-day prefix sums (O(1) per candidate-day). Forces 10-hour packages while `used10 < tenTarget`. Respects fleet cap, minimum-vehicle bonus, stagger cap + soft stagger penalty (0.15/existing start). Generates packages, not runs, so output is packageable **by construction**.
 - `findSuggestions(board, eng, ...)` — ranked legal single moves (whole-shift slides ±5..60, break slides ±15..90) improving the week score; respects stagger; returns top-12 with `.evaluated` count.
 - `refinePerDay(board, ...)` — per-day nudges within the start-variance rule, splitting day-variant rows; **live greedy** (applies immediately, re-validating variance/stagger/fleet against current state), threshold near-zero (1e-6). History: an earlier version used a 2e-4 threshold and discarded ~97% of real improvements — per-day deltas are individually tiny (~0.001–0.03 pts) but compound to 1.5–2 pts. Do not raise the threshold again.
 - `optimizeToConvergence` / `deepOptimize` — alternate whole-move convergence and per-day refinement until neither improves. Convergence claim (word it exactly this way in UI): "no remaining single adjustment of any explored type improves the score." This is LOCAL search, not a global-optimum guarantee.
@@ -95,10 +96,12 @@ Global: Save/Load project (full state JSON), Export board (xlsx in signup-tab la
 
 ## 7. Roadmap (agreed, in order)
 
-1. **Compare & Publish module**: scenario management (incumbent vs drafts, side-by-side scores/mix/10h usage), posting-format export, blank signed-board template, stat-holiday exception scaffolding, auto-drafted change memo from the board diff.
-2. **Hardening**: certified ceiling computation (LP/MILP — the honest "how good could any legal board be"; premium-tier candidate), real import panel (demand + board from files; currently sample data + project JSON), Gantt edge-drag on desktop, per-day sketch overrides, break-length moves in the suggestion engine.
-3. **SaaS layer (only when a second agency is real)**: accounts + per-tenant storage (the project-file schema IS the data model), then optional operator bidding tier. Adjacent product idea parked: driver training/compliance platform.
+0. **Shipped**: signup period + jurisdiction, statutory-holiday auto-detection (`date-holidays`), per-holiday "runs as an existing weekday" or a fully custom one-off shift board (EXCEPTIONS tab), getting-started checklist + per-tab status indicators.
+1. **Next**: a real demand-import panel — downloadable template + upload/parse flow for real 5-minute pickup/dropoff counts. Today demand is either hand-sketched or the shipped sample; there's still no way to bring in an agency's actual data short of hand-authoring project JSON.
+2. **Compare & Publish module**: scenario management (incumbent vs drafts, side-by-side scores/mix/10h usage), posting-format export, blank signed-board template, auto-drafted change memo from the board diff.
+3. **Hardening**: certified ceiling computation (LP/MILP — the honest "how good could any legal board be"; premium-tier candidate), Gantt edge-drag on desktop, per-day sketch overrides, break-length moves in the suggestion engine.
+4. **SaaS layer (only when a second agency is real)**: accounts + per-tenant storage (the project-file schema IS the data model), then optional operator bidding tier. Adjacent product idea parked: driver training/compliance platform.
 
 ## 8. Deployment
 
-Vite + React; deps: react, react-dom, recharts, xlsx. Static hosting (Cloudflare Pages/Netlify/GitHub Pages — see README). No server, no storage: the site is a shell; data arrives via Load project at runtime. Keep it that way until the SaaS layer is a deliberate decision.
+Vite + React; deps: react, react-dom, recharts, xlsx, date-holidays. Hosted on **Cloudflare Workers** (`wrangler.jsonc`), not Pages/Netlify/GitHub Pages as originally sketched in the README. Deployment is **not** git-triggered — pushing to GitHub only updates the repo; someone must run `npm run deploy` (wraps `vite build` + `wrangler deploy`) locally to actually ship. This was a real source of confusion once (a push was mistaken for a deploy) — don't assume otherwise. No server, no storage: the site is a shell; data arrives via Load project at runtime. Keep it that way until the SaaS layer is a deliberate decision.

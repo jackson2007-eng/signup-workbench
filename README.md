@@ -76,4 +76,10 @@ Same idea: https://app.netlify.com → **Add new site → Import an existing pro
 
 ## Updating the app
 
-Edit the code (or ask Claude / Claude Code to), then `git push` — the host rebuilds automatically. The whole app lives in `src/App.jsx`; sample data in `src/sampleData.js`.
+Edit the code (or ask Claude / Claude Code to), commit, and `git push` to keep GitHub in sync — but **pushing does not deploy the live site**. This app is hosted on Cloudflare Workers with no CI hook connected, so you also need to run:
+
+```
+npm run deploy
+```
+
+locally (requires `npx wrangler login` once, the first time) to actually update `https://signup-workbench.jackson2007.workers.dev`. The whole app lives in `src/App.jsx`; sample data in `src/sampleData.js`.

@@ -12,10 +12,15 @@ A scheduler's workbench (Vite + React SPA) for designing paratransit/microtransi
 npm install       # install deps
 npm run dev       # start dev server (vite, default http://localhost:5173)
 npm run build     # production build -> dist/
-npm run preview   # preview the production build locally
+npm run preview   # build + run a local Wrangler dev server (Cloudflare Workers emulation)
+npm run deploy    # build + wrangler deploy — this is how the live site actually updates
 ```
 
-No test suite, linter, or type checker is configured. There is no backend: the app is a static bundle, and all data enters/exits at runtime via Save/Load project (JSON) and Export board (xlsx) — nothing is persisted server-side.
+No test suite, linter, or type checker is configured. There is no backend in the app-logic sense: all data enters/exits at runtime via Save/Load project (JSON) and Export board (xlsx) — nothing is persisted server-side.
+
+**Deployment is NOT git-triggered.** The site is hosted on Cloudflare Workers (`wrangler.jsonc`), and pushing to GitHub does nothing on its own — there is no CI/build hook connected. Someone must run `npm run deploy` locally (or in a pipeline, if one is ever added) after pushing for changes to actually go live. This has caused real confusion before (a push was mistaken for a deploy) — don't assume `git push` ships anything.
+
+`npm run dev`'s Cloudflare Vite plugin needs a local Workers runtime (`workerd`) that requires macOS 13.5+; on older macOS it's conditionally skipped for `dev` (only loaded for `build`) in `vite.config.js` — see the comment there if this trips up local dev again.
 
 ## Design doctrine (do not violate)
 
@@ -27,7 +32,7 @@ No test suite, linter, or type checker is configured. There is no backend: the a
 
 ## Architecture
 
-The entire app — engine, UI, and state — lives in `src/App.jsx` (~2,200 lines); `src/sampleData.js` holds the shipped synthetic demand/board, `src/main.jsx` is the React entry point. There is no routing or backend; state is held in React and round-trips through project-file JSON.
+The entire app — engine, UI, and state — lives in `src/App.jsx` (~2,600 lines); `src/sampleData.js` holds the shipped synthetic demand/board, `src/main.jsx` is the React entry point. There is no routing or backend; state is held in React and round-trips through project-file JSON. One external dependency beyond the core stack: `date-holidays` (statutory holiday lookup, offline/bundled data, dynamically `import()`-ed only when the Rules tab is opened so it doesn't bloat the main chunk).
 
 ### Scoring metric (the core idea everything else serves)
 
@@ -41,6 +46,7 @@ Hard constraints (minimum vehicles in service, fleet cap, sign-in stagger, 10-ho
 - **Extra board**: headcount reservation with no shape/coverage contribution. `designed runs = total signed − extra board`.
 - **Shift types** are editable in Rules (shipped defaults: AM, NN, AX, NN10, AX10, BST, BX). `brk: true` means a break is *allowed*, not required.
 - Packaging rules: min rest between shifts (10h default), max consecutive days (5), max report-time variance in a package (60 min), days-off contiguity. 8h types → 5-day weeks; 10h types → 4-day weeks (both 40 paid hours — this equivalence is why "cost mode" at the package level is meaningless; see PROJECT_NOTES.md §5).
+- **Signup period & holidays** (`signupPeriod`, `holidays[]` state): a start/end calendar-date range plus a country/region jurisdiction, used to auto-detect statutory holidays via `date-holidays`. This is the *only* calendar-date concept in the app — the engine itself stays purely day-of-week; a holiday's `runsAs` field just says which existing weekday's board pattern it should follow (`"Sunday"`, etc.), or `"custom"` if it needs its own board. Each holiday can optionally carry `segs: []` — a tiny independent one-off shift list (`{id, type, s, e, b}`, no `days`/`shift`/`run`) editable in the **EXCEPTIONS** tab. One-off segments reuse `validateSeg`/`autofixSeg` (per-shift legality) but deliberately skip `packageInfo` (weekly-package rules don't apply to a single date) and have no coverage scoring.
 
 ### Board limits (`glob`, configured only in the Rules tab)
 
@@ -75,12 +81,15 @@ Sweep (Auto-Build tab) builds a full board at every 10-hour target and ranks res
 
 ### UI map (tabs)
 
-RULES (classification, breaks, board limits, packaging rules, service span) → DEMAND → AUTO-BUILD (incl. 10-hour sweep) → COVERAGE (score/chart/violation banners) → BOARD DESIGNER (Gantt-style editing, undo, KPI strip) → PACKAGING (signup-sheet grid view, auto-package, per-day refine) → SUGGESTIONS (ranked moves, deep optimize). Global: Save/Load project (JSON), Export board (xlsx, signup-tab layout).
+RULES (classification, breaks, board limits, packaging rules, service span, signup period & holiday list) → EXCEPTIONS (one-off shift editor for holidays set to "custom" schedule) → DEMAND → AUTO-BUILD (incl. 10-hour sweep) → COVERAGE (score/chart/violation banners) → BOARD DESIGNER (Gantt-style editing, undo, KPI strip) → PACKAGING (signup-sheet grid view, auto-package, per-day refine) → SUGGESTIONS (ranked moves, deep optimize). Global: Save/Load project (JSON), Export board (xlsx, signup-tab layout + Exceptions sheet when a signup period is set).
+
+A dismissible "Getting started" checklist and small tab-button status dots (RULES/DEMAND/COVERAGE/BOARD DESIGNER) surface setup progress — purely informational, matching the "flag never block" doctrine; see the state variables `hasVisitedCoverage`/`hasExported` and the `checklistOpen` toggle if extending this.
 
 Styling: desktop-first, HASTUS-inspired, Barlow Condensed/Inter, flat panels; teal = supply, amber = demand, red = gaps/violations. Number inputs need explicit white background + dark text (an iOS white-on-white bug was already fixed once — don't reintroduce it).
 
 ## Roadmap context (for scoping new work)
 
-1. Compare & Publish module (scenario comparison, posting-format export, change memo) is next.
-2. Then: certified-ceiling computation (LP/MILP, premium-tier candidate), a real file-import panel, Gantt edge-drag, per-day sketch overrides.
-3. SaaS/multi-tenant accounts are explicitly parked until a second agency is real — don't add backend/auth infrastructure speculatively.
+1. **Shipped**: signup period + statutory holiday detection, per-holiday "runs as an existing weekday" or fully custom one-off shift boards (EXCEPTIONS tab), getting-started checklist/tab status dots.
+2. **Next up**: a real demand-import panel — downloadable xlsx template + upload/parse flow for real 5-minute pickup/dropoff data (currently demand is either hand-sketched or the shipped sample; there is still no way to bring in a real agency's own counts without hand-authoring project JSON).
+3. Compare & Publish module (scenario comparison, posting-format export, change memo), certified-ceiling computation (LP/MILP, premium-tier candidate), Gantt edge-drag, per-day sketch overrides.
+4. SaaS/multi-tenant accounts are explicitly parked until a second agency is real — don't add backend/auth infrastructure speculatively.
