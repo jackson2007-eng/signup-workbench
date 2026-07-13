@@ -15,8 +15,7 @@ const T1 = T0 + N * 5;
 const SLOT = (i) => T0 + i * 5;
 const fmt = (m) => {
   const h = Math.floor(m / 60), mm = m % 60;
-  const hh = h >= 24 ? h - 24 : h;
-  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}${h >= 24 ? "+" : ""}`;
+  return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 };
 const ink = "#182430", paper = "#F4F6F7", card = "#FFFFFF",
   demandAmber = "#D98324", targetInk = "#233746", supplyTeal = "#0F7B7A",
@@ -50,13 +49,13 @@ const parseHM = (str) => {
   const m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(str || "");
   if (!m) return null;
   const v = parseInt(m[1]) * 60 + parseInt(m[2]);
-  return v >= 0 && v <= 1800 && parseInt(m[2]) < 60 ? v : null;
+  return v >= 0 && v <= T1 && parseInt(m[2]) < 60 ? v : null;
 };
 
 function TimeField({ value, onCommit, width = 62 }) {
-  const [txt, setTxt] = useState(fmt(value).replace("+", ""));
+  const [txt, setTxt] = useState(fmt(value));
   const [bad, setBad] = useState(false);
-  React.useEffect(() => { setTxt(fmt(value).replace("+", "")); setBad(false); }, [value]);
+  React.useEffect(() => { setTxt(fmt(value)); setBad(false); }, [value]);
   return (
     <input value={txt} inputMode="numeric"
       onChange={(e) => setTxt(e.target.value)}
@@ -73,12 +72,24 @@ function TimeField({ value, onCommit, width = 62 }) {
   );
 }
 
-function NumField({ value, onCommit, width = 58, step = 1 }) {
+function NumField({ value, onCommit, width = 58 }) {
+  const [txt, setTxt] = useState(String(value));
+  const focused = useRef(false);
+  React.useEffect(() => { if (!focused.current) setTxt(String(value)); }, [value]);
   return (
-    <input type="number" inputMode="numeric" value={value} step={step}
+    <input type="text" inputMode="decimal" value={txt}
+      onFocus={() => { focused.current = true; }}
       onChange={(e) => {
-        const v = parseFloat(e.target.value);
+        const raw = e.target.value;
+        setTxt(raw);
+        if (raw.trim() === "") return;
+        const v = parseFloat(raw);
         if (!isNaN(v)) onCommit(v);
+      }}
+      onBlur={() => {
+        focused.current = false;
+        const v = parseFloat(txt);
+        setTxt(String(isNaN(v) ? value : v));
       }}
       style={{
         width, padding: "5px 6px", border: "1px solid #B9C6CC", background: "#fff",
@@ -843,11 +854,11 @@ const TabDot = ({ done }) => (
 );
 
 /* ---------- demand sketcher ---------- */
-const CTRL_TIMES = Array.from({ length: 40 }, (_, k) => 300 + k * 30);
+const CTRL_TIMES = Array.from({ length: 42 }, (_, k) => 300 + k * 30);
 const TPL = {
-  weekday: [8,10,14,20,30,42,55,65,70,68,62,58,55,54,55,58,62,68,75,85,95,100,96,85,72,60,50,42,36,30,25,20,16,13,10,8,6,5,4,3],
-  hump:    [4,5,7,10,14,20,28,36,45,54,62,70,76,80,82,82,80,76,70,64,58,52,46,40,35,30,26,22,18,15,12,10,8,6,5,4,3,3,2,2],
-  flat:    Array(40).fill(50),
+  weekday: [8,10,14,20,30,42,55,65,70,68,62,58,55,54,55,58,62,68,75,85,95,100,96,85,72,60,50,42,36,30,25,20,16,13,10,8,6,5,4,3,2,2],
+  hump:    [4,5,7,10,14,20,28,36,45,54,62,70,76,80,82,82,80,76,70,64,58,52,46,40,35,30,26,22,18,15,12,10,8,6,5,4,3,3,2,2,1,1],
+  flat:    Array(42).fill(50),
 };
 const CURVE_DAYS = { Weekday: ["Monday","Tuesday","Wednesday","Thursday","Friday"], Saturday: ["Saturday"], Sunday: ["Sunday"] };
 
@@ -856,7 +867,7 @@ function sketchToEv(raw, trips) {
   let sumV = 0;
   for (let i = 0; i < N; i++) {
     const t = SLOT(i);
-    const k = Math.min(38, Math.floor((t - 300) / 30));
+    const k = Math.min(CTRL_TIMES.length - 2, Math.floor((t - 300) / 30));
     const f = (t - (300 + k * 30)) / 30;
     const v = Math.max(0, raw[k] * (1 - f) + raw[k + 1] * f);
     ev[i] = v; sumV += v;
