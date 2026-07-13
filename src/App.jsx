@@ -1580,7 +1580,7 @@ export default function App() {
             ] },
             { label: "Phase 2 · Build", steps: [
               { key: "build", label: "AUTO-BUILD" },
-              { key: "board", label: "BOARD DESIGNER", done: changedCount > 0, reason: "Board unchanged from the shipped sample" },
+              { key: "board", label: "SHIFT BUILDER", done: changedCount > 0, reason: "Board unchanged from the shipped sample" },
             ] },
             { label: "Phase 3 · Review", steps: [
               { key: "coverage", label: "COVERAGE", done: hasVisitedCoverage, reason: "Not yet reviewed" },
@@ -1638,10 +1638,10 @@ export default function App() {
         )}
 
         {/* envelope */}
-        <div style={{ border: "1px solid #E2E8EA", marginBottom: 12 }}>
+        <div style={{ border: "1px solid #E2E8EA", marginBottom: 12, position: "sticky", top: 0, zIndex: 10, background: paper }}>
           <div style={{ background: ink, color: "#fff", padding: "10px 14px" }}>
             <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-              <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 600 }}>SIGNUP ENVELOPE</div>
+              <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 600 }}>SIGNUP PACKAGE</div>
               <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 8 }}>
                 Total signed
                 <NumField value={totalSigned} onCommit={(v) => setTotalSigned(Math.round(v))} style={numInput} />
@@ -1933,7 +1933,7 @@ export default function App() {
                       {fmt(SLOT(g.from))}–{fmt(SLOT(g.to) + 5)} · up to {g.maxVeh.toFixed(1)} vehicles below target
                     </div>
                     <div style={{ fontSize: 12, color: "#5B6B75" }}>
-                      Worth {(g.weight * 100).toFixed(2)} points of {day}'s score. Open the Board Designer to move work here.
+                      Worth {(g.weight * 100).toFixed(2)} points of {day}'s score. Open the Shift Builder to move work here.
                     </div>
                   </div>
                 ))}
@@ -2302,7 +2302,7 @@ export default function App() {
                 </div>
               )}
               <div style={{ fontSize: 12.5, color: "#5B6B75", margin: "0 0 10px" }}>
-                Each row is one signable weekly package. <b>Refine day-to-day times</b> nudges individual days of a package (within the report-time variation rule) wherever a single day's demand justifies a slightly different start — the source of day-variant rows like a 07:20 Sunday inside a 07:30 week. Auto-packaging appears when the board contains loose single-day runs. Rest, consecutive-day, and variation rules come from the Rules tab. Tap a row to inspect; edit times or working days in the Board Designer.
+                Each row is one signable weekly package. <b>Refine day-to-day times</b> nudges individual days of a package (within the report-time variation rule) wherever a single day's demand justifies a slightly different start — the source of day-variant rows like a 07:20 Sunday inside a 07:30 week. Auto-packaging appears when the board contains loose single-day runs. Rest, consecutive-day, and variation rules come from the Rules tab. Tap a row to inspect; edit times or working days in the Shift Builder.
               </div>
 
               {flagged.length > 0 && (
@@ -2460,7 +2460,7 @@ export default function App() {
                             <b>Shift {x.sg.shift}</b> ({x.sg.type}, {(x.m / 60).toFixed(1)}h in surplus){i < idle.length - 1 ? ", " : ""}
                           </span>
                         ))}
-                        — candidates for a slide or retype in the Board Designer.
+                        — candidates for a slide or retype in the Shift Builder.
                       </div>
                     )}
                   </>

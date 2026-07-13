@@ -81,9 +81,9 @@ Auto-Build tab is a single action: always fills the full `max10` 10-hour allowan
 
 ### UI map (tabs)
 
-RULES (classification, breaks, board limits, packaging rules, service span, signup period & holiday list) → DEMAND → AUTO-BUILD (single generate action, fills the 10-hour allowance from Rules) → COVERAGE (score/chart/violation banners, plus an inline "Exception days" section — tile row + shift editor — for any holiday set to "Custom schedule") → BOARD DESIGNER (Gantt-style editing, undo, KPI strip) → PACKAGING (signup-sheet grid view, auto-package, per-day refine) → SUGGESTIONS (ranked moves, deep optimize). Global: Save/Load project (JSON), Export board (xlsx, signup-tab layout + Exceptions sheet when a signup period is set).
+RULES (classification, breaks, board limits, packaging rules, service span, signup period & holiday list) → DEMAND → AUTO-BUILD (single generate action, fills the 10-hour allowance from Rules) → COVERAGE (score/chart/violation banners, plus an inline "Exception days" section — tile row + shift editor — for any holiday set to "Custom schedule") → SHIFT BUILDER (Gantt-style editing, undo, KPI strip) → PACKAGING (signup-sheet grid view, auto-package, per-day refine) → SUGGESTIONS (ranked moves, deep optimize). Global: Save/Load project (JSON), Export board (xlsx, signup-tab layout + Exceptions sheet when a signup period is set).
 
-A dismissible "Getting started" checklist and small tab-button status dots (RULES/DEMAND/COVERAGE/BOARD DESIGNER) surface setup progress — purely informational, matching the "flag never block" doctrine; see the state variables `hasVisitedCoverage`/`hasExported` and the `checklistOpen` toggle if extending this.
+Phase tabs (RULES/DEMAND/SHIFT BUILDER/COVERAGE) tint teal-with-checkmark when done and amber when pending, with the reason as a hover tooltip — purely informational, matching the "flag never block" doctrine; see the `hasVisitedCoverage` state variable and the `PHASES` array in the render body if extending this.
 
 Styling: desktop-first, HASTUS-inspired, Barlow Condensed/Inter, flat panels; teal = supply, amber = demand, red = gaps/violations. Number inputs need explicit white background + dark text (an iOS white-on-white bug was already fixed once — don't reintroduce it).
 
