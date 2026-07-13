@@ -22,6 +22,10 @@ const ink = "#182430", paper = "#F4F6F7", card = "#FFFFFF",
   demandAmber = "#D98324", targetInk = "#233746", supplyTeal = "#0F7B7A",
   gapRed = "#C0392B", bookoutViolet = "#6C5B9E", sampleGray = "#5B6B75";
 const DEM_SOURCE_LABEL = { imported: "Sample data", sketched: "Sketched demand", uploaded: "Uploaded real data" };
+// pinned-header stacking: fixed heights (with a small buffer) for the sticky Signup Package
+// banner + day paddles and the .kpistrip, so each locked layer sits directly under the last.
+const ENVELOPE_H = 132;
+const KPI_H = 52;
 const TYPE_ORDER = ["AM", "NN", "AX", "NN10", "AX10", "BST", "BX", "BS"];
 const TYPE_COLOR = {
   AM: "#0F7B7A", NN: "#2E86AB", AX: "#6C5B9E", NN10: "#1B6E53",
@@ -1056,6 +1060,7 @@ export default function App() {
   const nextId = useRef(RAW.segments.length + 1000);
   const designed = totalSigned - blockSize;
 
+
   const [signupPeriod, setSignupPeriod] = useState({ start: "", end: "", country: "CA", region: "" });
   const [holidays, setHolidays] = useState([]);
   const [hdCtor, setHdCtor] = useState(null);
@@ -1991,7 +1996,7 @@ export default function App() {
 
                   {selHoliday && (
                     <>
-                      <div className="kpistrip">
+                      <div className="kpistrip" style={{ top: ENVELOPE_H }}>
                         <div className="kpi"><span className="l">editing</span><span className="v">{selHoliday.name}</span></div>
                         <div className="kpi"><span className="l">date</span><span className="v">{selHoliday.date} ({weekday})</span></div>
                         <div className="kpi"><span className="l">shifts</span><span className="v">{segs.length}</span></div>
@@ -2100,7 +2105,7 @@ export default function App() {
         {tab === "board" && (
           <>
             {/* KPI strip */}
-            <div className="kpistrip">
+            <div className="kpistrip" style={{ top: ENVELOPE_H }}>
               <div className="kpi"><span className="l">{day} coverage</span><span className="v" style={{ color: P.dayScore >= 0.9 ? "#7FD1C0" : "#F5C16C" }}>{(P.dayScore * 100).toFixed(1)}%</span></div>
               <div className="kpi"><span className="l">vs signed</span><span className="v" style={{ color: dayDelta >= 0 ? "#7FD1C0" : "#F09E93" }}>{dayDelta >= 0 ? "+" : ""}{dayDelta.toFixed(2)}</span></div>
               <div className="kpi"><span className="l">week</span><span className="v">{(eng.weekScore * 100).toFixed(1)}%</span></div>
@@ -2125,7 +2130,7 @@ export default function App() {
 
             {/* selected shift editor */}
             {sel ? (
-              <div style={{ background: card, border: `1px solid ${selIssues.length ? gapRed : "#E2E8EA"}`, padding: "12px 14px", marginBottom: 12 }}>
+              <div style={{ background: card, border: `1px solid ${selIssues.length ? gapRed : "#E2E8EA"}`, padding: "12px 14px", marginBottom: 12, position: "sticky", top: ENVELOPE_H + KPI_H, zIndex: 4 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700 }}>
                     Shift {sel.shift} · Run {sel.run}
@@ -2245,7 +2250,7 @@ export default function App() {
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} height={280}
                 selBand={sel ? [sel.s, sel.e] : null} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
-                Dashed lines mark the selected shift. The KPI strip stays pinned while you scroll.
+                Dashed lines mark the selected shift. The KPI strip and shift editor stay pinned while you scroll.
               </div>
             </div>
           </>
@@ -2262,7 +2267,7 @@ export default function App() {
           const singleDay = infos.filter((x) => x.info.daysWorked.size === 1).length;
           return (
             <>
-              <div className="kpistrip">
+              <div className="kpistrip" style={{ top: ENVELOPE_H }}>
                 <div className="kpi"><span className="l">packages</span><span className="v">{shifts.length}</span></div>
                 <div className="kpi"><span className="l">single-day runs</span><span className="v" style={{ color: singleDay ? "#F5C16C" : "#fff" }}>{singleDay}</span></div>
                 <div className="kpi"><span className="l">package flags</span><span className="v" style={{ color: flagged.length ? "#F09E93" : "#7FD1C0" }}>{flagged.length}</span></div>

@@ -87,6 +87,8 @@ Phase tabs (RULES/DEMAND/SHIFT BUILDER/COVERAGE) tint teal-with-checkmark when d
 
 Styling: desktop-first, HASTUS-inspired, Barlow Condensed/Inter, flat panels; teal = supply, amber = demand, red = gaps/violations. Number inputs need explicit white background + dark text (an iOS white-on-white bug was already fixed once — don't reintroduce it).
 
+The Signup Package banner + day paddles, the `.kpistrip`, and (on Shift Builder, when open) the selected-shift editor all use `position: sticky` so they stay pinned while scrolling, stacked via fixed pixel offsets `ENVELOPE_H`/`KPI_H` (top of file) rather than measured at runtime — this app has no dynamic-measurement precedent (no `ResizeObserver`/`useLayoutEffect` elsewhere) and is desktop-first with fixed-size content, so a hardcoded offset with a small buffer is more robust than runtime measurement. If you change the height of the envelope block or `.kpistrip`, bump these constants to match.
+
 ## Roadmap context (for scoping new work)
 
 1. **Shipped**: signup period + statutory holiday detection, per-holiday "runs as an existing weekday" or fully custom one-off shift boards (inline "Exception days" section on the Coverage tab), demand data template download/upload, getting-started checklist/tab status dots.
