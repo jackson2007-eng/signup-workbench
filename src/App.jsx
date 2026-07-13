@@ -41,6 +41,38 @@ const IMPORTED_DEM = (() => {
 })();
 const cloneSeg = (s) => ({ ...s, b: s.b ? [...s.b] : null, days: s.days ? [...s.days] : undefined });
 
+// Scans a baseline board's distinct shift numbers ascending and collapses consecutive
+// same-type runs into ordered blocks — e.g. shifts 101-104 all AX, 105-107 all NN becomes
+// [{type:"AX",count:4},{type:"NN",count:3}]. Used to make structure-aware generation follow
+// the same shift-type/number-block convention the uploaded signup already uses.
+function deriveTypeBlocks(baseline) {
+  const byShift = new Map();
+  for (const sg of baseline) if (!byShift.has(sg.shift)) byShift.set(sg.shift, sg.type);
+  const shiftNums = [...byShift.keys()].sort((a, b) => a - b);
+  const blocks = [];
+  for (const sh of shiftNums) {
+    const type = byShift.get(sh);
+    const last = blocks[blocks.length - 1];
+    if (last && last.type === type) last.count++;
+    else blocks.push({ type, count: 1 });
+  }
+  return blocks;
+}
+// Cycles the blocks in order to produce one type per package slot — fills the first
+// category completely before moving to the next, wrapping back to the first block if
+// nPackages exceeds the baseline's total shift count.
+function buildTypeSequence(blocks, nPackages) {
+  if (!blocks.length) return null;
+  const seq = [];
+  let bi = 0, remaining = blocks[0].count;
+  while (seq.length < nPackages) {
+    seq.push(blocks[bi].type);
+    remaining--;
+    if (remaining <= 0) { bi = (bi + 1) % blocks.length; remaining = blocks[bi].count; }
+  }
+  return seq;
+}
+
 /* ---------- editable rule defaults ---------- */
 const DEFAULT_RULES = JSON.parse(JSON.stringify(RAW.rules));
 const DEFAULT_GLOBAL = JSON.parse(JSON.stringify(RAW.global));
@@ -619,7 +651,7 @@ function findSuggestions(board, eng, DEM, rules, glob) {
 }
 
 /* ---------- auto-builder ---------- */
-function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, includePT) {
+function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, includePT, typeSequence = null, startShiftNumber = null) {
   let evaluated = 0;
   let weekEv = 0;
   for (const d of DAYS) weekEv += DEM[d].reduce((a, b) => a + b, 0);
@@ -712,9 +744,10 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
       if (cap > 0) return null; // would exceed fleet cap somewhere it covers
       return g - starts[d][c.startSlot] * 0.15;
     };
-    const pick = (only10) => {
+    const pick = (only10, forceType) => {
       let best = null, bestVal = -Infinity;
       for (const c of cands) {
+        if (forceType && c.type !== forceType) continue;
         if (c.is10 && used10 >= glob.max10) continue;
         if (only10 && !c.is10) continue;
         const dayVal = {};
@@ -736,9 +769,10 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
       }
       return best;
     };
+    const forceType = typeSequence ? typeSequence[p % typeSequence.length] : null;
     let best = null;
-    if (used10 < tenTarget) best = pick(true) || pick(false);
-    else best = pick(false);
+    if (used10 < tenTarget) best = pick(true, forceType) || pick(false, forceType);
+    else best = pick(false, forceType);
     if (!best) break;
     const { c, days } = best;
     const a = idx(c.s), z = idx(c.e);
@@ -751,7 +785,7 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
     packs.push({ type: c.type, s: c.s, e: c.e, b: c.b ? [...c.b] : null, work: c.work, days: [...days] });
   }
 
-  const shiftBase = glob.shiftSeriesBase || 6000;
+  const shiftBase = startShiftNumber != null ? startShiftNumber : (glob.shiftSeriesBase || 6000);
   const segs = packs.map((o, i) => ({
     id: 100000 + i, shift: shiftBase + i, run: "G" + (i + 1), type: o.type,
     daysOff: DAYS.filter((d) => !o.days.includes(d)).map((d) => d.slice(0, 2).toUpperCase()).join("-"),
@@ -1300,6 +1334,8 @@ export default function App() {
   const [buildN, setBuildN] = useState(100);
   const [buildResult, setBuildResult] = useState(null);
   const [buildBusy, setBuildBusy] = useState(false);
+  const [followBaselinePattern, setFollowBaselinePattern] = useState(false);
+  const [showDiff, setShowDiff] = useState(false);
   const [refineBusy, setRefineBusy] = useState(false);
   const [refineResult, setRefineResult] = useState(null);
   const [fixResult, setFixResult] = useState(null);
@@ -1632,6 +1668,7 @@ export default function App() {
         setBoard(segments.map(cloneSeg));
         setBaselineBoard(segments.map(cloneSeg));
         setSignupSource("uploaded");
+        setFollowBaselinePattern(true);
         setSignupUploadResult(res.summary);
         setHist([]); setSelId(null); setSugs(null); setSugsStale(false);
         if (res.exceptionDays && res.exceptionDays.length) {
@@ -1676,19 +1713,22 @@ export default function App() {
 
   const originalMap = useMemo(() => new Map(baselineBoard.map((s) => [s.id, s])), [baselineBoard]);
 
-  const changedCount = useMemo(() => {
-    let n = 0;
+  const boardDiff = useMemo(() => {
+    const added = [], removed = [], modified = [];
     const ids = new Set();
     for (const s of board) {
       ids.add(s.id);
       const o = originalMap.get(s.id);
-      if (!o) { n++; continue; }
+      if (!o) { added.push(s); continue; }
       if (o.s !== s.s || o.e !== s.e || o.type !== s.type ||
-        JSON.stringify(o.b) !== JSON.stringify(s.b) || o.days.join() !== s.days.join()) n++;
+        JSON.stringify(o.b) !== JSON.stringify(s.b) || o.days.join() !== s.days.join()) {
+        modified.push({ seg: s, orig: o });
+      }
     }
-    for (const id of originalMap.keys()) if (!ids.has(id)) n++;
-    return n;
+    for (const [id, o] of originalMap) if (!ids.has(id)) removed.push(o);
+    return { added, removed, modified };
   }, [board, originalMap]);
+  const changedCount = boardDiff.added.length + boardDiff.removed.length + boardDiff.modified.length;
 
   const distinctShifts = useMemo(() => new Set(board.map((s) => s.shift)).size, [board]);
   const signupStats = useMemo(() => {
@@ -1940,8 +1980,8 @@ export default function App() {
               { key: "demand", label: "DEMAND", done: demSource !== "imported", reason: "Still using shipped sample data — sketch your own or upload real data in Demand" },
             ] },
             { label: "Phase 2 · Build", steps: [
-              { key: "build", label: "AUTO-BUILD" },
-              { key: "board", label: "SHIFT BUILDER", done: changedCount > 0, reason: "Board unchanged from the shipped sample" },
+              { key: "signup-builder", label: "SIGNUP BUILDER" },
+              { key: "board", label: "SHIFT BUILDER", done: changedCount > 0 || signupSource === "uploaded", reason: signupSource === "uploaded" ? "Review the promoted signup or generate a new board" : "Board unchanged from Sample Signup" },
             ] },
             { label: "Phase 3 · Review", steps: [
               { key: "coverage", label: "COVERAGE", done: hasVisitedCoverage, reason: "Not yet reviewed" },
@@ -1986,16 +2026,56 @@ export default function App() {
         })()}
 
         {tab === "board" && (
-          <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-            <button style={{ ...nudgeBtn, opacity: hist.length ? 1 : 0.4 }} onClick={undo} disabled={!hist.length}>↶ Undo</button>
-            <button style={{ ...nudgeBtn, borderColor: changedCount ? demandAmber : "#B9C6CC", opacity: changedCount ? 1 : 0.4 }} onClick={resetAll} disabled={!changedCount}>Reset board</button>
-            {flagCount > 0 && (
-              <button style={{ ...nudgeBtn, background: gapRed, color: "#fff", borderColor: gapRed }} onClick={fixAll}>
-                Fix all flags ({flagCount})
+          <>
+            <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+              <button style={{ ...nudgeBtn, opacity: hist.length ? 1 : 0.4 }} onClick={undo} disabled={!hist.length}>↶ Undo</button>
+              <button style={{ ...nudgeBtn, borderColor: changedCount ? demandAmber : "#B9C6CC", opacity: changedCount ? 1 : 0.4 }} onClick={resetAll} disabled={!changedCount}>Reset board</button>
+              {flagCount > 0 && (
+                <button style={{ ...nudgeBtn, background: gapRed, color: "#fff", borderColor: gapRed }} onClick={fixAll}>
+                  Fix all flags ({flagCount})
+                </button>
+              )}
+              <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }} onClick={addShift}>+ Add shift</button>
+              <button style={{ ...nudgeBtn, opacity: changedCount ? 1 : 0.4, marginLeft: "auto" }} disabled={!changedCount} onClick={() => setShowDiff((v) => !v)}>
+                {showDiff ? "Hide" : "Show"} changes since upload ({changedCount})
               </button>
+            </div>
+
+            {showDiff && changedCount > 0 && (
+              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 12, fontSize: 12.5 }}>
+                {boardDiff.added.length > 0 && (
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontWeight: 700, color: supplyTeal, marginBottom: 4 }}>Added ({boardDiff.added.length})</div>
+                    {boardDiff.added.map((s) => (
+                      <div key={s.id} style={{ cursor: "pointer", padding: "2px 0" }} onClick={() => { setSelId(s.id); setShowDiff(false); }}>
+                        Shift {s.shift}·{s.run} {s.type} — {fmt(s.s)}–{fmt(s.e)}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {boardDiff.removed.length > 0 && (
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontWeight: 700, color: gapRed, marginBottom: 4 }}>Removed ({boardDiff.removed.length})</div>
+                    {boardDiff.removed.map((o) => (
+                      <div key={o.id} style={{ padding: "2px 0" }}>
+                        Shift {o.shift}·{o.run} {o.type} — {fmt(o.s)}–{fmt(o.e)}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {boardDiff.modified.length > 0 && (
+                  <div>
+                    <div style={{ fontWeight: 700, color: demandAmber, marginBottom: 4 }}>Modified ({boardDiff.modified.length})</div>
+                    {boardDiff.modified.map(({ seg, orig }) => (
+                      <div key={seg.id} style={{ cursor: "pointer", padding: "2px 0" }} onClick={() => { setSelId(seg.id); setShowDiff(false); }}>
+                        Shift {seg.shift}·{seg.run} {seg.type} — {fmt(orig.s)}–{fmt(orig.e)}{orig.b ? ` (break ${fmt(orig.b[0])}–${fmt(orig.b[1])})` : ""} → {fmt(seg.s)}–{fmt(seg.e)}{seg.b ? ` (break ${fmt(seg.b[0])}–${fmt(seg.b[1])})` : ""}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
-            <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }} onClick={addShift}>+ Add shift</button>
-          </div>
+          </>
         )}
 
         {/* envelope + day paddles, locked together while scrolling */}
@@ -2228,8 +2308,29 @@ export default function App() {
           </>
         )}
 
-        {tab === "build" && (
+        {tab === "signup-builder" && (
           <>
+            <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14 }}>
+              <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 6 }}>
+                Start from your uploaded signup
+              </div>
+              {signupSource === "uploaded" ? (
+                <>
+                  <div style={{ fontSize: 13, color: "#41525C" }}>
+                    Working board already reflects your uploaded signup{changedCount > 0 ? ` — ${changedCount} local change${changedCount > 1 ? "s" : ""} since then` : " — no local changes yet"}.
+                  </div>
+                  <button style={{ ...nudgeBtn, marginTop: 8, borderColor: changedCount ? demandAmber : "#B9C6CC", opacity: changedCount ? 1 : 0.5 }} disabled={!changedCount}
+                    onClick={resetAll}>
+                    Use uploaded signup as working board
+                  </button>
+                </>
+              ) : (
+                <div style={{ fontSize: 13, color: "#41525C" }}>
+                  Still working from Sample Signup — upload your real signup on the SIGNUP tab to promote it as your working board.
+                </div>
+              )}
+            </div>
+
             <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>
@@ -2243,7 +2344,13 @@ export default function App() {
                   onClick={() => {
                     setBuildBusy(true);
                     setTimeout(() => {
-                      const g = generateBoard(glob.max10, buildN, rules, glob, DEM, spans, glob.minVeh, includePT);
+                      let typeSequence = null, startShiftNumber = null;
+                      if (followBaselinePattern) {
+                        const blocks = deriveTypeBlocks(baselineBoard);
+                        typeSequence = buildTypeSequence(blocks, buildN);
+                        startShiftNumber = Math.max(glob.shiftSeriesBase || 6000, 1 + Math.max(0, ...board.map((s) => s.shift), ...baselineBoard.map((s) => s.shift)));
+                      }
+                      const g = generateBoard(glob.max10, buildN, rules, glob, DEM, spans, glob.minVeh, includePT, typeSequence, startShiftNumber);
                       const score = computeEngine(DEM, buildSupply(g.segs), includePT, glob.minVeh, spans, glob.maxFleet).weekScore;
                       setBuildResult({ ...g, score });
                       setBuildBusy(false);
@@ -2252,8 +2359,12 @@ export default function App() {
                   {buildBusy ? "Generating…" : "Generate board"}
                 </button>
               </div>
+              <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+                <input type="checkbox" checked={followBaselinePattern} onChange={(e) => setFollowBaselinePattern(e.target.checked)} />
+                Follow existing shift-type pattern (recommended when working from an uploaded signup)
+              </label>
               <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 6 }}>
-                Builds whole weekly packages: each placement chooses a shift type, a start time on the 5-minute grid, and a consecutive days-off pattern together, so every generated shift is signable by construction — consistent report times all week, legal rest, no orphan runs. Uses the full 10-hour allowance from Rules before any 8-hour work. Break-taking types are explored at every legal length (30 min to 4 h) and position, so long midday breaks that stretch a shift across both peaks are found automatically. The fleet cap, minimum-vehicle floor, sign-in stagger, and pull-out/pull-in lead time (Rules → Deadhead & productivity) steer every placement — a shift may start before the first trip it serves and end after the last, to allow for that lead time. Set the count to your designed-run envelope ({designed} currently). Loading a build replaces the current board — save your project first.
+                Builds whole weekly packages: each placement chooses a shift type, a start time on the 5-minute grid, and a consecutive days-off pattern together, so every generated shift is signable by construction — consistent report times all week, legal rest, no orphan runs. Uses the full 10-hour allowance from Rules before any 8-hour work. Break-taking types are explored at every legal length (30 min to 4 h) and position, so long midday breaks that stretch a shift across both peaks are found automatically. The fleet cap, minimum-vehicle floor, sign-in stagger, and pull-out/pull-in lead time (Rules → Deadhead & productivity) steer every placement — a shift may start before the first trip it serves and end after the last, to allow for that lead time. Set the count to your designed-run envelope ({designed} currently). Loading a build replaces the current board — save your project first. With "Follow existing shift-type pattern" checked, new shifts fill one baseline shift-type block completely before moving to the next, in the same order as your uploaded signup, numbered to continue past its highest shift number.
               </div>
             </div>
 
@@ -2580,24 +2691,38 @@ export default function App() {
                     <button style={nudgeBtn} onClick={() => setSelId(null)}>Close</button>
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginTop: 10 }}>
-                  <Nudge label="Start" value={fmt(sel.s)}
-                    onDec={() => patchSel({ s: sel.s - 5 })} onInc={() => patchSel({ s: sel.s + 5 })} />
-                  <Nudge label="End" value={fmt(sel.e)}
-                    onDec={() => patchSel({ e: sel.e - 5 })} onInc={() => patchSel({ e: sel.e + 5 })} />
-                  <Nudge label="Whole shift" value={`${((sel.e - sel.s) / 60).toFixed(2)}h`}
-                    onDec={() => patchSel({ s: sel.s - 5, e: sel.e - 5, b: sel.b ? [sel.b[0] - 5, sel.b[1] - 5] : null })}
-                    onInc={() => patchSel({ s: sel.s + 5, e: sel.e + 5, b: sel.b ? [sel.b[0] + 5, sel.b[1] + 5] : null })} />
-                  {sel.b && (
-                    <>
-                      <Nudge label={`Break start`} value={fmt(sel.b[0])}
-                        onDec={() => shiftBreak(-5)} onInc={() => shiftBreak(5)} />
-                      <Nudge label={`Break length`} value={`${sel.b[1] - sel.b[0]}m`}
-                        onDec={() => patchSel({ b: [sel.b[0], sel.b[1] - 5] })} onInc={() => patchSel({ b: [sel.b[0], sel.b[1] + 5] })} />
-                    </>
-                  )}
-                  <button style={nudgeBtn} onClick={toggleBreak}>{sel.b ? "Remove break" : "Add break"}</button>
-                </div>
+                {(() => {
+                  const origSel = isChanged ? originalMap.get(sel.id) : null;
+                  return (
+                    <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginTop: 10, alignItems: "flex-end" }}>
+                      <div>
+                        <Nudge label="Start" value={fmt(sel.s)}
+                          onDec={() => patchSel({ s: sel.s - 5 })} onInc={() => patchSel({ s: sel.s + 5 })} />
+                        {origSel && origSel.s !== sel.s && <div style={{ fontSize: 10.5, color: "#8899A3", marginLeft: 80 }}>was {fmt(origSel.s)}</div>}
+                      </div>
+                      <div>
+                        <Nudge label="End" value={fmt(sel.e)}
+                          onDec={() => patchSel({ e: sel.e - 5 })} onInc={() => patchSel({ e: sel.e + 5 })} />
+                        {origSel && origSel.e !== sel.e && <div style={{ fontSize: 10.5, color: "#8899A3", marginLeft: 80 }}>was {fmt(origSel.e)}</div>}
+                      </div>
+                      <Nudge label="Whole shift" value={`${((sel.e - sel.s) / 60).toFixed(2)}h`}
+                        onDec={() => patchSel({ s: sel.s - 5, e: sel.e - 5, b: sel.b ? [sel.b[0] - 5, sel.b[1] - 5] : null })}
+                        onInc={() => patchSel({ s: sel.s + 5, e: sel.e + 5, b: sel.b ? [sel.b[0] + 5, sel.b[1] + 5] : null })} />
+                      {sel.b && (
+                        <>
+                          <div>
+                            <Nudge label={`Break start`} value={fmt(sel.b[0])}
+                              onDec={() => shiftBreak(-5)} onInc={() => shiftBreak(5)} />
+                            {origSel && origSel.b && origSel.b[0] !== sel.b[0] && <div style={{ fontSize: 10.5, color: "#8899A3", marginLeft: 80 }}>was {fmt(origSel.b[0])}</div>}
+                          </div>
+                          <Nudge label={`Break length`} value={`${sel.b[1] - sel.b[0]}m`}
+                            onDec={() => patchSel({ b: [sel.b[0], sel.b[1] - 5] })} onInc={() => patchSel({ b: [sel.b[0], sel.b[1] + 5] })} />
+                        </>
+                      )}
+                      <button style={nudgeBtn} onClick={toggleBreak}>{sel.b ? "Remove break" : "Add break"}</button>
+                    </div>
+                  );
+                })()}
                 <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
                   <span style={{ fontSize: 11.5, color: "#5B6B75" }}>Works:</span>
                   {DAYS.map((d) => (
@@ -2656,6 +2781,8 @@ export default function App() {
                   const brkMin = sg.b ? sg.b[1] - sg.b[0] : 0;
                   const workHrs = ((sg.e - sg.s - brkMin) / 60).toFixed(2);
                   const barTitle = `${fmt(sg.s)}–${fmt(sg.e)} · ${workHrs}h working${sg.b ? ` · ${brkMin}m break (${fmt(sg.b[0])}–${fmt(sg.b[1])})` : ""}`;
+                  const orig = isSel ? originalMap.get(sg.id) : null;
+                  const ghost = orig && (orig.s !== sg.s || orig.e !== sg.e || JSON.stringify(orig.b) !== JSON.stringify(sg.b)) ? orig : null;
                   return (
                     <div key={sg.id} className="ganttrow" onClick={() => setSelId(sg.id)}>
                       <div className="glabel" style={{ fontWeight: isSel ? 700 : 400, color: bad ? gapRed : undefined }}>
@@ -2665,6 +2792,21 @@ export default function App() {
                         {[360, 600, 840, 1080, 1320].map((m) => (
                           <div key={m} style={{ position: "absolute", left: `${pctPos(m)}%`, top: 0, bottom: 0, width: 1, background: "#E2E8EA" }} />
                         ))}
+                        {ghost && (
+                          <div title={`was ${fmt(ghost.s)}–${fmt(ghost.e)}`} style={{
+                            position: "absolute", left: `${pctPos(ghost.s)}%`, width: `${pctPos(Math.min(ghost.e, T1)) - pctPos(ghost.s)}%`,
+                            top: 0, height: 14, borderRadius: 2, background: "transparent",
+                            border: `1.5px dashed ${TYPE_COLOR[ghost.type] || ink}`, boxSizing: "border-box",
+                            opacity: 0.7, pointerEvents: "none",
+                          }} />
+                        )}
+                        {ghost && ghost.b && (
+                          <div style={{
+                            position: "absolute", left: `${pctPos(ghost.b[0])}%`, width: `${pctPos(ghost.b[1]) - pctPos(ghost.b[0])}%`,
+                            top: 0, height: 14, border: "1.5px dashed #AEBAC0", borderStyle: "dashed", background: "transparent",
+                            boxSizing: "border-box", opacity: 0.7, pointerEvents: "none",
+                          }} />
+                        )}
                         <div className="gbar" style={{
                           left: `${pctPos(sg.s)}%`, width: `${pctPos(Math.min(sg.e, T1)) - pctPos(sg.s)}%`,
                           background: TYPE_COLOR[sg.type] || ink,
@@ -2686,7 +2828,7 @@ export default function App() {
                     <span style={{ width: 12, height: 10, background: TYPE_COLOR[t], display: "inline-block", borderRadius: 2 }} />{t}
                   </span>
                 ))}
-                <span style={{ fontSize: 11, color: "#5B6B75" }}>hatched notch = break · red outline = rule flag · hover a bar for hours</span>
+                <span style={{ fontSize: 11, color: "#5B6B75" }}>hatched notch = break · red outline = rule flag · dashed outline = original position before edits · hover a bar for hours</span>
               </div>
             </div>
 
