@@ -40,7 +40,6 @@ const IMPORTED_DEM = (() => {
   return o;
 })();
 const cloneSeg = (s) => ({ ...s, b: s.b ? [...s.b] : null, days: s.days ? [...s.days] : undefined });
-const ORIGINAL = new Map(RAW.segments.map((s) => [s.id, s]));
 
 /* ---------- editable rule defaults ---------- */
 const DEFAULT_RULES = JSON.parse(JSON.stringify(RAW.rules));
@@ -56,6 +55,123 @@ const parseHM = (str) => {
   const v = parseInt(m[1]) * 60 + parseInt(m[2]);
   return v >= 0 && v <= T1 && parseInt(m[2]) < 60 ? v : null;
 };
+
+/* ---------- signup import (real or template signup roster -> board segments) ---------- */
+const SIGNUP_HEADER_ALIASES = {
+  shiftNo: ["shift no", "shift no.", "shift number"],
+  run: ["run"],
+  daysOff: ["days off"],
+  type: ["type", "shift type"],
+  splitType: ["split type", "split shift type"],
+  brk: ["break", "split"],
+  daysWorked: ["days worked"],
+  start: ["report time"],
+  end: ["off"],
+};
+const DOW_CODE = { SU: "Sunday", MO: "Monday", TU: "Tuesday", WE: "Wednesday", TH: "Thursday", FR: "Friday", SA: "Saturday" };
+
+function parseSignupWorkbook(wb, sheetName) {
+  const name = sheetName && wb.Sheets[sheetName] ? sheetName : wb.SheetNames.find((n) => n.toLowerCase() !== "instructions") || wb.SheetNames[0];
+  const ws = wb.Sheets[name];
+  if (!ws) return { ok: false, error: "The file has no readable sheet." };
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: "" });
+  if (!rows.length) return { ok: false, error: "The file has no rows." };
+
+  const headerRow = rows[0].map((h) => String(h || "").trim().toLowerCase());
+  const colIndex = {};
+  for (const [key, aliases] of Object.entries(SIGNUP_HEADER_ALIASES)) {
+    colIndex[key] = headerRow.findIndex((h) => aliases.includes(h));
+  }
+  if (colIndex.shiftNo < 0 || colIndex.daysWorked < 0 || colIndex.start < 0 || colIndex.end < 0) {
+    return { ok: false, error: "Couldn't find required columns (Shift No, Days Worked, Report Time, Off). Check the file matches the template." };
+  }
+
+  const parseDaysWorked = (raw) => {
+    const tokens = String(raw || "").toUpperCase().match(/[A-Z]{2}/g) || [];
+    const days = [];
+    for (const t of tokens) if (DOW_CODE[t] && !days.includes(DOW_CODE[t])) days.push(DOW_CODE[t]);
+    return days;
+  };
+
+  // pass 1: collect valid rows grouped by shift number — continuation rows in real
+  // exports can leave Type/Days Off/Split Type blank on ANY row of a shift's group,
+  // not necessarily after the row that carries the value, so grouping has to happen
+  // before resolving those fields (a simple "inherit from the last row seen" doesn't
+  // work when the blank row comes first).
+  const rawByShift = new Map();
+  const shiftOrder = [];
+  let footerRowsSkipped = 0, dateSpecificSkipped = 0;
+
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row || row.every((c) => c === "" || c == null)) continue;
+    const shiftNo = Number(row[colIndex.shiftNo]);
+    if (!Number.isFinite(shiftNo) || shiftNo <= 0 || !Number.isInteger(shiftNo)) { footerRowsSkipped++; continue; }
+
+    const days = parseDaysWorked(row[colIndex.daysWorked]);
+    if (days.length === 0) { dateSpecificSkipped++; continue; }
+
+    const start = parseHM(String(row[colIndex.start] || "").trim());
+    let end = parseHM(String(row[colIndex.end] || "").trim());
+    if (start == null || end == null) { footerRowsSkipped++; continue; }
+    if (end < start) end += 1440;
+
+    let b = null;
+    if (colIndex.brk >= 0) {
+      const bm = /^\s*(\d{1,2})(\d{2})\s*-\s*(\d{1,2})(\d{2})\s*$/.exec(String(row[colIndex.brk] || "").trim());
+      if (bm) {
+        const b0 = parseInt(bm[1]) * 60 + parseInt(bm[2]);
+        let b1 = parseInt(bm[3]) * 60 + parseInt(bm[4]);
+        if (b1 < b0) b1 += 1440;
+        b = [b0, b1];
+      }
+    }
+
+    if (!rawByShift.has(shiftNo)) { rawByShift.set(shiftNo, []); shiftOrder.push(shiftNo); }
+    rawByShift.get(shiftNo).push({
+      typeRaw: colIndex.type >= 0 ? String(row[colIndex.type] || "").trim() : "",
+      daysOffRaw: colIndex.daysOff >= 0 ? String(row[colIndex.daysOff] || "").trim() : "",
+      splitTypeRaw: colIndex.splitType >= 0 ? String(row[colIndex.splitType] || "").trim() : "",
+      run: colIndex.run >= 0 ? String(row[colIndex.run] || "").trim() : String(shiftNo),
+      days, s: start, e: end, b,
+    });
+  }
+  if (rawByShift.size === 0) return { ok: false, error: "No usable rows found — check the file matches the template." };
+
+  // pass 2: resolve each shift's canonical type/days-off/split-type from whichever
+  // row in its group carries it, then build one segment per row
+  const segments = [];
+  let nextTempId = 1;
+  const unrecognizedTypes = new Set();
+  for (const shiftNo of shiftOrder) {
+    const group = rawByShift.get(shiftNo);
+    const type = (group.find((g) => g.typeRaw) || {}).typeRaw || "";
+    const splitType = (group.find((g) => g.splitTypeRaw) || {}).splitTypeRaw || "";
+    let daysOff = (group.find((g) => g.daysOffRaw) || {}).daysOffRaw || "";
+    if (!daysOff) {
+      const worked = new Set();
+      for (const g of group) for (const d of g.days) worked.add(d);
+      daysOff = DAYS.filter((d) => !worked.has(d)).map((d) => d.slice(0, 2).toUpperCase()).join("-");
+    }
+    if (type && !DEFAULT_RULES[type]) unrecognizedTypes.add(type);
+    for (const g of group) {
+      segments.push({
+        id: nextTempId++, shift: shiftNo, run: g.run,
+        type, daysOff, splitType: splitType || (g.b ? "Split Break" : "Straight"),
+        days: g.days, s: g.s, e: g.e, b: g.b,
+      });
+    }
+  }
+
+  return {
+    ok: true, segments,
+    summary: {
+      shifts: shiftOrder.length, rows: segments.length,
+      dateSpecificSkipped, footerRowsSkipped,
+      unrecognizedTypes: [...unrecognizedTypes],
+    },
+  };
+}
 
 function TimeField({ value, onCommit, width = 62 }) {
   const [txt, setTxt] = useState(fmt(value));
@@ -1065,6 +1181,10 @@ export default function App() {
   const [totalSigned, setTotalSigned] = useState(125);
   const [blockSize, setBlockSize] = useState(25);
   const [board, setBoard] = useState(() => RAW.segments.map(cloneSeg));
+  const [baselineBoard, setBaselineBoard] = useState(() => RAW.segments.map(cloneSeg));
+  const [signupSource, setSignupSource] = useState("imported"); // "imported" | "uploaded"
+  const [signupUploadResult, setSignupUploadResult] = useState(null);
+  const signupFileRef = useRef(null);
   const [rules, setRules] = useState(() => JSON.parse(JSON.stringify(DEFAULT_RULES)));
   const [glob, setGlob] = useState(() => JSON.parse(JSON.stringify(DEFAULT_GLOBAL)));
   const [spans, setSpans] = useState(() => JSON.parse(JSON.stringify(DEFAULT_SPANS)));
@@ -1123,7 +1243,7 @@ export default function App() {
   };
   const resetAll = () => {
     setHist((h) => [...h.slice(-49), board]);
-    setBoard(RAW.segments.map(cloneSeg));
+    setBoard(baselineBoard.map(cloneSeg));
     setSelId(null);
   };
 
@@ -1179,6 +1299,7 @@ export default function App() {
       v: 1, savedAt: new Date().toISOString(),
       demSource, sketch, trips, uploadedDem, board, rules, glob, spans,
       totalSigned, blockSize, includePT, signupPeriod, holidays,
+      baselineBoard, signupSource,
     };
     const blob = new Blob([JSON.stringify(payload, null, 1)], { type: "application/json" });
     const a = document.createElement("a");
@@ -1284,6 +1405,28 @@ export default function App() {
     XLSX.writeFile(wb, "demand-template.xlsx");
   };
 
+  const downloadSignupTemplate = () => {
+    const wb = XLSX.utils.book_new();
+    const instr = [
+      ["Signup template"], [],
+      ["One row per shift. If a shift's report/off times differ on some days (day-variant), add one row per distinct time pattern — every row shares the same Shift No."],
+      ["Days Worked: space-separated 2-letter weekday codes, e.g. \"MO TU WE TH FR\"."],
+      ["Report Time / Off are the paid on-duty start/end (24h, e.g. 14:30). If a shift runs past midnight, Off can be earlier than Report Time (e.g. 0:00) — it's read as the next day."],
+      ["Break (optional): military time range with no colon, e.g. 1310-1410. Leave blank for a straight run with no break."],
+      ["Days Off / Split Type are optional — Days Off is inferred from Days Worked if left blank."],
+      ["No operator names or badge numbers — this tool only tracks shift structure."],
+    ];
+    const wsI = XLSX.utils.aoa_to_sheet(instr);
+    wsI["!cols"] = [{ wch: 90 }];
+    XLSX.utils.book_append_sheet(wb, wsI, "Instructions");
+    const header = ["Shift No", "Run", "Days Off", "Type", "Split Type", "Break", "Days Worked", "Report Time", "Off"];
+    const rows = [header, [101, "101", "SU-SA", "AM", "Straight", "", "MO TU WE TH FR", "5:15", "13:15"]];
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws["!cols"] = [{ wch: 9 }, { wch: 7 }, { wch: 10 }, { wch: 7 }, { wch: 12 }, { wch: 11 }, { wch: 18 }, { wch: 11 }, { wch: 8 }];
+    XLSX.utils.book_append_sheet(wb, ws, "Signup");
+    XLSX.writeFile(wb, "signup-template.xlsx");
+  };
+
   const loadProject = (file) => {
     const rd = new FileReader();
     rd.onload = () => {
@@ -1312,6 +1455,9 @@ export default function App() {
         if (p.includePT != null) setIncludePT(p.includePT);
         if (p.signupPeriod) setSignupPeriod(p.signupPeriod);
         if (Array.isArray(p.holidays)) setHolidays(p.holidays);
+        if (Array.isArray(p.baselineBoard)) setBaselineBoard(p.baselineBoard.map(cloneSeg));
+        if (p.signupSource === "uploaded" && !Array.isArray(p.baselineBoard)) setSignupSource("imported");
+        else if (p.signupSource) setSignupSource(p.signupSource);
         setHist([]); setSelId(null); setSugs(null); setSugsStale(false);
       } catch (err) {
         alert("Could not read that project file.");
@@ -1368,27 +1514,67 @@ export default function App() {
     rd.readAsArrayBuffer(file);
   };
 
+  const uploadSignup = (file) => {
+    const isCsv = /\.csv$/i.test(file.name);
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        const wb = isCsv ? XLSX.read(rd.result, { type: "string" }) : XLSX.read(rd.result, { type: "array" });
+        const res = parseSignupWorkbook(wb);
+        if (!res.ok) { alert(res.error); return; }
+        const startId = nextId.current;
+        const segments = res.segments.map((sg, i) => ({ ...sg, id: startId + i }));
+        nextId.current = startId + segments.length;
+        setBoard(segments.map(cloneSeg));
+        setBaselineBoard(segments.map(cloneSeg));
+        setSignupSource("uploaded");
+        setSignupUploadResult(res.summary);
+        setHist([]); setSelId(null); setSugs(null); setSugsStale(false);
+      } catch (err) {
+        alert("Could not read that signup file. Make sure it's an .xlsx or .csv file matching the template.");
+      }
+    };
+    if (isCsv) rd.readAsText(file); else rd.readAsArrayBuffer(file);
+  };
+
   const holidayCountForDay = useMemo(() => holidays.filter((h) => h.runsAs === day).length, [holidays, day]);
   const ftCov = useMemo(() => buildSupply(board), [board]);
   const eng = useMemo(() => computeEngine(DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet), [DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet]);
-  const base = useMemo(() => computeEngine(DEM, buildSupply(RAW.segments), includePT, glob.minVeh, spans, glob.maxFleet), [DEM, includePT, glob.minVeh, spans, glob.maxFleet]);
+  const base = useMemo(() => computeEngine(DEM, buildSupply(baselineBoard), includePT, glob.minVeh, spans, glob.maxFleet), [DEM, baselineBoard, includePT, glob.minVeh, spans, glob.maxFleet]);
   const P = eng.perDay[day];
+
+  const originalMap = useMemo(() => new Map(baselineBoard.map((s) => [s.id, s])), [baselineBoard]);
 
   const changedCount = useMemo(() => {
     let n = 0;
     const ids = new Set();
     for (const s of board) {
       ids.add(s.id);
-      const o = ORIGINAL.get(s.id);
+      const o = originalMap.get(s.id);
       if (!o) { n++; continue; }
       if (o.s !== s.s || o.e !== s.e || o.type !== s.type ||
         JSON.stringify(o.b) !== JSON.stringify(s.b) || o.days.join() !== s.days.join()) n++;
     }
-    for (const id of ORIGINAL.keys()) if (!ids.has(id)) n++;
+    for (const id of originalMap.keys()) if (!ids.has(id)) n++;
     return n;
-  }, [board]);
+  }, [board, originalMap]);
 
   const distinctShifts = useMemo(() => new Set(board.map((s) => s.shift)).size, [board]);
+  const signupStats = useMemo(() => {
+    const perDay = {};
+    for (const d of DAYS) perDay[d] = { shifts: new Set(), hours: 0 };
+    const byType = {};
+    for (const sg of baselineBoard) {
+      const brkMin = sg.b ? sg.b[1] - sg.b[0] : 0;
+      const workHrs = (sg.e - sg.s - brkMin) / 60;
+      byType[sg.type] = (byType[sg.type] || 0) + workHrs * sg.days.length;
+      for (const d of sg.days) {
+        perDay[d].shifts.add(sg.shift);
+        perDay[d].hours += workHrs;
+      }
+    }
+    return { perDay, byType };
+  }, [baselineBoard]);
   const tenCount = useMemo(() => {
     const s = new Set();
     for (const sg of board) {
@@ -1472,7 +1658,7 @@ export default function App() {
   };
   const resetSel = () => {
     if (!sel) return;
-    const o = ORIGINAL.get(sel.id);
+    const o = originalMap.get(sel.id);
     if (!o) return;
     mutate((b) => b.map((s) => (s.id === sel.id ? cloneSeg(o) : s)));
   };
@@ -1488,7 +1674,7 @@ export default function App() {
   };
 
   const isChanged = sel ? (() => {
-    const o = ORIGINAL.get(sel.id);
+    const o = originalMap.get(sel.id);
     if (!o) return false;
     return o.s !== sel.s || o.e !== sel.e || o.type !== sel.type ||
       JSON.stringify(o.b) !== JSON.stringify(sel.b) || o.days.join() !== sel.days.join();
@@ -1619,6 +1805,7 @@ export default function App() {
           const PHASES = [
             { label: "Phase 1 · Setup", steps: [
               { key: "rules", label: "RULES", done: !!(signupPeriod.start && signupPeriod.end), reason: "Set a period and jurisdiction in Rules" },
+              { key: "signup", label: "SIGNUP", done: signupSource === "uploaded", reason: "Still using the shipped sample signup — upload your real signup to compare against it" },
               { key: "demand", label: "DEMAND", done: demSource !== "imported", reason: "Still using shipped sample data — sketch your own or upload real data in Demand" },
             ] },
             { label: "Phase 2 · Build", steps: [
@@ -1721,6 +1908,76 @@ export default function App() {
             })}
           </div>
         </div>
+
+        {tab === "signup" && (
+          <>
+            <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14 }}>
+              <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>Signup source</div>
+              <span style={{ fontSize: 13.5 }}>
+                Working from: <b>{signupSource === "uploaded" ? "your uploaded signup" : "the shipped sample signup"}</b>
+              </span>
+              <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+                <button style={nudgeBtn} onClick={downloadSignupTemplate}>Download template</button>
+                <button style={nudgeBtn} onClick={() => signupFileRef.current && signupFileRef.current.click()}>Upload signup</button>
+                <input ref={signupFileRef} type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                  style={{ display: "none" }}
+                  onChange={(e) => { if (e.target.files && e.target.files[0]) uploadSignup(e.target.files[0]); e.target.value = ""; }} />
+              </div>
+              <div style={{ fontSize: 12, color: "#5B6B75", flexBasis: "100%" }}>
+                Load a real current or previous signup to work off of instead of the shipped sample — the coverage-score deltas shown throughout the tool ("vs signed") will measure improvement against it instead of synthetic data. Download the template, fill in your real shifts (one row per shift, or one row per day-variant time pattern), and upload it. No operator names or badge numbers are read or stored — only shift structure.
+              </div>
+              {signupUploadResult && (
+                <div style={{ background: "#F2F8F7", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
+                  <b>Upload complete:</b> now working from {signupUploadResult.shifts} shifts ({signupUploadResult.rows} rows) — this is also your new comparison baseline.
+                  {(signupUploadResult.dateSpecificSkipped > 0 || signupUploadResult.footerRowsSkipped > 0 || signupUploadResult.unrecognizedTypes.length > 0) && <>{" "}
+                    {signupUploadResult.dateSpecificSkipped > 0 && `${signupUploadResult.dateSpecificSkipped} date-specific relief row(s) skipped (not part of the recurring weekly pattern). `}
+                    {signupUploadResult.footerRowsSkipped > 0 && `${signupUploadResult.footerRowsSkipped} row(s) skipped (no valid shift number or times). `}
+                    {signupUploadResult.unrecognizedTypes.length > 0 && `Unrecognized shift type(s) kept as-is: ${signupUploadResult.unrecognizedTypes.join(", ")} — review in Rules.`}
+                  </>}
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(320px,1fr))", gap: 14 }}>
+              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
+                <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
+                  Shifts & hours by day
+                </div>
+                <table className="shares" style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr><th>Day</th><th>Shifts</th><th>Planned hours</th></tr></thead>
+                  <tbody>
+                    {DAYS.map((d) => (
+                      <tr key={d}>
+                        <td>{d}</td>
+                        <td>{signupStats.perDay[d].shifts.size}</td>
+                        <td>{signupStats.perDay[d].hours.toFixed(0)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
+                <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
+                  Weekly hours by shift type
+                </div>
+                <table className="shares" style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr><th>Type</th><th>Planned hours / week</th></tr></thead>
+                  <tbody>
+                    {Object.entries(signupStats.byType).sort((a, b) => b[1] - a[1]).map(([t, hrs]) => (
+                      <tr key={t}>
+                        <td><span style={{ fontSize: 10.5, padding: "1px 6px", background: TYPE_COLOR[t] || ink, color: "#fff", borderRadius: 2 }}>{t}</span></td>
+                        <td>{hrs.toFixed(0)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
+                  These figures reflect the loaded baseline (what you started with), not live edits made elsewhere in the tool.
+                </div>
+              </div>
+            </div>
+          </>
+        )}
 
         {tab === "demand" && (
           <>
