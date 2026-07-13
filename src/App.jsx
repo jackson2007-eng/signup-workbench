@@ -34,7 +34,7 @@ const IMPORTED_DEM = (() => {
   }
   return o;
 })();
-const cloneSeg = (s) => ({ ...s, b: s.b ? [...s.b] : null, days: [...s.days] });
+const cloneSeg = (s) => ({ ...s, b: s.b ? [...s.b] : null, days: s.days ? [...s.days] : undefined });
 const ORIGINAL = new Map(RAW.segments.map((s) => [s.id, s]));
 
 /* ---------- editable rule defaults ---------- */
@@ -109,7 +109,7 @@ function mergeHolidayEdits(detected, existing) {
     .map((d) =>
       prevAuto.has(d.date)
         ? { ...prevAuto.get(d.date), name: d.name }
-        : { id: "auto:" + d.date, date: d.date, name: d.name, source: "auto", runsAs: null }
+        : { id: "auto:" + d.date, date: d.date, name: d.name, source: "auto", runsAs: null, segs: [] }
     );
   const custom = existing.filter((h) => h.source === "custom");
   return [...merged, ...custom].sort((a, b) => (a.date < b.date ? -1 : 1));
@@ -160,7 +160,7 @@ function validateSeg(seg, RULES, G) {
       issues.push(`Break begins ${(before / 60).toFixed(2)}h in; window is ${G.brkAfter[0] / 60}–${G.brkAfter[1] / 60}h of work first`);
     if (seg.b[0] < seg.s || seg.b[1] > seg.e) issues.push(`Break falls outside the shift`);
   }
-  if (seg.days.length === 0) issues.push(`No working days assigned`);
+  if (seg.days && seg.days.length === 0) issues.push(`No working days assigned`);
   return issues;
 }
 
@@ -205,7 +205,7 @@ function autofixSeg(seg, rules, glob) {
     off = snap(Math.max(offLo, Math.min(offHi, off)));
     b = [s + off, s + off + bl];
   }
-  const fixed = { ...seg, s, e, b: b, days: [...seg.days] };
+  const fixed = { ...seg, s, e, b: b, days: seg.days ? [...seg.days] : undefined };
   const before = validateSeg(seg, rules, glob).length;
   const after = validateSeg(fixed, rules, glob).length;
   return after === 0 || after < before ? fixed : null;
@@ -999,6 +999,9 @@ export default function App() {
   const [hdError, setHdError] = useState(null);
   const [customDraft, setCustomDraft] = useState({ date: "", name: "", runsAs: "" });
   const hdImportStarted = useRef(false);
+  const [selectedHolidayId, setSelectedHolidayId] = useState(null);
+  const [selHolSegId, setSelHolSegId] = useState(null);
+  const [holFixResult, setHolFixResult] = useState(null);
 
   const mutate = (fn) => {
     setHist((h) => [...h.slice(-49), board]);
@@ -1131,7 +1134,12 @@ export default function App() {
         [],
         ["Date", "Weekday", "Holiday", "Runs as", "Source"]];
       for (const h of holidays) {
-        exc.push([h.date, DAYS[new Date(h.date + "T00:00:00").getDay()], h.name, h.runsAs || "Regular", h.source]);
+        exc.push([h.date, DAYS[new Date(h.date + "T00:00:00").getDay()], h.name, h.runsAs === "custom" ? "Custom schedule" : (h.runsAs || "Regular"), h.source]);
+        if (h.runsAs === "custom") {
+          for (const sg of (h.segs || [])) {
+            exc.push(["", "", `  ${sg.type} ${fmt(sg.s)}–${fmt(sg.e)}${sg.b ? ` (break ${fmt(sg.b[0])}–${fmt(sg.b[1])})` : ""}`, "", ""]);
+          }
+        }
       }
       const ws3 = XLSX.utils.aoa_to_sheet(exc);
       ws3["!cols"] = [{ wch: 12 }, { wch: 10 }, { wch: 26 }, { wch: 12 }, { wch: 8 }];
@@ -1286,6 +1294,63 @@ export default function App() {
       JSON.stringify(o.b) !== JSON.stringify(sel.b) || o.days.join() !== sel.days.join();
   })() : false;
 
+  // ---- one-off shift editor for holidays with runsAs === "custom" ----
+  const customHolidays = holidays.filter((h) => h.runsAs === "custom");
+  const selHoliday = customHolidays.find((h) => h.id === selectedHolidayId) || customHolidays[0] || null;
+  const holSegs = selHoliday ? (selHoliday.segs || []) : [];
+  const selHolSeg = selHolSegId != null ? holSegs.find((s) => s.id === selHolSegId) : null;
+  const selHolSegIssues = selHolSeg ? validateSeg(selHolSeg, rules, glob) : [];
+
+  const patchHolidaySegs = (holId, fn) => {
+    setHolidays((hs) => hs.map((h) => (h.id === holId ? { ...h, segs: fn(h.segs || []) } : h)));
+  };
+  const patchHolSeg = (patch) => {
+    if (!selHoliday || !selHolSeg) return;
+    patchHolidaySegs(selHoliday.id, (segs) => segs.map((s) => (s.id === selHolSeg.id ? { ...cloneSeg(s), ...patch } : s)));
+  };
+  const setHolSegType = (t) => {
+    if (!selHolSeg) return;
+    const R = rules[t];
+    let b = selHolSeg.b ? [...selHolSeg.b] : null;
+    if (R && R.brk && !b) b = [selHolSeg.s + 240, selHolSeg.s + 300];
+    if (R && !R.brk) b = null;
+    patchHolSeg({ type: t, b });
+  };
+  const toggleHolSegBreak = () => {
+    if (!selHolSeg) return;
+    patchHolSeg({ b: selHolSeg.b ? null : [selHolSeg.s + 240, selHolSeg.s + 300] });
+  };
+  const shiftHolSegBreak = (delta) => {
+    if (!selHolSeg || !selHolSeg.b) return;
+    patchHolSeg({ b: [selHolSeg.b[0] + delta, selHolSeg.b[1] + delta] });
+  };
+  const addHolSeg = () => {
+    if (!selHoliday) return;
+    const id = nextId.current++;
+    const seg = { id, type: "AX", s: 540, e: 1080, b: [780, 840] };
+    patchHolidaySegs(selHoliday.id, (segs) => [...segs, seg]);
+    setSelHolSegId(id);
+  };
+  const duplicateHolSeg = () => {
+    if (!selHoliday || !selHolSeg) return;
+    const id = nextId.current++;
+    const copy = { ...cloneSeg(selHolSeg), id };
+    patchHolidaySegs(selHoliday.id, (segs) => [...segs, copy]);
+    setSelHolSegId(id);
+  };
+  const removeHolSeg = () => {
+    if (!selHoliday || !selHolSeg) return;
+    patchHolidaySegs(selHoliday.id, (segs) => segs.filter((s) => s.id !== selHolSeg.id));
+    setSelHolSegId(null);
+  };
+  const fixHolSeg = () => {
+    if (!selHoliday || !selHolSeg) return;
+    const f = autofixSeg(selHolSeg, rules, glob);
+    if (!f) { setHolFixResult({ stuck: true }); return; }
+    patchHolidaySegs(selHoliday.id, (segs) => segs.map((s) => (s.id === selHolSeg.id ? f : s)));
+    setHolFixResult(null);
+  };
+
   const pctPos = (m) => ((Math.max(T0, Math.min(m, T1)) - T0) / (T1 - T0)) * 100;
   const dayDelta = (P.dayScore - base.perDay[day].dayScore) * 100;
   const weekDelta = (eng.weekScore - base.weekScore) * 100;
@@ -1343,6 +1408,7 @@ export default function App() {
         {/* tabs */}
         <div style={{ display: "flex", gap: 6, margin: "12px 0", flexWrap: "wrap" }}>
           <div className={"tabbtn" + (tab === "rules" ? " on" : "")} onClick={() => setTab("rules")}>RULES</div>
+          <div className={"tabbtn" + (tab === "exceptions" ? " on" : "")} onClick={() => setTab("exceptions")}>EXCEPTIONS</div>
           <div className={"tabbtn" + (tab === "demand" ? " on" : "")} onClick={() => setTab("demand")}>DEMAND</div>
           <div className={"tabbtn" + (tab === "build" ? " on" : "")} onClick={() => setTab("build")}>AUTO-BUILD</div>
           <div className={"tabbtn" + (tab === "coverage" ? " on" : "")} onClick={() => setTab("coverage")}>COVERAGE</div>
@@ -2317,16 +2383,27 @@ export default function App() {
                               <select value={h.runsAs || ""} onChange={(e) => setHolidays((hs) => hs.map((x) => (x.id === h.id ? { ...x, runsAs: e.target.value || null } : x)))}>
                                 <option value="">Regular (not observed)</option>
                                 {DAYS.map((d) => <option key={d} value={d}>{d}</option>)}
+                                <option value="custom">Custom schedule</option>
                               </select>
                             </td>
                             <td style={{ padding: "5px 8px" }}>
                               <span style={{ fontSize: 10.5, padding: "1px 6px", background: h.source === "custom" ? demandAmber : ink, color: "#fff", borderRadius: 2 }}>{h.source}</span>
+                              {h.runsAs === "custom" && (h.segs || []).some((s) => validateSeg(s, rules, glob).length > 0) && (
+                                <span style={{ fontSize: 10.5, padding: "1px 6px", background: gapRed, color: "#fff", borderRadius: 2, marginLeft: 4 }}>flagged</span>
+                              )}
                             </td>
                             <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>
-                              <button style={{ ...nudgeBtn, padding: "3px 8px", fontSize: 12 }}
-                                onClick={() => { setDay(h.runsAs || weekday); setTab("board"); }}>
-                                View board
-                              </button>
+                              {h.runsAs === "custom" ? (
+                                <button style={{ ...nudgeBtn, padding: "3px 8px", fontSize: 12 }}
+                                  onClick={() => { setSelectedHolidayId(h.id); setTab("exceptions"); }}>
+                                  Edit shifts ({(h.segs || []).length})
+                                </button>
+                              ) : (
+                                <button style={{ ...nudgeBtn, padding: "3px 8px", fontSize: 12 }}
+                                  onClick={() => { setDay(h.runsAs || weekday); setTab("board"); }}>
+                                  View board
+                                </button>
+                              )}
                               {h.source === "custom" && (
                                 <button style={{ ...nudgeBtn, padding: "3px 8px", fontSize: 12, color: gapRed, borderColor: gapRed, marginLeft: 6 }}
                                   onClick={() => setHolidays((hs) => hs.filter((x) => x.id !== h.id))}>
@@ -2355,6 +2432,7 @@ export default function App() {
                 <select value={customDraft.runsAs} onChange={(e) => setCustomDraft((d) => ({ ...d, runsAs: e.target.value }))}>
                   <option value="">Regular (not observed)</option>
                   {DAYS.map((d) => <option key={d} value={d}>{d}</option>)}
+                  <option value="custom">Custom schedule</option>
                 </select>
                 <button style={nudgeBtn} disabled={!customDraft.date}
                   onClick={() => {
@@ -2362,7 +2440,7 @@ export default function App() {
                     setHolidays((hs) => [...hs.filter((x) => x.date !== customDraft.date), {
                       id: "custom:" + customDraft.date + ":" + Date.now(),
                       date: customDraft.date, name: customDraft.name || "Custom closure",
-                      source: "custom", runsAs: customDraft.runsAs || null,
+                      source: "custom", runsAs: customDraft.runsAs || null, segs: [],
                     }].sort((a, b) => (a.date < b.date ? -1 : 1)));
                     setCustomDraft({ date: "", name: "", runsAs: "" });
                   }}>
@@ -2372,6 +2450,135 @@ export default function App() {
             </div>
           </>
         )}
+
+        {tab === "exceptions" && (() => {
+          const segs = holSegs;
+          const weekday = selHoliday ? DAYS[new Date(selHoliday.date + "T00:00:00").getDay()] : null;
+          const flagCountHol = segs.reduce((n, s) => n + (validateSeg(s, rules, glob).length > 0 ? 1 : 0), 0);
+          return (
+            <>
+              {customHolidays.length === 0 ? (
+                <div style={{ background: "#EEF4F5", border: "1px dashed #B9C6CC", padding: "14px", fontSize: 13, color: "#41525C" }}>
+                  No holidays are set to a custom schedule yet. In the Rules tab, set a holiday's "Runs as" to "Custom schedule" to build a one-off board for it here.
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(customHolidays.length, 7)},minmax(0,1fr))`, gap: 5, marginBottom: 12 }}>
+                    {customHolidays.map((h) => {
+                      const w = DAYS[new Date(h.date + "T00:00:00").getDay()];
+                      const on = selHoliday && h.id === selHoliday.id;
+                      return (
+                        <div key={h.id} className={"paddle" + (on ? " on" : "")} onClick={() => setSelectedHolidayId(h.id)}>
+                          <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 600, fontSize: 13 }}>{h.date}</div>
+                          <div style={{ fontSize: 9.5, opacity: .8 }}>{w.slice(0, 3)} · {h.name}</div>
+                          <div style={{ fontSize: 10.5, marginTop: 2, fontWeight: 600 }}>{(h.segs || []).length} shift{(h.segs || []).length === 1 ? "" : "s"}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="kpistrip">
+                    <div className="kpi"><span className="l">editing</span><span className="v">{selHoliday.name}</span></div>
+                    <div className="kpi"><span className="l">date</span><span className="v">{selHoliday.date} ({weekday})</span></div>
+                    <div className="kpi"><span className="l">shifts</span><span className="v">{segs.length}</span></div>
+                    <div className="kpi"><span className="l">rule flags</span><span className="v" style={{ color: flagCountHol ? "#F09E93" : "#7FD1C0" }}>{flagCountHol}</span></div>
+                    <div style={{ marginLeft: "auto" }}>
+                      <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }} onClick={addHolSeg}>+ Add shift</button>
+                    </div>
+                  </div>
+
+                  <div style={{ background: "#EEF4F5", border: "1px dashed #B9C6CC", padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#41525C" }}>
+                    A one-off shift list for this specific date only — no coverage score, and none of the weekly-package rules (rest between shifts, consecutive days, days-off contiguity) apply, since this isn't a recurring week. Each shift is still checked against its type's classification rules.
+                  </div>
+
+                  {selHolSeg && (
+                    <div style={{ background: card, border: `1px solid ${selHolSegIssues.length ? gapRed : "#E2E8EA"}`, padding: "12px 14px", marginBottom: 12 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                        <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700 }}>
+                          One-off shift
+                        </div>
+                        <select value={selHolSeg.type} onChange={(e) => setHolSegType(e.target.value)}>
+                          {Object.keys(rules).map((t) => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                        <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          <button style={nudgeBtn} onClick={duplicateHolSeg}>Duplicate</button>
+                          <button style={{ ...nudgeBtn, borderColor: gapRed, color: gapRed }} onClick={removeHolSeg}>Remove</button>
+                          {selHolSegIssues.length > 0 && <button style={{ ...nudgeBtn, background: gapRed, color: "#fff", borderColor: gapRed }} onClick={fixHolSeg}>Fix violations</button>}
+                          <button style={nudgeBtn} onClick={() => setSelHolSegId(null)}>Close</button>
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginTop: 10 }}>
+                        <Nudge label="Start" value={fmt(selHolSeg.s)}
+                          onDec={() => patchHolSeg({ s: selHolSeg.s - 5 })} onInc={() => patchHolSeg({ s: selHolSeg.s + 5 })} />
+                        <Nudge label="End" value={fmt(selHolSeg.e)}
+                          onDec={() => patchHolSeg({ e: selHolSeg.e - 5 })} onInc={() => patchHolSeg({ e: selHolSeg.e + 5 })} />
+                        <Nudge label="Whole shift" value={`${((selHolSeg.e - selHolSeg.s) / 60).toFixed(2)}h`}
+                          onDec={() => patchHolSeg({ s: selHolSeg.s - 5, e: selHolSeg.e - 5, b: selHolSeg.b ? [selHolSeg.b[0] - 5, selHolSeg.b[1] - 5] : null })}
+                          onInc={() => patchHolSeg({ s: selHolSeg.s + 5, e: selHolSeg.e + 5, b: selHolSeg.b ? [selHolSeg.b[0] + 5, selHolSeg.b[1] + 5] : null })} />
+                        {selHolSeg.b && (
+                          <>
+                            <Nudge label={`Break start`} value={fmt(selHolSeg.b[0])}
+                              onDec={() => shiftHolSegBreak(-5)} onInc={() => shiftHolSegBreak(5)} />
+                            <Nudge label={`Break length`} value={`${selHolSeg.b[1] - selHolSeg.b[0]}m`}
+                              onDec={() => patchHolSeg({ b: [selHolSeg.b[0], selHolSeg.b[1] - 5] })} onInc={() => patchHolSeg({ b: [selHolSeg.b[0], selHolSeg.b[1] + 5] })} />
+                          </>
+                        )}
+                        <button style={nudgeBtn} onClick={toggleHolSegBreak}>{selHolSeg.b ? "Remove break" : "Add break"}</button>
+                      </div>
+                      {selHolSegIssues.length > 0 && (
+                        <div style={{ marginTop: 10, borderLeft: `3px solid ${gapRed}`, background: "#FDF6F5", padding: "6px 10px" }}>
+                          {selHolSegIssues.map((iss, i) => <div key={i} style={{ fontSize: 12.5, color: gapRed }}>⚠ {iss}</div>)}
+                        </div>
+                      )}
+                      {holFixResult && holFixResult.stuck && (
+                        <div style={{ marginTop: 10, fontSize: 12.5, color: "#5B6B75" }}>
+                          No legal correction exists for this shift under its current type — try changing its type, or adjust the windows in Rules.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 10px" }}>
+                    <div style={{ maxHeight: 430, overflowY: "auto" }}>
+                      {segs.length === 0 && (
+                        <div style={{ fontSize: 13, color: "#5B6B75", padding: "8px 4px" }}>No shifts yet — "+ Add shift" above to start laying out this date's board.</div>
+                      )}
+                      {segs.map((sg) => {
+                        const bad = validateSeg(sg, rules, glob).length > 0;
+                        const isSel = sg.id === selHolSegId;
+                        const brkMin = sg.b ? sg.b[1] - sg.b[0] : 0;
+                        const workHrs = ((sg.e - sg.s - brkMin) / 60).toFixed(2);
+                        const barTitle = `${fmt(sg.s)}–${fmt(sg.e)} · ${workHrs}h working${sg.b ? ` · ${brkMin}m break (${fmt(sg.b[0])}–${fmt(sg.b[1])})` : ""}`;
+                        return (
+                          <div key={sg.id} className="ganttrow" onClick={() => setSelHolSegId(sg.id)}>
+                            <div className="glabel" style={{ fontWeight: isSel ? 700 : 400, color: bad ? gapRed : undefined }}>
+                              {sg.type}
+                            </div>
+                            <div className="gtrack" title={barTitle}>
+                              {[360, 600, 840, 1080, 1320].map((m) => (
+                                <div key={m} style={{ position: "absolute", left: `${pctPos(m)}%`, top: 0, bottom: 0, width: 1, background: "#E2E8EA" }} />
+                              ))}
+                              <div className="gbar" style={{
+                                left: `${pctPos(sg.s)}%`, width: `${pctPos(Math.min(sg.e, T1)) - pctPos(sg.s)}%`,
+                                background: TYPE_COLOR[sg.type] || ink,
+                                outline: isSel ? `2px solid ${ink}` : (bad ? `2px solid ${gapRed}` : "none"),
+                              }} />
+                              {sg.b && (
+                                <div className="gbrk" style={{
+                                  left: `${pctPos(sg.b[0])}%`, width: `${pctPos(sg.b[1]) - pctPos(sg.b[0])}%`,
+                                }} />
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+            </>
+          );
+        })()}
       </div>
     </div>
   );
