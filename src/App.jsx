@@ -56,6 +56,41 @@ const parseHM = (str) => {
   return v >= 0 && v <= T1 && parseInt(m[2]) < 60 ? v : null;
 };
 
+const MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+// Parses a literal calendar date out of a "Days Worked" cell (e.g. a stat-holiday row uses
+// a specific date instead of weekday codes). `raw` may be a raw worksheet cell object (native
+// Excel dates, and — critically — SheetJS's CSV reader auto-detects date-like text like
+// "August 3, 2026" and silently replaces it with a serial-date number before this ever runs,
+// so a plain string parse alone would miss real-world CSV uploads entirely) or a plain string.
+// Deliberately narrow otherwise: only ISO "YYYY-MM-DD" and "Month D, YYYY" (full or 3-letter
+// month, comma optional) — never a bare `new Date(raw)` on free text (implementation-defined
+// across engines), and never numeric M/D/YYYY (US-vs-international order is genuinely
+// ambiguous; a wrong guess would silently misfile a shift under the wrong date).
+const parseLiteralDate = (raw) => {
+  if (raw && typeof raw === "object" && raw.t === "n" && typeof raw.v === "number") {
+    const dc = XLSX.SSF.parse_date_code(Math.round(raw.v));
+    if (!dc) return null;
+    return `${dc.y}-${String(dc.m).padStart(2, "0")}-${String(dc.d).padStart(2, "0")}`;
+  }
+  const s = String((raw && typeof raw === "object" ? raw.w : raw) || "").trim();
+  if (!s) return null;
+  const validate = (y, mo, d) => {
+    const dt = new Date(`${y}-${String(mo + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}T00:00:00`);
+    if (dt.getFullYear() !== y || dt.getMonth() !== mo || dt.getDate() !== d) return null;
+    return `${y}-${String(mo + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  };
+  let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (m) return validate(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]));
+  m = /^([A-Za-z]+)\.?\s+(\d{1,2}),?\s+(\d{4})$/.exec(s);
+  if (m) {
+    const word = m[1].toLowerCase();
+    const mo = MONTH_NAMES.findIndex((mn) => mn === word || mn.slice(0, 3) === word);
+    if (mo < 0) return null;
+    return validate(parseInt(m[3]), mo, parseInt(m[2]));
+  }
+  return null;
+};
+
 /* ---------- signup import (real or template signup roster -> board segments) ---------- */
 const SIGNUP_HEADER_ALIASES = {
   shiftNo: ["shift no", "shift no.", "shift number"],
@@ -71,6 +106,7 @@ const SIGNUP_HEADER_ALIASES = {
   end: ["off"],
 };
 const DOW_CODE = { SU: "Sunday", MO: "Monday", TU: "Tuesday", WE: "Wednesday", TH: "Thursday", FR: "Friday", SA: "Saturday" };
+const EXCEPTION_DEFAULT_TYPE = "AX";
 
 function parseSignupWorkbook(wb, sheetName) {
   const name = sheetName && wb.Sheets[sheetName] ? sheetName : wb.SheetNames.find((n) => n.toLowerCase() !== "instructions") || wb.SheetNames[0];
@@ -95,27 +131,14 @@ function parseSignupWorkbook(wb, sheetName) {
     return days;
   };
 
-  // pass 1: collect valid rows grouped by shift number — continuation rows in real
-  // exports can leave Type/Days Off/Split Type blank on ANY row of a shift's group,
-  // not necessarily after the row that carries the value, so grouping has to happen
-  // before resolving those fields (a simple "inherit from the last row seen" doesn't
-  // work when the blank row comes first).
-  const rawByShift = new Map();
-  const shiftOrder = [];
-  let footerRowsSkipped = 0, dateSpecificSkipped = 0;
-
-  for (let r = 1; r < rows.length; r++) {
-    const row = rows[r];
-    if (!row || row.every((c) => c === "" || c == null)) continue;
-    const shiftNo = Number(row[colIndex.shiftNo]);
-    if (!Number.isFinite(shiftNo) || shiftNo <= 0 || !Number.isInteger(shiftNo)) { footerRowsSkipped++; continue; }
-
-    const days = parseDaysWorked(row[colIndex.daysWorked]);
-    if (days.length === 0) { dateSpecificSkipped++; continue; }
-
+  // shared by regular and exception-day rows: report time / off + break, in whichever
+  // of the two break-column conventions the file uses (two-column, or the older
+  // single combined "HHMM-HHMM" column, which real-world exports and this app's own
+  // Export board still use)
+  const parseRowTimesAndBreak = (row) => {
     const start = parseHM(String(row[colIndex.start] || "").trim());
     let end = parseHM(String(row[colIndex.end] || "").trim());
-    if (start == null || end == null) { footerRowsSkipped++; continue; }
+    if (start == null || end == null) return { s: null, e: null, b: null };
     if (end < start) end += 1440;
 
     let b = null;
@@ -140,6 +163,50 @@ function parseSignupWorkbook(wb, sheetName) {
         b = [b0, b1];
       }
     }
+    return { s: start, e: end, b };
+  };
+
+  // pass 1: collect valid rows grouped by shift number — continuation rows in real
+  // exports can leave Type/Days Off/Split Type blank on ANY row of a shift's group,
+  // not necessarily after the row that carries the value, so grouping has to happen
+  // before resolving those fields (a simple "inherit from the last row seen" doesn't
+  // work when the blank row comes first).
+  const rawByShift = new Map();
+  const shiftOrder = [];
+  const rawExceptions = [];
+  let footerRowsSkipped = 0, dateSpecificSkipped = 0;
+
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row || row.every((c) => c === "" || c == null)) continue;
+    const shiftNo = Number(row[colIndex.shiftNo]);
+    if (!Number.isFinite(shiftNo) || shiftNo <= 0 || !Number.isInteger(shiftNo)) { footerRowsSkipped++; continue; }
+
+    const days = parseDaysWorked(row[colIndex.daysWorked]);
+    if (days.length === 0) {
+      // Not weekday codes — either a stat-holiday/one-off variant of this shift (if it
+      // carries a Run number and the cell parses as a literal date) or an undecipherable
+      // date-specific relief row (left as-is, silently skipped, same as always).
+      if (colIndex.run >= 0) {
+        const runRaw = String(row[colIndex.run] || "").trim();
+        const dwCell = ws[XLSX.utils.encode_cell({ r, c: colIndex.daysWorked })];
+        const dateISO = parseLiteralDate(dwCell != null ? dwCell : row[colIndex.daysWorked]);
+        if (dateISO && runRaw) {
+          const { s, e, b } = parseRowTimesAndBreak(row);
+          if (s == null || e == null) { footerRowsSkipped++; continue; }
+          rawExceptions.push({
+            shiftNo, run: runRaw, dateISO,
+            typeRaw: colIndex.type >= 0 ? String(row[colIndex.type] || "").trim() : "",
+            s, e, b,
+          });
+          continue;
+        }
+      }
+      dateSpecificSkipped++; continue;
+    }
+
+    const { s: start, e: end, b } = parseRowTimesAndBreak(row);
+    if (start == null || end == null) { footerRowsSkipped++; continue; }
 
     if (!rawByShift.has(shiftNo)) { rawByShift.set(shiftNo, []); shiftOrder.push(shiftNo); }
     rawByShift.get(shiftNo).push({
@@ -150,13 +217,14 @@ function parseSignupWorkbook(wb, sheetName) {
       days, s: start, e: end, b,
     });
   }
-  if (rawByShift.size === 0) return { ok: false, error: "No usable rows found — check the file matches the template." };
+  if (rawByShift.size === 0 && rawExceptions.length === 0) return { ok: false, error: "No usable rows found — check the file matches the template." };
 
   // pass 2: resolve each shift's canonical type/days-off/split-type from whichever
   // row in its group carries it, then build one segment per row
   const segments = [];
   let nextTempId = 1;
   const unrecognizedTypes = new Set();
+  const resolvedTypeByShift = new Map();
   for (const shiftNo of shiftOrder) {
     const group = rawByShift.get(shiftNo);
     const type = (group.find((g) => g.typeRaw) || {}).typeRaw || "";
@@ -167,6 +235,7 @@ function parseSignupWorkbook(wb, sheetName) {
       for (const g of group) for (const d of g.days) worked.add(d);
       daysOff = DAYS.filter((d) => !worked.has(d)).map((d) => d.slice(0, 2).toUpperCase()).join("-");
     }
+    resolvedTypeByShift.set(shiftNo, type);
     if (type && !DEFAULT_RULES[type]) unrecognizedTypes.add(type);
     for (const g of group) {
       segments.push({
@@ -177,12 +246,29 @@ function parseSignupWorkbook(wb, sheetName) {
     }
   }
 
+  // pass 3: resolve each stat-holiday/one-off row's type (its own value, else the same
+  // shift's regular weekly type if that shift also appears with weekday-coded rows in
+  // this file, else a sensible default) and group into one entry per calendar date —
+  // multiple rows (different shifts) can land on the same date.
+  const exceptionsByDate = new Map();
+  for (const ex of rawExceptions) {
+    let type = ex.typeRaw || resolvedTypeByShift.get(ex.shiftNo) || EXCEPTION_DEFAULT_TYPE;
+    if (type && !DEFAULT_RULES[type]) unrecognizedTypes.add(type);
+    if (!exceptionsByDate.has(ex.dateISO)) exceptionsByDate.set(ex.dateISO, []);
+    exceptionsByDate.get(ex.dateISO).push({ type, s: ex.s, e: ex.e, b: ex.b, sourceShift: ex.shiftNo, sourceRun: ex.run });
+  }
+  const exceptionDays = [...exceptionsByDate.entries()]
+    .map(([date, segs]) => ({ date, segs }))
+    .sort((a, b) => (a.date < b.date ? -1 : 1));
+
   return {
-    ok: true, segments,
+    ok: true, segments, exceptionDays,
     summary: {
       shifts: shiftOrder.length, rows: segments.length,
       dateSpecificSkipped, footerRowsSkipped,
       unrecognizedTypes: [...unrecognizedTypes],
+      exceptionDates: exceptionDays.length,
+      exceptionRows: exceptionDays.reduce((n, ed) => n + ed.segs.length, 0),
     },
   };
 }
@@ -1386,7 +1472,7 @@ export default function App() {
         exc.push([h.date, DAYS[new Date(h.date + "T00:00:00").getDay()], h.name, h.runsAs === "custom" ? "Custom schedule" : (h.runsAs || "Regular"), h.source]);
         if (h.runsAs === "custom") {
           for (const sg of (h.segs || [])) {
-            exc.push(["", "", `  ${sg.type} ${fmt(sg.s)}–${fmt(sg.e)}${sg.b ? ` (break ${fmt(sg.b[0])}–${fmt(sg.b[1])})` : ""}`, "", ""]);
+            exc.push(["", "", `  ${sg.type} ${fmt(sg.s)}–${fmt(sg.e)}${sg.b ? ` (break ${fmt(sg.b[0])}–${fmt(sg.b[1])})` : ""}${sg.sourceShift != null ? ` [from shift ${sg.sourceShift} / run ${sg.sourceRun}]` : ""}`, "", ""]);
           }
         }
       }
@@ -1428,13 +1514,17 @@ export default function App() {
       ["Report Time / Off are the paid on-duty start/end (24h, e.g. 14:30). If a shift runs past midnight, Off can be earlier than Report Time (e.g. 0:00) — it's read as the next day."],
       ["Break Start / Break End (optional): same 24h format as Report Time, e.g. 13:10 to 14:10. Leave both blank for a straight run with no break."],
       ["Days Off / Split Type are optional — Days Off is inferred from Days Worked if left blank."],
+      ["Stat-holiday / one-off variant of a shift: put the literal calendar date (e.g. \"August 3, 2026\") in Days Worked instead of weekday codes, and give it a Run number (often different from the shift's regular weekly Run, e.g. 301 vs 101) under the SAME Shift No. These rows import as Exception days (Coverage tab), not part of the weekly pattern — Type/Days Off/Split Type may be left blank to inherit the shift's regular values. A date-specific row with no Run number is ignored."],
       ["No operator names or badge numbers — this tool only tracks shift structure."],
     ];
     const wsI = XLSX.utils.aoa_to_sheet(instr);
     wsI["!cols"] = [{ wch: 90 }];
     XLSX.utils.book_append_sheet(wb, wsI, "Instructions");
     const header = ["Shift No", "Run", "Days Off", "Type", "Split Type", "Break Start", "Break End", "Days Worked", "Report Time", "Off"];
-    const rows = [header, [101, "101", "SU-SA", "AM", "Straight", "", "", "MO TU WE TH FR", "5:15", "13:15"]];
+    const rows = [header,
+      [101, "101", "SU-SA", "AM", "Straight", "", "", "MO TU WE TH FR", "5:15", "13:15"],
+      [101, "301", "", "", "", "", "", "August 3, 2026", "5:15", "13:15"],
+    ];
     const ws = XLSX.utils.aoa_to_sheet(rows);
     ws["!cols"] = [{ wch: 9 }, { wch: 7 }, { wch: 10 }, { wch: 7 }, { wch: 12 }, { wch: 11 }, { wch: 11 }, { wch: 18 }, { wch: 11 }, { wch: 8 }];
     XLSX.utils.book_append_sheet(wb, ws, "Signup");
@@ -1544,6 +1634,33 @@ export default function App() {
         setSignupSource("uploaded");
         setSignupUploadResult(res.summary);
         setHist([]); setSelId(null); setSugs(null); setSugsStale(false);
+        if (res.exceptionDays && res.exceptionDays.length) {
+          // ids assigned synchronously here (not inside the setHolidays updater below) —
+          // React can invoke a state updater more than once, and nextId.current++ inside
+          // it would double-increment on a second invocation
+          const exceptionDaysWithIds = res.exceptionDays.map((ed) => ({
+            date: ed.date,
+            newHolidayId: "custom:" + ed.date + ":upload:" + nextId.current++,
+            segs: ed.segs.map((sg) => ({ ...sg, id: nextId.current++ })),
+          }));
+          setHolidays((hs) => {
+            const out = hs.slice();
+            for (const ed of exceptionDaysWithIds) {
+              const idx = out.findIndex((h) => h.date === ed.date);
+              if (idx >= 0) {
+                // force runsAs/source to custom even on a previously "auto" holiday: the
+                // Coverage tab only shows segs for runsAs==="custom" entries, and only
+                // source==="custom" entries survive a later signup-period/jurisdiction
+                // re-detection (mergeHolidayEdits) — otherwise imported data could
+                // silently vanish behind either of those.
+                out[idx] = { ...out[idx], source: "custom", runsAs: "custom", segs: ed.segs };
+              } else {
+                out.push({ id: ed.newHolidayId, date: ed.date, name: `Exception day (${ed.date})`, source: "custom", runsAs: "custom", segs: ed.segs });
+              }
+            }
+            return out.sort((a, b) => (a.date < b.date ? -1 : 1));
+          });
+        }
       } catch (err) {
         alert("Could not read that signup file. Make sure it's an .xlsx or .csv file matching the template.");
       }
@@ -1943,7 +2060,8 @@ export default function App() {
               {signupUploadResult && (
                 <div style={{ background: "#F2F8F7", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
                   <b>Upload complete:</b> now working from {signupUploadResult.shifts} shifts ({signupUploadResult.rows} rows) — this is also your new comparison baseline.
-                  {(signupUploadResult.dateSpecificSkipped > 0 || signupUploadResult.footerRowsSkipped > 0 || signupUploadResult.unrecognizedTypes.length > 0) && <>{" "}
+                  {(signupUploadResult.dateSpecificSkipped > 0 || signupUploadResult.footerRowsSkipped > 0 || signupUploadResult.unrecognizedTypes.length > 0 || signupUploadResult.exceptionDates > 0) && <>{" "}
+                    {signupUploadResult.exceptionDates > 0 && `${signupUploadResult.exceptionRows} exception-day shift row(s) across ${signupUploadResult.exceptionDates} date(s) were imported into Exception days (Coverage tab) — any existing custom schedule for those dates was overwritten. `}
                     {signupUploadResult.dateSpecificSkipped > 0 && `${signupUploadResult.dateSpecificSkipped} date-specific relief row(s) skipped (not part of the recurring weekly pattern). `}
                     {signupUploadResult.footerRowsSkipped > 0 && `${signupUploadResult.footerRowsSkipped} row(s) skipped (no valid shift number or times). `}
                     {signupUploadResult.unrecognizedTypes.length > 0 && `Unrecognized shift type(s) kept as-is: ${signupUploadResult.unrecognizedTypes.join(", ")} — review in Rules.`}
@@ -2333,6 +2451,7 @@ export default function App() {
                             <select value={selHolSeg.type} onChange={(e) => setHolSegType(e.target.value)}>
                               {Object.keys(rules).map((t) => <option key={t} value={t}>{t}</option>)}
                             </select>
+                            {selHolSeg.sourceShift != null && <span style={{ fontSize: 11, color: "#5B6B75" }}>from shift {selHolSeg.sourceShift} / run {selHolSeg.sourceRun}</span>}
                             <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
                               <button style={nudgeBtn} onClick={duplicateHolSeg}>Duplicate</button>
                               <button style={{ ...nudgeBtn, borderColor: gapRed, color: gapRed }} onClick={removeHolSeg}>Remove</button>
@@ -2381,7 +2500,7 @@ export default function App() {
                             const isSel = sg.id === selHolSegId;
                             const brkMin = sg.b ? sg.b[1] - sg.b[0] : 0;
                             const workHrs = ((sg.e - sg.s - brkMin) / 60).toFixed(2);
-                            const barTitle = `${fmt(sg.s)}–${fmt(sg.e)} · ${workHrs}h working${sg.b ? ` · ${brkMin}m break (${fmt(sg.b[0])}–${fmt(sg.b[1])})` : ""}`;
+                            const barTitle = `${fmt(sg.s)}–${fmt(sg.e)} · ${workHrs}h working${sg.b ? ` · ${brkMin}m break (${fmt(sg.b[0])}–${fmt(sg.b[1])})` : ""}${sg.sourceShift != null ? ` · from shift ${sg.sourceShift}/run ${sg.sourceRun}` : ""}`;
                             return (
                               <div key={sg.id} className="ganttrow" onClick={() => setSelHolSegId(sg.id)}>
                                 <div className="glabel" style={{ fontWeight: isSel ? 700 : 400, color: bad ? gapRed : undefined }}>
