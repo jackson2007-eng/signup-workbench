@@ -72,7 +72,7 @@ function TimeField({ value, onCommit, width = 62 }) {
   );
 }
 
-function NumField({ value, onCommit, width = 58 }) {
+function NumField({ value, onCommit, width = 58, style: styleOverride }) {
   const [txt, setTxt] = useState(String(value));
   const focused = useRef(false);
   React.useEffect(() => { if (!focused.current) setTxt(String(value)); }, [value]);
@@ -94,6 +94,7 @@ function NumField({ value, onCommit, width = 58 }) {
       style={{
         width, padding: "5px 6px", border: "1px solid #B9C6CC", background: "#fff",
         color: "#182430", borderRadius: 2, fontSize: 13, textAlign: "center",
+        ...styleOverride,
       }} />
   );
 }
@@ -1575,13 +1576,11 @@ export default function App() {
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 600 }}>SIGNUP ENVELOPE</div>
               <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 8 }}>
                 Total signed
-                <input type="number" inputMode="numeric" min={1} max={400} value={totalSigned}
-                  onChange={(e) => setTotalSigned(parseInt(e.target.value || "0"))} style={numInput} />
+                <NumField value={totalSigned} onCommit={(v) => setTotalSigned(Math.round(v))} style={numInput} />
               </label>
               <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 8 }}>
                 Extra board
-                <input type="number" inputMode="numeric" min={0} max={totalSigned} value={blockSize}
-                  onChange={(e) => setBlockSize(parseInt(e.target.value || "0"))} style={numInput} />
+                <NumField value={blockSize} onCommit={(v) => setBlockSize(Math.round(v))} style={numInput} />
               </label>
               <div style={{ fontSize: 13 }}>
                 → <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 21, fontWeight: 700 }}>{designed}</span> designed runs
@@ -1700,9 +1699,7 @@ export default function App() {
                 ))}
                 <label style={{ marginLeft: "auto", fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
                   {curveTab === "Weekday" ? "Trips per weekday (same value applied Mon–Fri)" : `Trips on ${curveTab}`}
-                  <input type="number" inputMode="numeric" min={0} value={trips[curveTab]}
-                    onChange={(e) => setTrips((t) => ({ ...t, [curveTab]: parseInt(e.target.value || "0") }))}
-                    style={numInput} />
+                  <NumField value={trips[curveTab]} onCommit={(v) => setTrips((t) => ({ ...t, [curveTab]: Math.round(v) }))} style={numInput} />
                 </label>
               </div>
 
@@ -1747,8 +1744,7 @@ export default function App() {
                 </div>
                 <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
                   Weekly packages to build
-                  <input type="number" inputMode="numeric" min={1} max={500} value={buildN}
-                    onChange={(e) => setBuildN(parseInt(e.target.value || "0"))} style={numInput} />
+                  <NumField value={buildN} onCommit={(v) => setBuildN(Math.round(v))} style={numInput} />
                 </label>
                 <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink, opacity: buildBusy ? 0.5 : 1 }} disabled={buildBusy}
                   onClick={() => {
