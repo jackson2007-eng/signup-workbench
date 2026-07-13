@@ -458,6 +458,8 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
   }
 
   const maxPull = glob.maxPullout || 0;
+  const outSlots = Math.round((glob.deadheadOutMin || 0) / 5);
+  const inSlots = Math.round((glob.deadheadInMin || 0) / 5);
   const starts = {};
   for (const d of DAYS) starts[d] = new Array(N).fill(0);
   let used10 = 0;
@@ -470,7 +472,10 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
       const [s0, s1] = spans[d];
       const pg = new Array(N + 1).fill(0), pc = new Array(N + 1).fill(0);
       for (let i = 0; i < N; i++) {
-        let g = Math.max(0, Math.min(1, target[d][i] - sup[d][i]));
+        let tgt = target[d][i];
+        if (outSlots > 0) tgt = Math.max(tgt, target[d][Math.min(N - 1, i + outSlots)]);
+        if (inSlots > 0) tgt = Math.max(tgt, target[d][Math.max(0, i - inSlots)]);
+        let g = Math.max(0, Math.min(1, tgt - sup[d][i]));
         const t = SLOT(i);
         if (t >= s0 && t < s1 && sup[d][i] < minVeh) g += 0.5;
         pg[i + 1] = pg[i] + g;
@@ -977,7 +982,7 @@ function ActualCurve({ ev, label }) {
 }
 
 /* ---------- coverage chart ---------- */
-function CoverageChart({ P, day, minVeh, fleetCap, showBookout, height = 320, selBand }) {
+function CoverageChart({ P, day, minVeh, fleetCap, showBookout, productivity, showProductivity, height = 320, selBand }) {
   const data = useMemo(() => {
     const bk = RAW.bookout[day];
     const bkMap = {};
@@ -992,11 +997,12 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, height = 320, se
         covered: Math.round(Math.min(tgt, P.sup[i]) * 10) / 10,
         gap: tgt - P.sup[i] > 0.05 ? Math.round(tgt * 10) / 10 : null,
         bookout: bkMap[t] ?? null,
+        sugVeh: productivity > 0 ? Math.round((P.ev[i] * 12 / (2 * productivity)) * 10) / 10 : null,
         ev: P.ev[i],
       });
     }
     return rows;
-  }, [P, day]);
+  }, [P, day, productivity]);
   return (
     <ResponsiveContainer width="100%" height={height}>
       <ComposedChart data={data} margin={{ top: 5, right: 14, left: -8, bottom: 0 }}>
@@ -1004,7 +1010,7 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, height = 320, se
         <XAxis dataKey="time" tick={{ fontSize: 10.5 }} interval={23} tickLine={false} />
         <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
         <Tooltip
-          formatter={(v, name) => [v, { target: "Demand-aligned target", sup: "Supply", covered: "Aligned", bookout: "Observed (sample)", gap: "Target (underweighted)" }[name] || name]}
+          formatter={(v, name) => [v, { target: "Demand-aligned target", sup: "Supply", covered: "Aligned", bookout: "Observed (sample)", gap: "Target (underweighted)", sugVeh: "Suggested vehicles (productivity)" }[name] || name]}
           labelFormatter={(l, pl) => {
             const r = pl && pl[0] && pl[0].payload;
             return r ? `${l} · ${r.ev.toFixed(1)} events/hr` : l;
@@ -1021,6 +1027,8 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, height = 320, se
         {selBand && <ReferenceLine x={fmt(Math.min(selBand[1], T1 - 5))} stroke={ink} strokeDasharray="3 3" />}
         {showBookout && RAW.bookout[day] &&
           <Line type="monotone" dataKey="bookout" name="Observed (sample)" stroke={bookoutViolet} strokeWidth={1.6} strokeDasharray="5 4" dot={false} connectNulls />}
+        {showProductivity &&
+          <Line type="stepAfter" dataKey="sugVeh" name="Suggested vehicles (productivity)" stroke={sampleGray} strokeWidth={1.6} strokeDasharray="2 3" dot={false} connectNulls />}
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -1031,6 +1039,7 @@ export default function App() {
   const [tab, setTab] = useState("rules");
   const [day, setDay] = useState("Wednesday");
   const [showBookout, setShowBookout] = useState(false);
+  const [showProductivity, setShowProductivity] = useState(false);
   const [includePT, setIncludePT] = useState(false);
   const [totalSigned, setTotalSigned] = useState(125);
   const [blockSize, setBlockSize] = useState(25);
@@ -1828,7 +1837,7 @@ export default function App() {
                 </button>
               </div>
               <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 6 }}>
-                Builds whole weekly packages: each placement chooses a shift type, a start time on the 5-minute grid, and a consecutive days-off pattern together, so every generated shift is signable by construction — consistent report times all week, legal rest, no orphan runs. Uses the full 10-hour allowance from Rules before any 8-hour work. Break-taking types are explored at every legal length (30 min to 4 h) and position, so long midday breaks that stretch a shift across both peaks are found automatically. The fleet cap, minimum-vehicle floor, and sign-in stagger steer every placement. Set the count to your designed-run envelope ({designed} currently). Loading a build replaces the current board — save your project first.
+                Builds whole weekly packages: each placement chooses a shift type, a start time on the 5-minute grid, and a consecutive days-off pattern together, so every generated shift is signable by construction — consistent report times all week, legal rest, no orphan runs. Uses the full 10-hour allowance from Rules before any 8-hour work. Break-taking types are explored at every legal length (30 min to 4 h) and position, so long midday breaks that stretch a shift across both peaks are found automatically. The fleet cap, minimum-vehicle floor, sign-in stagger, and pull-out/pull-in lead time (Rules → Deadhead & productivity) steer every placement — a shift may start before the first trip it serves and end after the last, to allow for that lead time. Set the count to your designed-run envelope ({designed} currently). Loading a build replaces the current board — save your project first.
               </div>
             </div>
 
@@ -1861,6 +1870,10 @@ export default function App() {
               <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 7 }}>
                 <input type="checkbox" checked={showBookout} onChange={(e) => setShowBookout(e.target.checked)} />
                 Observed vehicles{RAW.bookout[day] ? "" : " (none this day)"}
+              </label>
+              <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 7 }}>
+                <input type="checkbox" checked={showProductivity} onChange={(e) => setShowProductivity(e.target.checked)} />
+                Suggested vehicles (productivity)
               </label>
             </div>
 
@@ -1925,7 +1938,7 @@ export default function App() {
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
                 {day} — service hours vs demand-aligned target
               </div>
-              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} height={340} />
+              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} productivity={glob.productivity} showProductivity={showProductivity} height={340} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
                 The dark line shows where {day}'s {P.supVH.toFixed(0)} service hours would sit if they exactly followed the demand pattern. Red = times you're lighter than demand suggests; teal above the line = heavier.
               </div>
@@ -2249,7 +2262,7 @@ export default function App() {
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
                 Live {day} coverage
               </div>
-              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} height={280}
+              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} productivity={glob.productivity} showProductivity={showProductivity} height={280}
                 selBand={sel ? [sel.s, sel.e] : null} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
                 Dashed lines mark the selected shift. The KPI strip and shift editor stay pinned while you scroll.
@@ -2636,6 +2649,23 @@ export default function App() {
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
                   The minimum-vehicles rule applies inside the span; the demand model itself is unaffected.
+                </div>
+              </div>
+
+              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
+                <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
+                  Deadhead & productivity
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "10px 12px", alignItems: "center", fontSize: 13 }}>
+                  <span>Pull-out time before first trip (min)</span>
+                  <NumField value={glob.deadheadOutMin} step={5} onCommit={(v) => setGlob((g) => ({ ...g, deadheadOutMin: Math.round(v) }))} />
+                  <span>Pull-in time after last trip (min)</span>
+                  <NumField value={glob.deadheadInMin} step={5} onCommit={(v) => setGlob((g) => ({ ...g, deadheadInMin: Math.round(v) }))} />
+                  <span>Productivity (trips/vehicle-hour)</span>
+                  <NumField value={glob.productivity} step={0.05} onCommit={(v) => setGlob((g) => ({ ...g, productivity: v }))} />
+                </div>
+                <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
+                  Pull-out/pull-in affects only Auto-Build's placement — a generated shift may start before the first trip it serves and end after the last, within this lead time. Productivity only draws the "Suggested vehicles" reference line on the Coverage chart; it does not affect scoring or generation.
                 </div>
               </div>
             </div>
