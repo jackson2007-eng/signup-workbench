@@ -1466,7 +1466,7 @@ export default function App() {
         .kpi { display:flex; flex-direction:column; }
         .kpi .l { font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; opacity:.7; }
         .kpi .v { font-family:'Barlow Condensed',sans-serif; font-size:20px; font-weight:700; line-height:1.1; }
-        @media (max-width:640px){ .hdr-title{font-size:24px !important;} .glabel{width:84px;} }
+        @media (max-width:640px){ .hdr-title{font-size:24px !important;} .glabel{width:84px;} .phase-row{flex-direction:column;} }
       `}</style>
 
       <div style={{ maxWidth: 1240, margin: "0 auto", padding: "16px 12px 40px" }}>
@@ -1491,99 +1491,136 @@ export default function App() {
           </div>
         </div>
 
-        {/* tabs */}
-        <div style={{ display: "flex", gap: 6, margin: "12px 0", flexWrap: "wrap" }}>
-          <div className={"tabbtn" + (tab === "rules" ? " on" : "")} onClick={() => setTab("rules")}>RULES<TabDot done={!!(signupPeriod.start && signupPeriod.end)} /></div>
-          <div className={"tabbtn" + (tab === "demand" ? " on" : "")} onClick={() => setTab("demand")}>DEMAND<TabDot done={demSource !== "imported"} /></div>
-          <div className={"tabbtn" + (tab === "build" ? " on" : "")} onClick={() => setTab("build")}>AUTO-BUILD</div>
-          <div className={"tabbtn" + (tab === "coverage" ? " on" : "")} onClick={() => setTab("coverage")}>COVERAGE<TabDot done={hasVisitedCoverage} /></div>
-          <div className={"tabbtn" + (tab === "board" ? " on" : "")} onClick={() => setTab("board")}>BOARD DESIGNER<TabDot done={changedCount > 0} /></div>
-          <div className={"tabbtn" + (tab === "pack" ? " on" : "")} onClick={() => setTab("pack")}>PACKAGING</div>
-          <div className={"tabbtn" + (tab === "suggest" ? " on" : "")} onClick={() => setTab("suggest")}>SUGGESTIONS</div>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-            <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={exportBoard}>Export board</button>
-            <button style={nudgeBtn} onClick={saveProject}>Save project</button>
-            <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Load project</button>
-            <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }}
-              onChange={(e) => { if (e.target.files && e.target.files[0]) loadProject(e.target.files[0]); e.target.value = ""; }} />
-          </div>
-          {tab === "board" && (
-            <div style={{ display: "flex", gap: 6 }}>
-              <button style={{ ...nudgeBtn, opacity: hist.length ? 1 : 0.4 }} onClick={undo} disabled={!hist.length}>↶ Undo</button>
-              <button style={{ ...nudgeBtn, borderColor: changedCount ? demandAmber : "#B9C6CC", opacity: changedCount ? 1 : 0.4 }} onClick={resetAll} disabled={!changedCount}>Reset board</button>
-              {flagCount > 0 && (
-                <button style={{ ...nudgeBtn, background: gapRed, color: "#fff", borderColor: gapRed }} onClick={fixAll}>
-                  Fix all flags ({flagCount})
-                </button>
-              )}
-              <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }} onClick={addShift}>+ Add shift</button>
-            </div>
-          )}
+        {/* utility toolbar */}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, margin: "10px 0" }}>
+          <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={exportBoard}>Export board</button>
+          <button style={nudgeBtn} onClick={saveProject}>Save project</button>
+          <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Load project</button>
+          <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }}
+            onChange={(e) => { if (e.target.files && e.target.files[0]) loadProject(e.target.files[0]); e.target.value = ""; }} />
         </div>
 
-        {/* envelope */}
-        <div style={{ background: ink, color: "#fff", padding: "10px 14px", marginBottom: 12 }}>
-          <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-            <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 600 }}>SIGNUP ENVELOPE</div>
-            <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 8 }}>
-              Total signed
-              <input type="number" inputMode="numeric" min={1} max={400} value={totalSigned}
-                onChange={(e) => setTotalSigned(parseInt(e.target.value || "0"))} style={numInput} />
-            </label>
-            <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 8 }}>
-              Extra board
-              <input type="number" inputMode="numeric" min={0} max={totalSigned} value={blockSize}
-                onChange={(e) => setBlockSize(parseInt(e.target.value || "0"))} style={numInput} />
-            </label>
-            <div style={{ fontSize: 13 }}>
-              → <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 21, fontWeight: 700 }}>{designed}</span> designed runs
-              {designed !== distinctShifts && <span style={{ color: "#F5C16C" }}> (board has {distinctShifts})</span>}
-            </div>
-            <div style={{ fontSize: 11.5, opacity: 0.8, marginLeft: "auto" }}>
-              Loaded board: {distinctShifts} runs · sample data — Load project to work on your own board{changedCount > 0 ? ` · ${changedCount} local change${changedCount > 1 ? "s" : ""}` : ""}
-            </div>
-          </div>
-        </div>
-
-        {/* getting started checklist */}
+        {/* phased step navigation */}
         {(() => {
-          const checklistItems = [
-            { key: "period", label: "Jurisdiction & signup period set", done: !!(signupPeriod.start && signupPeriod.end), reason: "Set a period and jurisdiction in Rules", onClick: () => setTab("rules") },
-            { key: "demand", label: "Demand source configured", done: demSource !== "imported", reason: "Still using shipped sample data — sketch your own or upload real data in Demand", onClick: () => setTab("demand") },
-            { key: "envelope", label: "Signup envelope set", done: !(totalSigned === 125 && blockSize === 25), reason: "Still at sample defaults (125 signed / 25 extra board)", onClick: null },
-            { key: "board", label: "Board built or edited", done: changedCount > 0, reason: "Board unchanged from the shipped sample", onClick: () => setTab("board") },
-            { key: "coverage", label: "Coverage reviewed", done: hasVisitedCoverage, reason: "Not yet reviewed", onClick: () => setTab("coverage") },
-            { key: "export", label: "Board exported", done: hasExported, reason: "Not yet exported", onClick: exportBoard },
+          const PHASES = [
+            { label: "Phase 1 · Setup", steps: [
+              { key: "rules", label: "RULES", done: !!(signupPeriod.start && signupPeriod.end) },
+              { key: "demand", label: "DEMAND", done: demSource !== "imported" },
+            ] },
+            { label: "Phase 2 · Build", steps: [
+              { key: "build", label: "AUTO-BUILD" },
+              { key: "board", label: "BOARD DESIGNER", done: changedCount > 0 },
+            ] },
+            { label: "Phase 3 · Review", steps: [
+              { key: "coverage", label: "COVERAGE", done: hasVisitedCoverage },
+              { key: "suggest", label: "SUGGESTIONS" },
+            ] },
+            { label: "Phase 4 · Handoff", steps: [
+              { key: "pack", label: "PACKAGING" },
+            ] },
           ];
-          const doneCount = checklistItems.filter((it) => it.done).length;
           return (
-            <div style={{ background: card, border: "1px solid #E2E8EA", marginBottom: 12 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", cursor: "pointer" }} onClick={() => setChecklistOpen((o) => !o)}>
-                <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 600 }}>
-                  Getting started ({doneCount}/{checklistItems.length})
-                </div>
-                <span style={{ fontSize: 12, color: "#5B6B75" }}>{checklistOpen ? "▾ hide" : "▸ show"}</span>
-              </div>
-              {checklistOpen && (
-                <div style={{ padding: "0 14px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
-                  {checklistItems.map((it) => (
-                    <div key={it.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: it.onClick ? "pointer" : "default" }}
-                      onClick={it.onClick || undefined}>
-                      <span style={{
-                        width: 14, height: 14, borderRadius: "50%", flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
-                        fontSize: 10, color: "#fff", background: it.done ? supplyTeal : "transparent", border: it.done ? "none" : `1px solid ${demandAmber}`,
-                      }}>
-                        {it.done ? "✓" : ""}
-                      </span>
-                      <span style={{ color: it.done ? ink : "#41525C" }}>{it.label}</span>
-                      {!it.done && <span style={{ color: "#8899A3" }}>— {it.reason}</span>}
+            <div className="phase-row" style={{ display: "flex", gap: 18, alignItems: "flex-start", flexWrap: "wrap", margin: "12px 0" }}>
+              {PHASES.map((phase, pi) => (
+                <React.Fragment key={phase.label}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 10.5, fontWeight: 600, letterSpacing: ".06em", textTransform: "uppercase", color: "#5B6B75" }}>
+                      {phase.label}
                     </div>
-                  ))}
-                </div>
-              )}
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {phase.steps.map((s) => (
+                        <div key={s.key} className={"tabbtn" + (tab === s.key ? " on" : "")} onClick={() => setTab(s.key)}>
+                          {s.label}{s.done !== undefined && <TabDot done={s.done} />}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  {pi < PHASES.length - 1 && (
+                    <div style={{ alignSelf: "center", fontSize: 16, color: "#B9C6CC", marginTop: 12 }}>→</div>
+                  )}
+                </React.Fragment>
+              ))}
             </div>
           );
         })()}
+
+        {tab === "board" && (
+          <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+            <button style={{ ...nudgeBtn, opacity: hist.length ? 1 : 0.4 }} onClick={undo} disabled={!hist.length}>↶ Undo</button>
+            <button style={{ ...nudgeBtn, borderColor: changedCount ? demandAmber : "#B9C6CC", opacity: changedCount ? 1 : 0.4 }} onClick={resetAll} disabled={!changedCount}>Reset board</button>
+            {flagCount > 0 && (
+              <button style={{ ...nudgeBtn, background: gapRed, color: "#fff", borderColor: gapRed }} onClick={fixAll}>
+                Fix all flags ({flagCount})
+              </button>
+            )}
+            <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }} onClick={addShift}>+ Add shift</button>
+          </div>
+        )}
+
+        {/* envelope + getting started checklist, one cohesive block */}
+        <div style={{ border: "1px solid #E2E8EA", marginBottom: 12 }}>
+          <div style={{ background: ink, color: "#fff", padding: "10px 14px" }}>
+            <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 600 }}>SIGNUP ENVELOPE</div>
+              <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 8 }}>
+                Total signed
+                <input type="number" inputMode="numeric" min={1} max={400} value={totalSigned}
+                  onChange={(e) => setTotalSigned(parseInt(e.target.value || "0"))} style={numInput} />
+              </label>
+              <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 8 }}>
+                Extra board
+                <input type="number" inputMode="numeric" min={0} max={totalSigned} value={blockSize}
+                  onChange={(e) => setBlockSize(parseInt(e.target.value || "0"))} style={numInput} />
+              </label>
+              <div style={{ fontSize: 13 }}>
+                → <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 21, fontWeight: 700 }}>{designed}</span> designed runs
+                {designed !== distinctShifts && <span style={{ color: "#F5C16C" }}> (board has {distinctShifts})</span>}
+              </div>
+              <div style={{ fontSize: 11.5, opacity: 0.8, marginLeft: "auto" }}>
+                Loaded board: {distinctShifts} runs · sample data — Load project to work on your own board{changedCount > 0 ? ` · ${changedCount} local change${changedCount > 1 ? "s" : ""}` : ""}
+              </div>
+            </div>
+          </div>
+
+          {(() => {
+            const checklistItems = [
+              { key: "period", label: "Jurisdiction & signup period set", done: !!(signupPeriod.start && signupPeriod.end), reason: "Set a period and jurisdiction in Rules", onClick: () => setTab("rules") },
+              { key: "demand", label: "Demand source configured", done: demSource !== "imported", reason: "Still using shipped sample data — sketch your own or upload real data in Demand", onClick: () => setTab("demand") },
+              { key: "envelope", label: "Signup envelope set", done: !(totalSigned === 125 && blockSize === 25), reason: "Still at sample defaults (125 signed / 25 extra board)", onClick: null },
+              { key: "board", label: "Board built or edited", done: changedCount > 0, reason: "Board unchanged from the shipped sample", onClick: () => setTab("board") },
+              { key: "coverage", label: "Coverage reviewed", done: hasVisitedCoverage, reason: "Not yet reviewed", onClick: () => setTab("coverage") },
+              { key: "export", label: "Board exported", done: hasExported, reason: "Not yet exported", onClick: exportBoard },
+            ];
+            const doneCount = checklistItems.filter((it) => it.done).length;
+            return (
+              <div style={{ background: card }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", cursor: "pointer" }} onClick={() => setChecklistOpen((o) => !o)}>
+                  <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 600 }}>
+                    Getting started ({doneCount}/{checklistItems.length})
+                  </div>
+                  <span style={{ fontSize: 12, color: "#5B6B75" }}>{checklistOpen ? "▾ hide" : "▸ show"}</span>
+                </div>
+                {checklistOpen && (
+                  <div style={{ padding: "0 14px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+                    {checklistItems.map((it) => (
+                      <div key={it.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: it.onClick ? "pointer" : "default" }}
+                        onClick={it.onClick || undefined}>
+                        <span style={{
+                          width: 14, height: 14, borderRadius: "50%", flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
+                          fontSize: 10, color: "#fff", background: it.done ? supplyTeal : "transparent", border: it.done ? "none" : `1px solid ${demandAmber}`,
+                        }}>
+                          {it.done ? "✓" : ""}
+                        </span>
+                        <span style={{ color: it.done ? ink : "#41525C" }}>{it.label}</span>
+                        {!it.done && <span style={{ color: "#8899A3" }}>— {it.reason}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </div>
 
         {/* day paddles */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 5, marginBottom: 12 }}>
