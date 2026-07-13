@@ -87,6 +87,17 @@ const parseHM = (str) => {
   const v = parseInt(m[1]) * 60 + parseInt(m[2]);
   return v >= 0 && v <= T1 && parseInt(m[2]) < 60 ? v : null;
 };
+// Same as parseHM but also accepts military HHMM with no colon (e.g. "1310") — real agency
+// exports commonly use this in Break Start/Break End columns even when Report Time/Off use
+// colons, since it's carried over from the older single combined "Break" column's format.
+const parseHMFlexible = (str) => {
+  const direct = parseHM(str);
+  if (direct != null) return direct;
+  const m = /^\s*(\d{1,2})(\d{2})\s*$/.exec(str || "");
+  if (!m) return null;
+  const v = parseInt(m[1]) * 60 + parseInt(m[2]);
+  return v >= 0 && v <= T1 && parseInt(m[2]) < 60 ? v : null;
+};
 
 const MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 // Parses a literal calendar date out of a "Days Worked" cell (e.g. a stat-holiday row uses
@@ -178,8 +189,8 @@ function parseSignupWorkbook(wb, sheetName) {
       const bStartRaw = String(row[colIndex.breakStart] || "").trim();
       const bEndRaw = String(row[colIndex.breakEnd] || "").trim();
       if (bStartRaw && bEndRaw) {
-        const b0 = parseHM(bStartRaw);
-        let b1 = parseHM(bEndRaw);
+        const b0 = parseHMFlexible(bStartRaw);
+        let b1 = parseHMFlexible(bEndRaw);
         if (b0 != null && b1 != null) {
           if (b1 < b0) b1 += 1440;
           b = [b0, b1];
