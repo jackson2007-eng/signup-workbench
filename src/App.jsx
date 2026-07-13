@@ -242,7 +242,7 @@ function computeEngine(DEM, ftCov, includePT, minVeh, SPANS, maxFleet) {
       target.push(dSh * daySupSlots);
     }
     for (let i = 0; i < N; i++)
-      weekScore += Math.min(p.ev[i] / weekEvents, p.sup[i] / weekSupSlots);
+      weekScore += Math.min(weekEvents > 0 ? p.ev[i] / weekEvents : 0, weekSupSlots > 0 ? p.sup[i] / weekSupSlots : 0);
     const gaps = [];
     let cur = null;
     for (let i = 0; i < N; i++) {
@@ -285,8 +285,8 @@ function computeEngine(DEM, ftCov, includePT, minVeh, SPANS, maxFleet) {
   let weekSupVH = 0;
   for (const d of DAYS) weekSupVH += perDay[d].supVH;
   for (const d of DAYS) {
-    perDay[d].demandShare = perDay[d].dayEv / weekEvents;
-    perDay[d].resourceShare = perDay[d].supVH / weekSupVH;
+    perDay[d].demandShare = weekEvents > 0 ? perDay[d].dayEv / weekEvents : 0;
+    perDay[d].resourceShare = weekSupVH > 0 ? perDay[d].supVH / weekSupVH : 0;
   }
   return { perDay, weekScore, weekSupVH };
 }
