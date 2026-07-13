@@ -65,14 +65,14 @@ Hard constraints (minimum vehicles in service, fleet cap, sign-in stagger, 10-ho
 | `refinePerDay` | Live-greedy per-day time nudges within variance rules; threshold ~1e-6 (do not raise — see below) |
 | `optimizeToConvergence` / `deepOptimize` | Alternates whole-move and per-day optimization until neither improves — local search, not global optimum |
 
-Sweep (Auto-Build tab) builds a full board at every 10-hour target and ranks results, because greedy is myopic and forced structure can beat free choice.
+Auto-Build tab is a single action: always fills the full `max10` 10-hour allowance from Rules before any 8-hour work (an earlier two-mode + 10-hour-sweep design was simplified away at the user's request — see PROJECT_NOTES.md §5 lesson 2 for the tradeoff this accepts).
 
 **Performance idioms**: prefix sums for range gains/feasibility; per-day recomputation only for changed days; `evaluated` effort counters surfaced in the UI (users want visible proof of optimization effort).
 
 ### Lessons already paid for — don't relearn these
 
 1. Every weekly package costs exactly 40 paid hours regardless of type (5×8=4×10) — package-level "cost" optimization is a non-problem; the real trade is coverage vs. operator-preferred 4-day weeks.
-2. Greedy anomalies are real (constrained-first can beat free-choice) — fix with search breadth (the sweep), not hand-tuned policy.
+2. Greedy anomalies are real (constrained-first can beat free-choice) — the Auto-Build tab used to guard against this with a 10-hour sweep; that was removed for simplicity, so a bad `max10` count is the first thing to check if a generated board looks off.
 3. Generated times must snap to the :00/:05 grid, or rule-window math ("after 7:01") produces ugly inherited offsets.
 4. Sign-in stagger is a real constraint (garages saw 16–17 simultaneous sign-ins in one 5-min slot); it's enforced in generation, suggestions, refinement, and surfaced in the Coverage tab — don't relax the default cap (3) casually.
 5. Imported rule spreadsheets can be self-contradictory (e.g. "break required" on a type whose spread equals its work time); validate rules against the real board, and when they disagree the tool flags rather than silently picking one.
@@ -81,7 +81,7 @@ Sweep (Auto-Build tab) builds a full board at every 10-hour target and ranks res
 
 ### UI map (tabs)
 
-RULES (classification, breaks, board limits, packaging rules, service span, signup period & holiday list) → DEMAND → AUTO-BUILD (incl. 10-hour sweep) → COVERAGE (score/chart/violation banners, plus an inline "Exception days" section — tile row + shift editor — for any holiday set to "Custom schedule") → BOARD DESIGNER (Gantt-style editing, undo, KPI strip) → PACKAGING (signup-sheet grid view, auto-package, per-day refine) → SUGGESTIONS (ranked moves, deep optimize). Global: Save/Load project (JSON), Export board (xlsx, signup-tab layout + Exceptions sheet when a signup period is set).
+RULES (classification, breaks, board limits, packaging rules, service span, signup period & holiday list) → DEMAND → AUTO-BUILD (single generate action, fills the 10-hour allowance from Rules) → COVERAGE (score/chart/violation banners, plus an inline "Exception days" section — tile row + shift editor — for any holiday set to "Custom schedule") → BOARD DESIGNER (Gantt-style editing, undo, KPI strip) → PACKAGING (signup-sheet grid view, auto-package, per-day refine) → SUGGESTIONS (ranked moves, deep optimize). Global: Save/Load project (JSON), Export board (xlsx, signup-tab layout + Exceptions sheet when a signup period is set).
 
 A dismissible "Getting started" checklist and small tab-button status dots (RULES/DEMAND/COVERAGE/BOARD DESIGNER) surface setup progress — purely informational, matching the "flag never block" doctrine; see the state variables `hasVisitedCoverage`/`hasExported` and the `checklistOpen` toggle if extending this.
 

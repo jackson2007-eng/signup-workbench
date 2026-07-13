@@ -977,10 +977,10 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, height = 320, se
 
 /* ---------- main ---------- */
 export default function App() {
-  const [tab, setTab] = useState("coverage");
+  const [tab, setTab] = useState("rules");
   const [day, setDay] = useState("Wednesday");
   const [showBookout, setShowBookout] = useState(false);
-  const [includePT, setIncludePT] = useState(true);
+  const [includePT, setIncludePT] = useState(false);
   const [totalSigned, setTotalSigned] = useState(125);
   const [blockSize, setBlockSize] = useState(25);
   const [board, setBoard] = useState(() => RAW.segments.map(cloneSeg));
@@ -997,10 +997,8 @@ export default function App() {
   const [trips, setTrips] = useState({ Weekday: 1600, Saturday: 700, Sunday: 600 });
   const [sugs, setSugs] = useState(null);
   const [buildN, setBuildN] = useState(100);
-  const [builds, setBuilds] = useState(null);
+  const [buildResult, setBuildResult] = useState(null);
   const [buildBusy, setBuildBusy] = useState(false);
-  const [sweep, setSweep] = useState(null);
-  const [sweepBusy, setSweepBusy] = useState(false);
   const [refineBusy, setRefineBusy] = useState(false);
   const [refineResult, setRefineResult] = useState(null);
   const [fixResult, setFixResult] = useState(null);
@@ -1750,116 +1748,46 @@ export default function App() {
                   onClick={() => {
                     setBuildBusy(true);
                     setTimeout(() => {
-                      const a = generateBoard(glob.max10, buildN, rules, glob, DEM, spans, glob.minVeh, includePT);
-                      const b = generateBoard(0, buildN, rules, glob, DEM, spans, glob.minVeh, includePT);
-                      const score = (segs) => computeEngine(DEM, buildSupply(segs), includePT, glob.minVeh, spans, glob.maxFleet).weekScore;
-                      setBuilds({ ten: { ...a, score: score(a.segs) }, value: { ...b, score: score(b.segs) } });
+                      const g = generateBoard(glob.max10, buildN, rules, glob, DEM, spans, glob.minVeh, includePT);
+                      const score = computeEngine(DEM, buildSupply(g.segs), includePT, glob.minVeh, spans, glob.maxFleet).weekScore;
+                      setBuildResult({ ...g, score });
                       setBuildBusy(false);
                     }, 30);
                   }}>
-                  {buildBusy ? "Generating…" : "Generate both modes"}
+                  {buildBusy ? "Generating…" : "Generate board"}
                 </button>
               </div>
               <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 6 }}>
-                Builds whole weekly packages: each placement chooses a shift type, a start time on the 5-minute grid, and a consecutive days-off pattern together, so every generated shift is signable by construction — consistent report times all week, legal rest, no orphan runs. <b>Fill mode</b> commits the full 10-hour allowance before any 8-hour work; <b>value mode</b> lets the coverage score decide the mix. Break-taking types are explored at every legal length (30 min to 4 h) and position, so long midday breaks that stretch a shift across both peaks are found automatically. The fleet cap, minimum-vehicle floor, and sign-in stagger steer every placement. Set the count to your designed-run envelope ({designed} currently). Loading a build replaces the current board — save your project first.
+                Builds whole weekly packages: each placement chooses a shift type, a start time on the 5-minute grid, and a consecutive days-off pattern together, so every generated shift is signable by construction — consistent report times all week, legal rest, no orphan runs. Uses the full 10-hour allowance from Rules before any 8-hour work. Break-taking types are explored at every legal length (30 min to 4 h) and position, so long midday breaks that stretch a shift across both peaks are found automatically. The fleet cap, minimum-vehicle floor, and sign-in stagger steer every placement. Set the count to your designed-run envelope ({designed} currently). Loading a build replaces the current board — save your project first.
               </div>
             </div>
 
-            {builds && (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 14 }}>
-                {[["ten", "Fill the 10-hour allowance first"], ["value", "Best value — the score picks the mix"]].map(([m, title]) => {
-                  const B = builds[m];
-                  return (
-                    <div key={m} style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
-                      <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 17, fontWeight: 600 }}>{title}</div>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "10px 0" }}>
-                        <Stat label="Weekly coverage score" value={`${(B.score * 100).toFixed(1)}%`} sub={`${(B.evaluated || 0).toLocaleString()} placements evaluated`} tone={supplyTeal} />
-                        <Stat label="Paid hours / week" value={B.paidHours.toFixed(0)} tone={targetInk} />
-                        <Stat label="10-hour packages" value={B.used10} sub={`cap ${glob.max10}`} tone={demandAmber} />
-                      </div>
-                      <div style={{ fontSize: 12.5, color: "#41525C" }}>
-                        Mix: {Object.entries(B.mix).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${t} ${n}`).join(" · ")}
-                      </div>
-                      <button style={{ ...nudgeBtn, marginTop: 10, background: supplyTeal, color: "#fff", borderColor: supplyTeal }}
-                        onClick={() => {
-                          mutate(() => B.segs.map(cloneSeg));
-                          setSelId(null);
-                          setTab("board");
-                        }}>
-                        Load this board into the Designer
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-            {builds && (
-              <div style={{ fontSize: 12.5, color: "#5B6B75", marginTop: 12 }}>
-                Every package costs the same 40 paid hours (5×8h or 4×10h), so the real trade is coverage vs the four-day weeks operators value: filling the allowance uses {builds.ten.used10} ten-hour packages at {(builds.ten.score * 100).toFixed(1)}% coverage; letting the score choose lands on {builds.value.used10} at {(builds.value.score * 100).toFixed(1)}%. Generated boards arrive fully packaged — check them on the Packaging tab. Reset board always returns to the loaded signup.
-              </div>
-            )}
-
-            <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginTop: 14 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>
-                  Sweep the 10-hour mix
+            {buildResult && (
+              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", maxWidth: 420 }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "0 0 10px" }}>
+                  <Stat label="Weekly coverage score" value={`${(buildResult.score * 100).toFixed(1)}%`} sub={`${(buildResult.evaluated || 0).toLocaleString()} placements evaluated`} tone={supplyTeal} />
+                  <Stat label="Paid hours / week" value={buildResult.paidHours.toFixed(0)} tone={targetInk} />
+                  <Stat label="10-hour packages" value={buildResult.used10} sub={`cap ${glob.max10}`} tone={demandAmber} />
                 </div>
-                <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink, opacity: sweepBusy ? 0.5 : 1 }} disabled={sweepBusy}
+                <div style={{ fontSize: 12.5, color: "#41525C" }}>
+                  Mix: {Object.entries(buildResult.mix).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${t} ${n}`).join(" · ")}
+                </div>
+                <button style={{ ...nudgeBtn, marginTop: 10, background: supplyTeal, color: "#fff", borderColor: supplyTeal }}
                   onClick={() => {
-                    setSweepBusy(true);
-                    setTimeout(() => {
-                      const targets = [];
-                      const step = Math.max(1, Math.round(glob.max10 / 6));
-                      for (let t = 0; t <= glob.max10; t += step) targets.push(t);
-                      if (targets[targets.length - 1] !== glob.max10) targets.push(glob.max10);
-                      const rows = targets.map((t) => {
-                        const g = generateBoard(t, buildN, rules, glob, DEM, spans, glob.minVeh, includePT);
-                        const score = computeEngine(DEM, buildSupply(g.segs), includePT, glob.minVeh, spans, glob.maxFleet).weekScore;
-                        return { target: t, ...g, score };
-                      });
-                      rows.sort((a, b) => b.score - a.score);
-                      setSweep(rows);
-                      setSweepBusy(false);
-                    }, 30);
+                    mutate(() => buildResult.segs.map(cloneSeg));
+                    setSelId(null);
+                    setTab("board");
                   }}>
-                  {sweepBusy ? "Sweeping — this one takes a while…" : "Run sweep (7 full builds)"}
+                  Load this board into the Designer
                 </button>
               </div>
-              <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 4 }}>
-                The builder is greedy — strong but myopic — and the 10-hour count is the board's key structural choice, so neither fixed policy is guaranteed best. The sweep builds a complete board at each 10-hour target and ranks them, spending real compute to search the structure space instead of trusting one trajectory. Deep optimize the winner afterward for the full treatment.
-              </div>
-              {sweep && (
-                <table className="shares" style={{ width: "100%", borderCollapse: "collapse", marginTop: 10 }}>
-                  <thead><tr><th>10h target</th><th>10h built</th><th>Coverage</th><th>Placements evaluated</th><th></th></tr></thead>
-                  <tbody>
-                    {sweep.map((r, i) => (
-                      <tr key={r.target} style={{ background: i === 0 ? "#F2F8F7" : "transparent" }}>
-                        <td>{r.target}</td>
-                        <td>{r.used10}</td>
-                        <td style={{ fontWeight: i === 0 ? 700 : 400, color: i === 0 ? supplyTeal : ink }}>{(r.score * 100).toFixed(2)}%{i === 0 ? " ← best" : ""}</td>
-                        <td>{(r.evaluated || 0).toLocaleString()}</td>
-                        <td style={{ textAlign: "right" }}>
-                          <button style={{ ...nudgeBtn, padding: "4px 10px", fontSize: 12 }}
-                            onClick={() => { mutate(() => r.segs.map(cloneSeg)); setSelId(null); setTab("pack"); }}>
-                            Load
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
+            )}
           </>
         )}
 
         {tab === "coverage" && (
           <>
             <div style={{ display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap", background: card, border: "1px solid #E2E8EA", padding: "10px 14px", marginBottom: 12 }}>
-              <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 7 }}>
-                <input type="checkbox" checked={includePT} onChange={(e) => setIncludePT(e.target.checked)} />
-                Include supplemental runs (part-time board)
-              </label>
               <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 7 }}>
                 <input type="checkbox" checked={showBookout} onChange={(e) => setShowBookout(e.target.checked)} />
                 Observed vehicles{RAW.bookout[day] ? "" : " (none this day)"}
