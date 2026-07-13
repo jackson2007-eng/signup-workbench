@@ -1168,7 +1168,19 @@ const TPL = {
   hump:    [4,5,7,10,14,20,28,36,45,54,62,70,76,80,82,82,80,76,70,64,58,52,46,40,35,30,26,22,18,15,12,10,8,6,5,4,3,3,2,2,1,1],
   flat:    Array(42).fill(50),
 };
-const CURVE_DAYS = { Weekday: ["Monday","Tuesday","Wednesday","Thursday","Friday"], Saturday: ["Saturday"], Sunday: ["Sunday"] };
+const SKETCH_GROUPS = {
+  weekdaySatSun: [
+    { key: "Weekday", label: "Weekday", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"] },
+    { key: "Saturday", label: "Saturday", days: ["Saturday"] },
+    { key: "Sunday", label: "Sunday", days: ["Sunday"] },
+  ],
+  weekdayWeekend: [
+    { key: "Weekday", label: "Weekday", days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"] },
+    { key: "Weekend", label: "Weekend", days: ["Saturday", "Sunday"] },
+  ],
+  perDay: DAYS.map((d) => ({ key: d, label: d, days: [d] })),
+};
+const SKETCH_MODE_LABELS = { weekdaySatSun: "Weekdays + Sat + Sun", weekdayWeekend: "Weekdays + Weekend", perDay: "All 7 days" };
 
 function sketchToEv(raw, trips) {
   const ev = new Array(N);
@@ -1338,9 +1350,14 @@ export default function App() {
   const [uploadedDem, setUploadedDem] = useState(null);
   const [demUploadResult, setDemUploadResult] = useState(null);
   const demFileRef = useRef(null);
+  const [sketchMode, setSketchMode] = useState("weekdaySatSun");
   const [curveTab, setCurveTab] = useState("Weekday");
-  const [sketch, setSketch] = useState({ Weekday: [...TPL.weekday], Saturday: [...TPL.hump], Sunday: [...TPL.hump] });
-  const [trips, setTrips] = useState({ Weekday: 1600, Saturday: 700, Sunday: 600 });
+  const [sketch, setSketch] = useState(() => {
+    const o = {}; for (const d of DAYS) o[d] = [...(WEEKEND_DAYS.has(d) ? TPL.hump : TPL.weekday)]; return o;
+  });
+  const [trips, setTrips] = useState(() => {
+    const o = {}; for (const d of DAYS) o[d] = d === "Saturday" ? 700 : d === "Sunday" ? 600 : 1600; return o;
+  });
   const [sugs, setSugs] = useState(null);
   const [buildN, setBuildN] = useState(100);
   const [buildResult, setBuildResult] = useState(null);
@@ -1398,17 +1415,25 @@ export default function App() {
     if (demSource === "uploaded") return uploadedDem || IMPORTED_DEM;
     if (demSource === "imported") return IMPORTED_DEM;
     const o = {};
-    for (const [curve, days] of Object.entries(CURVE_DAYS)) {
-      const ev = sketchToEv(sketch[curve], trips[curve]);
-      for (const d of days) o[d] = ev;
-    }
+    for (const d of DAYS) o[d] = sketchToEv(sketch[d], trips[d]);
     return o;
   }, [demSource, uploadedDem, sketch, trips]);
 
-  const curveEv = useMemo(() => {
-    const days = CURVE_DAYS[curveTab];
-    return Array.from({ length: N }, (_, i) => days.reduce((s, d) => s + DEM[d][i], 0) / days.length);
-  }, [DEM, curveTab]);
+  // The active sketch group is resolved defensively every render (rather than synced via an
+  // effect) so a curveTab left over from a previous sketchMode never produces an invalid lookup.
+  const activeGroup = SKETCH_GROUPS[sketchMode].find((g) => g.key === curveTab) || SKETCH_GROUPS[sketchMode][0];
+  const repDay = activeGroup.days[0];
+  const setGroupSketch = (fn) => setSketch((s) => {
+    const v = typeof fn === "function" ? fn(s[repDay]) : fn;
+    const next = { ...s };
+    for (const d of activeGroup.days) next[d] = [...v];
+    return next;
+  });
+  const setGroupTrips = (v) => setTrips((t) => {
+    const next = { ...t };
+    for (const d of activeGroup.days) next[d] = v;
+    return next;
+  });
 
   // lazy-load date-holidays only once the user opens Rules, so its bundled
   // per-country data doesn't inflate the main chunk for users who never touch it
@@ -1444,7 +1469,7 @@ export default function App() {
   const saveProject = () => {
     const payload = {
       v: 1, savedAt: new Date().toISOString(),
-      demSource, sketch, trips, uploadedDem, board, rules, glob, spans,
+      demSource, sketch, trips, sketchMode, uploadedDem, board, rules, glob, spans,
       totalSigned, blockSize, includePT, signupPeriod, holidays,
       baselineBoard, signupSource,
     };
@@ -1596,8 +1621,22 @@ export default function App() {
           setGlob(g);
         }
         if (p.spans) setSpans(p.spans);
-        if (p.sketch) setSketch(p.sketch);
-        if (p.trips) setTrips(p.trips);
+        if (p.sketch) {
+          if (p.sketch.Weekday) {
+            // pre-per-day save: expand the old 3-group shape onto all 7 days
+            const migrated = {};
+            for (const d of DAYS) migrated[d] = [...(WEEKEND_DAYS.has(d) ? (p.sketch[d] || p.sketch.Sunday) : p.sketch.Weekday)];
+            setSketch(migrated);
+          } else setSketch(p.sketch);
+        }
+        if (p.trips) {
+          if (p.trips.Weekday != null) {
+            const migrated = {};
+            for (const d of DAYS) migrated[d] = d === "Saturday" ? p.trips.Saturday : d === "Sunday" ? p.trips.Sunday : p.trips.Weekday;
+            setTrips(migrated);
+          } else setTrips(p.trips);
+        }
+        setSketchMode(p.sketchMode || "weekdaySatSun");
         if (p.uploadedDem) setUploadedDem(p.uploadedDem);
         if (p.demSource === "uploaded" && !p.uploadedDem) setDemSource("imported");
         else if (p.demSource) setDemSource(p.demSource);
@@ -1653,10 +1692,7 @@ export default function App() {
         setDemSource("uploaded");
         setDemUploadResult(res.summary);
         const impliedTrips = {};
-        for (const [curve, days] of Object.entries(CURVE_DAYS)) {
-          const total = days.reduce((s, d) => s + res.dem[d].reduce((a, b) => a + b, 0), 0) / days.length;
-          impliedTrips[curve] = Math.round(total / 2);
-        }
+        for (const d of DAYS) impliedTrips[d] = Math.round(res.dem[d].reduce((a, b) => a + b, 0) / 2);
         setTrips(impliedTrips);
       } catch (err) {
         alert("Could not read that demand file. Make sure it's an .xlsx file matching the template.");
@@ -2239,7 +2275,7 @@ export default function App() {
               </div>
               {demUploadResult && (
                 <div style={{ background: "#F2F8F7", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
-                  <b>Upload complete:</b> now scoring against your uploaded data. Trip counts for weekday/Saturday/Sunday below were recalculated from your file.
+                  <b>Upload complete:</b> now scoring against your uploaded data. Trip counts for each day below were recalculated from your file.
                   {demUploadResult.paddedRows > 0 || demUploadResult.coercedCells > 0 || demUploadResult.extraRowsIgnored > 0
                     ? <>{" "}{demUploadResult.paddedRows > 0 && `${demUploadResult.paddedRows} missing row(s) padded with 0. `}
                         {demUploadResult.coercedCells > 0 && `${demUploadResult.coercedCells} non-numeric cell(s) treated as 0. `}
@@ -2251,61 +2287,20 @@ export default function App() {
 
             {demSource !== "sketched" && (
               <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14 }}>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
-                  {Object.keys(CURVE_DAYS).map((c) => (
-                    <div key={c} className={"tabbtn" + (curveTab === c ? " on" : "")} style={{ padding: "6px 14px", fontSize: 15 }}
-                      onClick={() => setCurveTab(c)}>
-                      {c.toUpperCase()}
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+                  {DAYS.map((d) => (
+                    <div key={d} className={"tabbtn" + (day === d ? " on" : "")} style={{ padding: "6px 12px", fontSize: 13 }}
+                      onClick={() => setDay(d)}>
+                      {d.slice(0, 3).toUpperCase()}
                     </div>
                   ))}
                   <span style={{ marginLeft: "auto", fontSize: 12.5, color: "#41525C" }}>
                     Scoring against {DEM_SOURCE_LABEL[demSource].toLowerCase()}
                   </span>
                 </div>
-                <ActualCurve ev={curveEv} label="actual demand — events per 5-minute slot" />
+                <ActualCurve ev={DEM[day]} label="actual demand — events per 5-minute slot" />
                 {(() => {
-                  const tot = curveEv.reduce((a, b) => a + b, 0);
-                  let pk = 0, pkI = 0, am = 0;
-                  for (let i = 0; i < N; i++) {
-                    if (curveEv[i] > pk) { pk = curveEv[i]; pkI = i; }
-                    if (SLOT(i) < 720) am += curveEv[i];
-                  }
-                  return (
-                    <div style={{ fontSize: 12.5, color: "#41525C", marginTop: 8 }}>
-                      Peak {fmt(SLOT(pkI))} · {tot > 0 ? ((am / tot) * 100).toFixed(0) : 0}% of demand before noon · {Math.round(tot / 2).toLocaleString()} implied trips · {CURVE_DAYS[curveTab].map((d) => d.slice(0, 3)).join(", ")}
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
-
-            <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", opacity: demSource === "sketched" ? 1 : 0.55 }}>
-              <div style={{ fontSize: 12.5, color: "#5B6B75", marginBottom: 10 }}>
-                Sketch a typical day's shape, then set its trip count — one shared pattern for all weekdays, plus separate ones for Saturday and Sunday. Each trip counts as a pickup and a drop-off (×2) in the coverage score.
-              </div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
-                {Object.keys(CURVE_DAYS).map((c) => (
-                  <div key={c} className={"tabbtn" + (curveTab === c ? " on" : "")} style={{ padding: "6px 14px", fontSize: 15 }}
-                    onClick={() => setCurveTab(c)}>
-                    {c.toUpperCase()}
-                  </div>
-                ))}
-                <label style={{ marginLeft: "auto", fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
-                  {curveTab === "Weekday" ? "Trips per weekday (same value applied Mon–Fri)" : `Trips on ${curveTab}`}
-                  <NumField value={trips[curveTab]} onCommit={(v) => setTrips((t) => ({ ...t, [curveTab]: Math.round(v) }))} style={numInput} />
-                </label>
-              </div>
-
-              <Sketcher raw={sketch[curveTab]} trips={trips[curveTab]}
-                setRaw={(fn) => setSketch((s) => ({ ...s, [curveTab]: typeof fn === "function" ? fn(s[curveTab]) : fn }))} />
-
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
-                <span style={{ fontSize: 12, color: "#5B6B75" }}>Start from:</span>
-                <button style={nudgeBtn} onClick={() => setSketch((s) => ({ ...s, [curveTab]: [...TPL.weekday] }))}>Weekday pattern</button>
-                <button style={nudgeBtn} onClick={() => setSketch((s) => ({ ...s, [curveTab]: [...TPL.hump] }))}>Midday hump</button>
-                <button style={nudgeBtn} onClick={() => setSketch((s) => ({ ...s, [curveTab]: [...TPL.flat] }))}>Flat</button>
-                {(() => {
-                  const ev = sketchToEv(sketch[curveTab], trips[curveTab]);
+                  const ev = DEM[day];
                   const tot = ev.reduce((a, b) => a + b, 0);
                   let pk = 0, pkI = 0, am = 0;
                   for (let i = 0; i < N; i++) {
@@ -2313,18 +2308,65 @@ export default function App() {
                     if (SLOT(i) < 720) am += ev[i];
                   }
                   return (
-                    <span style={{ marginLeft: "auto", fontSize: 12.5, color: "#41525C" }}>
-                      Peak {fmt(SLOT(pkI))} · {tot > 0 ? ((am / tot) * 100).toFixed(0) : 0}% of demand before noon · applies to {CURVE_DAYS[curveTab].map((d) => d.slice(0, 3)).join(", ")}
-                    </span>
+                    <div style={{ fontSize: 12.5, color: "#41525C", marginTop: 8 }}>
+                      Peak {fmt(SLOT(pkI))} · {tot > 0 ? ((am / tot) * 100).toFixed(0) : 0}% of demand before noon · {Math.round(tot / 2).toLocaleString()} implied trips · {day}
+                    </div>
                   );
                 })()}
               </div>
-              {demSource !== "sketched" && (
-                <div style={{ fontSize: 12.5, color: demandAmber, marginTop: 8 }}>
-                  Sketch freely — switch the source above to score the board against it.
+            )}
+
+            {demSource === "sketched" && (
+              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
+                <div style={{ fontSize: 12.5, color: "#5B6B75", marginBottom: 10 }}>
+                  Sketch a typical day's shape, then set its trip count. Choose how finely to split the week below — a shared weekday pattern, a shared weekend pattern, or every day on its own. Each trip counts as a pickup and a drop-off (×2) in the coverage score.
                 </div>
-              )}
-            </div>
+                <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                  <span style={{ fontSize: 11.5, color: "#5B6B75", alignSelf: "center" }}>Split the week:</span>
+                  {Object.entries(SKETCH_MODE_LABELS).map(([m, label]) => (
+                    <div key={m} className={"tabbtn" + (sketchMode === m ? " on" : "")} style={{ padding: "4px 10px", fontSize: 12.5 }}
+                      onClick={() => setSketchMode(m)}>
+                      {label}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+                  {SKETCH_GROUPS[sketchMode].map((g) => (
+                    <div key={g.key} className={"tabbtn" + (curveTab === g.key ? " on" : "")} style={{ padding: "6px 14px", fontSize: 15 }}
+                      onClick={() => setCurveTab(g.key)}>
+                      {g.label.toUpperCase()}
+                    </div>
+                  ))}
+                  <label style={{ marginLeft: "auto", fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+                    {activeGroup.days.length > 1 ? `Trips per day (same value applied ${activeGroup.label})` : `Trips on ${activeGroup.label}`}
+                    <NumField value={trips[repDay]} onCommit={(v) => setGroupTrips(Math.round(v))} style={numInput} />
+                  </label>
+                </div>
+
+                <Sketcher raw={sketch[repDay]} trips={trips[repDay]} setRaw={setGroupSketch} />
+
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
+                  <span style={{ fontSize: 12, color: "#5B6B75" }}>Start from:</span>
+                  <button style={nudgeBtn} onClick={() => setGroupSketch([...TPL.weekday])}>Weekday pattern</button>
+                  <button style={nudgeBtn} onClick={() => setGroupSketch([...TPL.hump])}>Midday hump</button>
+                  <button style={nudgeBtn} onClick={() => setGroupSketch([...TPL.flat])}>Flat</button>
+                  {(() => {
+                    const ev = sketchToEv(sketch[repDay], trips[repDay]);
+                    const tot = ev.reduce((a, b) => a + b, 0);
+                    let pk = 0, pkI = 0, am = 0;
+                    for (let i = 0; i < N; i++) {
+                      if (ev[i] > pk) { pk = ev[i]; pkI = i; }
+                      if (SLOT(i) < 720) am += ev[i];
+                    }
+                    return (
+                      <span style={{ marginLeft: "auto", fontSize: 12.5, color: "#41525C" }}>
+                        Peak {fmt(SLOT(pkI))} · {tot > 0 ? ((am / tot) * 100).toFixed(0) : 0}% of demand before noon · applies to {activeGroup.days.map((d) => d.slice(0, 3)).join(", ")}
+                      </span>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
           </>
         )}
 
