@@ -9,6 +9,7 @@ import { RAW } from "./sampleData.js";
 
 /* ---------- constants ---------- */
 const DAYS = RAW.days;
+const WEEKEND_DAYS = new Set(["Saturday", "Sunday"]);
 const N = RAW.nslots;
 const T0 = RAW.slots0;
 const T1 = T0 + N * 5;
@@ -577,6 +578,28 @@ function deepOptimize(board0, engineArgs, rules, glob) {
 }
 
 /* ---------- packaging ---------- */
+// dayStarts: [{day, s}]; checks weekday-internal, weekend-internal (Sat vs Sun),
+// and weekday-vs-weekend spread independently against their own thresholds.
+function startVarianceIssues(dayStarts, glob) {
+  const wd = dayStarts.filter((x) => !WEEKEND_DAYS.has(x.day)).map((x) => x.s);
+  const we = dayStarts.filter((x) => WEEKEND_DAYS.has(x.day)).map((x) => x.s);
+  const out = [];
+  if (wd.length > 1 && glob.maxStartVarWeekday) {
+    const v = Math.max(...wd) - Math.min(...wd);
+    if (v > glob.maxStartVarWeekday) out.push({ kind: "weekday", v, cap: glob.maxStartVarWeekday });
+  }
+  if (we.length > 1 && glob.maxStartVarWeekend) {
+    const v = Math.max(...we) - Math.min(...we);
+    if (v > glob.maxStartVarWeekend) out.push({ kind: "weekend", v, cap: glob.maxStartVarWeekend });
+  }
+  if (wd.length && we.length && glob.maxStartVarCross) {
+    const all = [...wd, ...we];
+    const v = Math.max(...all) - Math.min(...all);
+    if (v > glob.maxStartVarCross) out.push({ kind: "cross", v, cap: glob.maxStartVarCross });
+  }
+  return out;
+}
+
 function packageInfo(segs, rules, glob) {
   // segs: all segments of one shift number
   const daysWorked = new Set();
@@ -606,12 +629,11 @@ function packageInfo(segs, rules, glob) {
   if (daysWorked.size === 7) maxRun = 7;
   if (glob.maxConsec && maxRun > glob.maxConsec)
     issues.push(`${maxRun} consecutive working days (max ${glob.maxConsec})`);
-  // start-time consistency within the package
-  const startsArr = [...daysWorked].map((d) => byDay[d].s);
-  if (startsArr.length > 1 && glob.maxStartVar) {
-    const varMin = Math.max(...startsArr) - Math.min(...startsArr);
-    if (varMin > glob.maxStartVar)
-      issues.push(`Report times vary ${(varMin / 60).toFixed(1)}h across the week (max ${(glob.maxStartVar / 60).toFixed(1)}h)`);
+  // start-time consistency within the package (weekday / weekend / cross)
+  const dayStarts = [...daysWorked].map((d) => ({ day: d, s: byDay[d].s }));
+  const VAR_LABEL = { weekday: "Weekday report times", weekend: "Weekend report times", cross: "Weekday vs weekend report times" };
+  for (const viol of startVarianceIssues(dayStarts, glob)) {
+    issues.push(`${VAR_LABEL[viol.kind]} vary ${(viol.v / 60).toFixed(1)}h (max ${(viol.cap / 60).toFixed(1)}h)`);
   }
   for (let i = 0; i < 7; i++) {
     const d = DAYS[i], nd = DAYS[(i + 1) % 7];
@@ -714,7 +736,7 @@ function autoPackage(board, rules, glob) {
 /* ---------- per-day refinement ---------- */
 function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans) {
   let board = board0.map(cloneSeg);
-  const maxVar = glob.maxStartVar || 60;
+  const maxVar = Math.max(glob.maxStartVarWeekday || 0, glob.maxStartVarWeekend || 0, glob.maxStartVarCross || 0) || 60;
   const maxPull = glob.maxPullout || 0;
   let created = 0, moves = 0, evaluated = 0;
   let nextId = Math.max(0, ...board.map((s) => s.id)) + 1;
@@ -747,7 +769,7 @@ function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans) {
   const shiftStartsOf = (shiftNo, exceptId, exceptDay) => {
     const arr = [];
     for (const sg of board) if (sg.shift === shiftNo)
-      for (const dd of sg.days) if (!(sg.id === exceptId && dd === exceptDay)) arr.push(sg.s);
+      for (const dd of sg.days) if (!(sg.id === exceptId && dd === exceptDay)) arr.push({ day: dd, s: sg.s });
     return arr;
   };
 
@@ -774,8 +796,7 @@ function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans) {
         if (maxPull > 0 && k >= 0 && k < N && starts[d][k] >= maxPull) continue;
         const sibs = shiftStartsOf(seg.shift, seg.id, d);
         if (sibs.length) {
-          const all = [...sibs, s2];
-          if (Math.max(...all) - Math.min(...all) > maxVar) continue;
+          if (startVarianceIssues([...sibs, { day: d, s: s2 }], glob).length) continue;
         }
         const b2 = seg.b ? [seg.b[0] + m, seg.b[1] + m] : null;
         const cand = { ...seg, s: s2, e: e2, b: b2 };
@@ -1234,7 +1255,15 @@ export default function App() {
         if (!p || !Array.isArray(p.board)) throw new Error("bad file");
         setBoard(p.board.map(cloneSeg));
         if (p.rules) setRules(p.rules);
-        if (p.glob) setGlob({ minVeh: p.floorVal ?? DEFAULT_GLOBAL.minVeh, ...p.glob });
+        if (p.glob) {
+          const g = { minVeh: p.floorVal ?? DEFAULT_GLOBAL.minVeh, ...p.glob };
+          if (g.maxStartVar != null && g.maxStartVarWeekday == null) {
+            g.maxStartVarWeekday = g.maxStartVar;
+            g.maxStartVarWeekend = g.maxStartVar;
+            g.maxStartVarCross = g.maxStartVar;
+          }
+          setGlob(g);
+        }
         if (p.spans) setSpans(p.spans);
         if (p.sketch) setSketch(p.sketch);
         if (p.trips) setTrips(p.trips);
@@ -2569,11 +2598,15 @@ export default function App() {
                   <NumField value={glob.minRest / 60} step={0.5} onCommit={(v) => setGlob((g) => ({ ...g, minRest: Math.round(v * 60) }))} />
                   <span>Max consecutive working days</span>
                   <NumField value={glob.maxConsec} onCommit={(v) => setGlob((g) => ({ ...g, maxConsec: v }))} />
-                  <span>Max report-time variation in a package (h)</span>
-                  <NumField value={glob.maxStartVar / 60} step={0.25} onCommit={(v) => setGlob((g) => ({ ...g, maxStartVar: Math.round(v * 60) }))} />
+                  <span>Max report-time variation — weekdays (h)</span>
+                  <NumField value={glob.maxStartVarWeekday / 60} step={0.25} onCommit={(v) => setGlob((g) => ({ ...g, maxStartVarWeekday: Math.round(v * 60) }))} />
+                  <span>Max report-time variation — weekend days (h)</span>
+                  <NumField value={glob.maxStartVarWeekend / 60} step={0.25} onCommit={(v) => setGlob((g) => ({ ...g, maxStartVarWeekend: Math.round(v * 60) }))} />
+                  <span>Max report-time variation — weekday vs weekend (h)</span>
+                  <NumField value={glob.maxStartVarCross / 60} step={0.25} onCommit={(v) => setGlob((g) => ({ ...g, maxStartVarCross: Math.round(v * 60) }))} />
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
-                  Checked on every weekly package in the Packaging tab; the auto-builder satisfies all three by construction.
+                  Weekdays and weekend days are checked separately, plus a third cap on how far weekend report times may drift from the weekday report time. Checked on every weekly package in the Packaging tab; the auto-builder satisfies rest, consecutive-day, and variance rules by construction.
                 </div>
               </div>
 
