@@ -2176,6 +2176,11 @@ export default function App() {
                         <td>{signupStats.perDay[d].hours.toFixed(0)}</td>
                       </tr>
                     ))}
+                    <tr style={{ fontWeight: 700, borderTop: "1px solid #E7EDEF" }}>
+                      <td>Total</td>
+                      <td>{DAYS.reduce((n, d) => n + signupStats.perDay[d].shifts.size, 0)}</td>
+                      <td>{DAYS.reduce((n, d) => n + signupStats.perDay[d].hours, 0).toFixed(0)}</td>
+                    </tr>
                   </tbody>
                 </table>
               </div>
@@ -2192,6 +2197,10 @@ export default function App() {
                         <td>{hrs.toFixed(0)}</td>
                       </tr>
                     ))}
+                    <tr style={{ fontWeight: 700, borderTop: "1px solid #E7EDEF" }}>
+                      <td>Total planned weekly hours</td>
+                      <td>{Object.values(signupStats.byType).reduce((a, b) => a + b, 0).toFixed(0)}</td>
+                    </tr>
                   </tbody>
                 </table>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
@@ -3142,6 +3151,12 @@ export default function App() {
                       </tr>
                     );
                   })}
+                  <tr style={{ fontWeight: 700, borderTop: "1px solid #E7EDEF" }}>
+                    <td style={{ padding: "4px 8px" }}>Total</td>
+                    <td /><td /><td /><td /><td /><td /><td /><td />
+                    <td style={{ padding: "3px 8px", fontSize: 12 }}>{board.length}</td>
+                    <td />
+                  </tr>
                 </tbody>
               </table>
               <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
