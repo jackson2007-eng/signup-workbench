@@ -834,6 +834,13 @@ const Nudge = ({ label, onDec, onInc, value }) => (
   </div>
 );
 
+const TabDot = ({ done }) => (
+  <span style={{
+    display: "inline-block", width: 6, height: 6, borderRadius: "50%", marginLeft: 6,
+    background: done ? supplyTeal : "transparent", border: done ? "none" : `1px solid ${demandAmber}`,
+  }} />
+);
+
 /* ---------- demand sketcher ---------- */
 const CTRL_TIMES = Array.from({ length: 40 }, (_, k) => 300 + k * 30);
 const TPL = {
@@ -1002,6 +1009,13 @@ export default function App() {
   const [selectedHolidayId, setSelectedHolidayId] = useState(null);
   const [selHolSegId, setSelHolSegId] = useState(null);
   const [holFixResult, setHolFixResult] = useState(null);
+  const [hasVisitedCoverage, setHasVisitedCoverage] = useState(false);
+  const [hasExported, setHasExported] = useState(false);
+  const [checklistOpen, setChecklistOpen] = useState(true);
+
+  useEffect(() => {
+    if (tab === "coverage") setHasVisitedCoverage(true);
+  }, [tab]);
 
   const mutate = (fn) => {
     setHist((h) => [...h.slice(-49), board]);
@@ -1074,6 +1088,7 @@ export default function App() {
     URL.revokeObjectURL(a.href);
   };
   const exportBoard = () => {
+    setHasExported(true);
     const DOW = { Sunday: "SU", Monday: "MO", Tuesday: "TU", Wednesday: "WE", Thursday: "TH", Friday: "FR", Saturday: "SA" };
     const hm = (m) => `${Math.floor(m / 60) % 24}:${String(m % 60).padStart(2, "0")}`;
     const mil = (m) => `${String(Math.floor(m / 60) % 24).padStart(2, "0")}${String(m % 60).padStart(2, "0")}`;
@@ -1407,12 +1422,12 @@ export default function App() {
 
         {/* tabs */}
         <div style={{ display: "flex", gap: 6, margin: "12px 0", flexWrap: "wrap" }}>
-          <div className={"tabbtn" + (tab === "rules" ? " on" : "")} onClick={() => setTab("rules")}>RULES</div>
+          <div className={"tabbtn" + (tab === "rules" ? " on" : "")} onClick={() => setTab("rules")}>RULES<TabDot done={!!(signupPeriod.start && signupPeriod.end)} /></div>
           <div className={"tabbtn" + (tab === "exceptions" ? " on" : "")} onClick={() => setTab("exceptions")}>EXCEPTIONS</div>
-          <div className={"tabbtn" + (tab === "demand" ? " on" : "")} onClick={() => setTab("demand")}>DEMAND</div>
+          <div className={"tabbtn" + (tab === "demand" ? " on" : "")} onClick={() => setTab("demand")}>DEMAND<TabDot done={demSource === "sketched"} /></div>
           <div className={"tabbtn" + (tab === "build" ? " on" : "")} onClick={() => setTab("build")}>AUTO-BUILD</div>
-          <div className={"tabbtn" + (tab === "coverage" ? " on" : "")} onClick={() => setTab("coverage")}>COVERAGE</div>
-          <div className={"tabbtn" + (tab === "board" ? " on" : "")} onClick={() => setTab("board")}>BOARD DESIGNER</div>
+          <div className={"tabbtn" + (tab === "coverage" ? " on" : "")} onClick={() => setTab("coverage")}>COVERAGE<TabDot done={hasVisitedCoverage} /></div>
+          <div className={"tabbtn" + (tab === "board" ? " on" : "")} onClick={() => setTab("board")}>BOARD DESIGNER<TabDot done={changedCount > 0} /></div>
           <div className={"tabbtn" + (tab === "pack" ? " on" : "")} onClick={() => setTab("pack")}>PACKAGING</div>
           <div className={"tabbtn" + (tab === "suggest" ? " on" : "")} onClick={() => setTab("suggest")}>SUGGESTIONS</div>
           <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
@@ -1460,6 +1475,46 @@ export default function App() {
           </div>
         </div>
 
+        {/* getting started checklist */}
+        {(() => {
+          const checklistItems = [
+            { key: "period", label: "Jurisdiction & signup period set", done: !!(signupPeriod.start && signupPeriod.end), reason: "Set a period and jurisdiction in Rules", onClick: () => setTab("rules") },
+            { key: "demand", label: "Demand source configured", done: demSource === "sketched", reason: "Still using shipped sample data — sketch your own in Demand", onClick: () => setTab("demand") },
+            { key: "envelope", label: "Signup envelope set", done: !(totalSigned === 50 && blockSize === 10), reason: "Still at sample defaults (50 signed / 10 extra board)", onClick: null },
+            { key: "board", label: "Board built or edited", done: changedCount > 0, reason: "Board unchanged from the shipped sample", onClick: () => setTab("board") },
+            { key: "coverage", label: "Coverage reviewed", done: hasVisitedCoverage, reason: "Not yet reviewed", onClick: () => setTab("coverage") },
+            { key: "export", label: "Board exported", done: hasExported, reason: "Not yet exported", onClick: exportBoard },
+          ];
+          const doneCount = checklistItems.filter((it) => it.done).length;
+          return (
+            <div style={{ background: card, border: "1px solid #E2E8EA", marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", cursor: "pointer" }} onClick={() => setChecklistOpen((o) => !o)}>
+                <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 600 }}>
+                  Getting started ({doneCount}/{checklistItems.length})
+                </div>
+                <span style={{ fontSize: 12, color: "#5B6B75" }}>{checklistOpen ? "▾ hide" : "▸ show"}</span>
+              </div>
+              {checklistOpen && (
+                <div style={{ padding: "0 14px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+                  {checklistItems.map((it) => (
+                    <div key={it.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: it.onClick ? "pointer" : "default" }}
+                      onClick={it.onClick || undefined}>
+                      <span style={{
+                        width: 14, height: 14, borderRadius: "50%", flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 10, color: "#fff", background: it.done ? supplyTeal : "transparent", border: it.done ? "none" : `1px solid ${demandAmber}`,
+                      }}>
+                        {it.done ? "✓" : ""}
+                      </span>
+                      <span style={{ color: it.done ? ink : "#41525C" }}>{it.label}</span>
+                      {!it.done && <span style={{ color: "#8899A3" }}>— {it.reason}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* day paddles */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 5, marginBottom: 12 }}>
           {DAYS.map((d) => {
@@ -1494,6 +1549,9 @@ export default function App() {
             </div>
 
             <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", opacity: demSource === "sketched" ? 1 : 0.55 }}>
+              <div style={{ fontSize: 12.5, color: "#5B6B75", marginBottom: 10 }}>
+                Sketch a typical day's shape, then set its trip count — one shared pattern for all weekdays, plus separate ones for Saturday and Sunday. Each trip counts as a pickup and a drop-off (×2) in the coverage score.
+              </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
                 {Object.keys(CURVE_DAYS).map((c) => (
                   <div key={c} className={"tabbtn" + (curveTab === c ? " on" : "")} style={{ padding: "6px 14px", fontSize: 15 }}
@@ -1502,7 +1560,7 @@ export default function App() {
                   </div>
                 ))}
                 <label style={{ marginLeft: "auto", fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
-                  Trips per {curveTab === "Weekday" ? "weekday" : curveTab}
+                  {curveTab === "Weekday" ? "Trips per weekday (same value applied Mon–Fri)" : `Trips on ${curveTab}`}
                   <input type="number" inputMode="numeric" min={0} value={trips[curveTab]}
                     onChange={(e) => setTrips((t) => ({ ...t, [curveTab]: parseInt(e.target.value || "0") }))}
                     style={numInput} />
@@ -1527,7 +1585,7 @@ export default function App() {
                   }
                   return (
                     <span style={{ marginLeft: "auto", fontSize: 12.5, color: "#41525C" }}>
-                      Peak {fmt(SLOT(pkI))} · {tot > 0 ? ((am / tot) * 100).toFixed(0) : 0}% of demand before noon · applies to {CURVE_DAYS[curveTab].length} day{CURVE_DAYS[curveTab].length > 1 ? "s" : ""}
+                      Peak {fmt(SLOT(pkI))} · {tot > 0 ? ((am / tot) * 100).toFixed(0) : 0}% of demand before noon · applies to {CURVE_DAYS[curveTab].map((d) => d.slice(0, 3)).join(", ")}
                     </span>
                   );
                 })()}
