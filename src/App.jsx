@@ -879,6 +879,27 @@ const Nudge = ({ label, onDec, onInc, value }) => (
   </div>
 );
 
+const WeekStrip = ({ segs, day, onPick }) => (
+  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 10 }}>
+    {DAYS.map((d) => {
+      const sg = segs.find((s) => s.days.includes(d));
+      const on = d === day;
+      return (
+        <div key={d} onClick={() => onPick(d)} style={{
+          cursor: "pointer", padding: "3px 6px", borderRadius: 2, textAlign: "center", minWidth: 60,
+          border: on ? `1px solid ${ink}` : "1px solid transparent",
+          background: sg ? "rgba(15,123,122,0.08)" : "transparent",
+        }}>
+          <div style={{ fontSize: 10, fontWeight: 600, color: sg ? ink : "#B9C6CC" }}>{d.slice(0, 3).toUpperCase()}</div>
+          <div style={{ fontSize: 10.5, fontVariantNumeric: "tabular-nums", color: sg ? "#41525C" : "#B9C6CC" }}>
+            {sg ? `${fmt(sg.s)}–${fmt(sg.e)}` : "OFF"}
+          </div>
+        </div>
+      );
+    })}
+  </div>
+);
+
 /* ---------- demand sketcher ---------- */
 const CTRL_TIMES = Array.from({ length: 42 }, (_, k) => 300 + k * 30);
 const TPL = {
@@ -1385,8 +1406,14 @@ export default function App() {
     return list;
   }, [board, day]);
 
-  const sel = selId != null ? board.find((s) => s.id === selId) : null;
+  const selSeg = selId != null ? board.find((s) => s.id === selId) : null;
+  const selShift = selSeg ? selSeg.shift : null;
+  const selShiftSegs = selShift != null ? board.filter((s) => s.shift === selShift) : [];
+  const sel = selShift != null ? board.find((s) => s.shift === selShift && s.days.includes(day)) : null;
+  const selDistinctTimes = new Set(selShiftSegs.map((sg) => `${sg.s}|${sg.e}|${JSON.stringify(sg.b)}`));
+  const selIsDayVariant = selDistinctTimes.size > 1;
   const selIssues = sel ? validateSeg(sel, rules, glob) : [];
+  const ganttSegs = selShift != null ? daySegs.filter((sg) => sg.shift === selShift) : daySegs;
 
   const patchSel = (patch) => {
     if (!sel) return;
@@ -1416,10 +1443,10 @@ export default function App() {
   const duplicateSel = () => {
     if (!sel) return;
     const maxShift = Math.max(...board.map((s) => s.shift));
-    const id = nextId.current++;
-    const copy = { ...cloneSeg(sel), id, shift: maxShift + 1, run: "NEW" };
-    mutate((b) => [...b, copy]);
-    setSelId(id);
+    const newShift = maxShift + 1;
+    const copies = selShiftSegs.map((sg) => ({ ...cloneSeg(sg), id: nextId.current++, shift: newShift, run: "NEW" }));
+    mutate((b) => [...b, ...copies]);
+    setSelId((copies.find((c) => c.days.includes(day)) || copies[0]).id);
   };
   const removeSel = () => {
     if (!sel) return;
@@ -2154,6 +2181,7 @@ export default function App() {
                     {Object.keys(rules).map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
                   <span style={{ fontSize: 12, color: "#5B6B75" }}>{sel.splitType}</span>
+                  {selIsDayVariant && <span style={{ fontSize: 11.5, color: demandAmber, border: `1px solid ${demandAmber}`, borderRadius: 2, padding: "2px 6px" }}>Times vary by day</span>}
                   <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <button style={nudgeBtn} onClick={duplicateSel}>Duplicate</button>
                     <button style={{ ...nudgeBtn, borderColor: gapRed, color: gapRed }} onClick={removeSel}>Remove</button>
@@ -2193,6 +2221,20 @@ export default function App() {
                     {selIssues.map((iss, i) => <div key={i} style={{ fontSize: 12.5, color: gapRed }}>⚠ {iss}</div>)}
                   </div>
                 )}
+                <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>This shift's week — tap a day to view it:</div>
+                <WeekStrip segs={selShiftSegs} day={day} onPick={setDay} />
+              </div>
+            ) : selShift != null ? (
+              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 12, position: "sticky", top: ENVELOPE_H + KPI_H, zIndex: 4 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700 }}>
+                    Shift {selShift}
+                  </div>
+                  <span style={{ fontSize: 13, color: "#5B6B75" }}>doesn't work {day}</span>
+                  <button style={{ ...nudgeBtn, marginLeft: "auto" }} onClick={() => setSelId(null)}>Close</button>
+                </div>
+                <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>This shift's week — tap a day to view and edit it:</div>
+                <WeekStrip segs={selShiftSegs} day={day} onPick={setDay} />
               </div>
             ) : (
               <div style={{ background: "#EEF4F5", border: "1px dashed #B9C6CC", padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#41525C" }}>
@@ -2204,7 +2246,8 @@ export default function App() {
             <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 10px", marginBottom: 12 }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600 }}>
-                  {day} board — {daySegs.length} working segments
+                  {day} board — {ganttSegs.length} working segment{ganttSegs.length === 1 ? "" : "s"}
+                  {selShift != null && <span style={{ fontSize: 12, fontWeight: 400, color: "#5B6B75" }}> (showing shift {selShift} only — {daySegs.length} total this day)</span>}
                 </div>
                 <div style={{ marginLeft: "auto", fontSize: 11, color: "#5B6B75" }}>{fmt(T0)} — {fmt(T1)}</div>
               </div>
@@ -2217,9 +2260,9 @@ export default function App() {
                 </div>
               </div>
               <div style={{ maxHeight: 430, overflowY: "auto" }}>
-                {daySegs.map((sg) => {
+                {ganttSegs.map((sg) => {
                   const bad = validateSeg(sg, rules, glob).length > 0;
-                  const isSel = sg.id === selId;
+                  const isSel = selShift != null && sg.shift === selShift;
                   const brkMin = sg.b ? sg.b[1] - sg.b[0] : 0;
                   const workHrs = ((sg.e - sg.s - brkMin) / 60).toFixed(2);
                   const barTitle = `${fmt(sg.s)}–${fmt(sg.e)} · ${workHrs}h working${sg.b ? ` · ${brkMin}m break (${fmt(sg.b[0])}–${fmt(sg.b[1])})` : ""}`;
@@ -2248,7 +2291,7 @@ export default function App() {
                 })}
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
-                {TYPE_ORDER.filter(t => daySegs.some(s => s.type === t)).map(t => (
+                {TYPE_ORDER.filter(t => ganttSegs.some(s => s.type === t)).map(t => (
                   <span key={t} style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 4 }}>
                     <span style={{ width: 12, height: 10, background: TYPE_COLOR[t], display: "inline-block", borderRadius: 2 }} />{t}
                   </span>
