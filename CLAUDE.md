@@ -50,7 +50,7 @@ Hard constraints (minimum vehicles in service, fleet cap, sign-in stagger, 10-ho
 
 ### Board limits (`glob`, configured only in the Rules tab)
 
-`max10` (10-hour package cap), `minVeh` (minimum vehicles in service within the service span, default 1), `maxFleet` (fleet cap), `maxPullout` (max sign-ins per 5-minute slot — the garage-bottleneck stagger cap). These are distinct constraints: `minVeh` flags when supply drops too low; `maxPullout` flags when too many shifts start in the same slot. Don't conflate them.
+`max10` (10-hour package cap), `minVeh` (minimum vehicles in service within the service span, default 1), `maxFleet` (fleet cap), `maxPullout` (max sign-ins per 5-minute slot — the garage-bottleneck stagger cap), `shiftSeriesBase` (default 6000 — starting shift number for Auto-Build and Auto-package; both fall back to `Math.max(existing board shift numbers) + 1` if that's already higher, so the base never causes a collision). These are distinct constraints: `minVeh` flags when supply drops too low; `maxPullout` flags when too many shifts start in the same slot. Don't conflate them.
 
 ### Engine functions (all in `src/App.jsx`)
 

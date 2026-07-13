@@ -530,8 +530,9 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
     packs.push({ type: c.type, s: c.s, e: c.e, b: c.b ? [...c.b] : null, work: c.work, days: [...days] });
   }
 
+  const shiftBase = glob.shiftSeriesBase || 6000;
   const segs = packs.map((o, i) => ({
-    id: 100000 + i, shift: 7101 + i, run: "G" + (i + 1), type: o.type,
+    id: 100000 + i, shift: shiftBase + i, run: "G" + (i + 1), type: o.type,
     daysOff: DAYS.filter((d) => !o.days.includes(d)).map((d) => d.slice(0, 2).toUpperCase()).join("-"),
     splitType: o.b ? "Split Break" : "Straight",
     days: o.days.sort((x, y) => DAYS.indexOf(x) - DAYS.indexOf(y)),
@@ -670,7 +671,8 @@ function autoPackage(board, rules, glob) {
     groups[R && R.work >= 600 ? 4 : 5].push(sg);
   }
   let nextShift = Math.max(0, ...board.map((s) => s.shift)) + 1;
-  if (nextShift < 8101) nextShift = 8101;
+  const packageBase = glob.shiftSeriesBase || 6000;
+  if (nextShift < packageBase) nextShift = packageBase;
   let nextId = 200000;
   const outSegs = [...keep];
   let made = 0, holes = 0, orphans = 0;
@@ -2590,9 +2592,11 @@ export default function App() {
                   <NumField value={glob.maxFleet} onCommit={(v) => setGlob((g) => ({ ...g, maxFleet: v }))} />
                   <span>Max sign-ins per 5 min (stagger)</span>
                   <NumField value={glob.maxPullout} onCommit={(v) => setGlob((g) => ({ ...g, maxPullout: v }))} />
+                  <span>Auto-generated shift series (starting number)</span>
+                  <NumField value={glob.shiftSeriesBase} onCommit={(v) => setGlob((g) => ({ ...g, shiftSeriesBase: Math.round(v) }))} />
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
-                  Currently {tenCount} ten-hour shifts on the board{tenCount > glob.max10 ? " — over the cap" : ""}.
+                  Currently {tenCount} ten-hour shifts on the board{tenCount > glob.max10 ? " — over the cap" : ""}. Auto-Build and Auto-package number their generated shifts starting from the series above, continuing past it if the board already has higher numbers.
                 </div>
               </div>
 
