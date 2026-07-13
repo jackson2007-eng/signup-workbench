@@ -20,7 +20,8 @@ const fmt = (m) => {
 };
 const ink = "#182430", paper = "#F4F6F7", card = "#FFFFFF",
   demandAmber = "#D98324", targetInk = "#233746", supplyTeal = "#0F7B7A",
-  gapRed = "#C0392B", bookoutViolet = "#6C5B9E";
+  gapRed = "#C0392B", bookoutViolet = "#6C5B9E", sampleGray = "#5B6B75";
+const DEM_SOURCE_LABEL = { imported: "Sample data", sketched: "Sketched demand", uploaded: "Uploaded real data" };
 const TYPE_ORDER = ["AM", "NN", "AX", "NN10", "AX10", "BST", "BX", "BS"];
 const TYPE_COLOR = {
   AM: "#0F7B7A", NN: "#2E86AB", AX: "#6C5B9E", NN10: "#1B6E53",
@@ -968,14 +969,17 @@ export default function App() {
   const [day, setDay] = useState("Wednesday");
   const [showBookout, setShowBookout] = useState(false);
   const [includePT, setIncludePT] = useState(true);
-  const [totalSigned, setTotalSigned] = useState(50);
-  const [blockSize, setBlockSize] = useState(10);
+  const [totalSigned, setTotalSigned] = useState(125);
+  const [blockSize, setBlockSize] = useState(25);
   const [board, setBoard] = useState(() => RAW.segments.map(cloneSeg));
   const [rules, setRules] = useState(() => JSON.parse(JSON.stringify(DEFAULT_RULES)));
   const [glob, setGlob] = useState(() => JSON.parse(JSON.stringify(DEFAULT_GLOBAL)));
   const [spans, setSpans] = useState(() => JSON.parse(JSON.stringify(DEFAULT_SPANS)));
   const [newType, setNewType] = useState("");
-  const [demSource, setDemSource] = useState("imported");
+  const [demSource, setDemSource] = useState("imported"); // "imported" | "sketched" | "uploaded"
+  const [uploadedDem, setUploadedDem] = useState(null);
+  const [demUploadResult, setDemUploadResult] = useState(null);
+  const demFileRef = useRef(null);
   const [curveTab, setCurveTab] = useState("Weekday");
   const [sketch, setSketch] = useState({ Weekday: [...TPL.weekday], Saturday: [...TPL.hump], Sunday: [...TPL.hump] });
   const [trips, setTrips] = useState({ Weekday: 1600, Saturday: 700, Sunday: 600 });
@@ -1034,6 +1038,7 @@ export default function App() {
   };
 
   const DEM = useMemo(() => {
+    if (demSource === "uploaded") return uploadedDem || IMPORTED_DEM;
     if (demSource === "imported") return IMPORTED_DEM;
     const o = {};
     for (const [curve, days] of Object.entries(CURVE_DAYS)) {
@@ -1041,7 +1046,7 @@ export default function App() {
       for (const d of days) o[d] = ev;
     }
     return o;
-  }, [demSource, sketch, trips]);
+  }, [demSource, uploadedDem, sketch, trips]);
 
   // lazy-load date-holidays only once the user opens Rules, so its bundled
   // per-country data doesn't inflate the main chunk for users who never touch it
@@ -1077,7 +1082,7 @@ export default function App() {
   const saveProject = () => {
     const payload = {
       v: 1, savedAt: new Date().toISOString(),
-      demSource, sketch, trips, board, rules, glob, spans,
+      demSource, sketch, trips, uploadedDem, board, rules, glob, spans,
       totalSigned, blockSize, includePT, signupPeriod, holidays,
     };
     const blob = new Blob([JSON.stringify(payload, null, 1)], { type: "application/json" });
@@ -1131,7 +1136,7 @@ export default function App() {
       ["10-hour shifts", `${tenCount} of ${glob.max10}`],
       ["Rule flags", flagCount],
       ["Weekly coverage score", `${(eng.weekScore * 100).toFixed(1)}%`],
-      ["Demand source", demSource],
+      ["Demand source", DEM_SOURCE_LABEL[demSource] || demSource],
       [],
       ["Day", "Demand %", "Resource %", "Coverage score"]];
     for (const d of DAYS) {
@@ -1163,6 +1168,28 @@ export default function App() {
     XLSX.writeFile(wb, "signup-board.xlsx");
   };
 
+  const downloadDemandTemplate = () => {
+    const wb = XLSX.utils.book_new();
+    const instr = [
+      ["Real demand data template"], [],
+      ["One sheet per day of the week (Sunday–Saturday). Enter Pickups and Dropoffs for every 5-minute slot."],
+      ["Do not edit the Time column — it is for reference only; rows are matched by position, not by the time text."],
+      ["All 7 day sheets must be present or the upload will be rejected."],
+      ["Leave a slot as 0 if there is no activity — blank cells are also treated as 0."],
+    ];
+    const wsI = XLSX.utils.aoa_to_sheet(instr);
+    wsI["!cols"] = [{ wch: 78 }];
+    XLSX.utils.book_append_sheet(wb, wsI, "Instructions");
+    for (const d of DAYS) {
+      const rows = [["Time", "Pickups", "Dropoffs"]];
+      for (let i = 0; i < N; i++) rows.push([fmt(SLOT(i)), 0, 0]);
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      ws["!cols"] = [{ wch: 10 }, { wch: 10 }, { wch: 10 }];
+      XLSX.utils.book_append_sheet(wb, ws, d);
+    }
+    XLSX.writeFile(wb, "demand-template.xlsx");
+  };
+
   const loadProject = (file) => {
     const rd = new FileReader();
     rd.onload = () => {
@@ -1175,7 +1202,9 @@ export default function App() {
         if (p.spans) setSpans(p.spans);
         if (p.sketch) setSketch(p.sketch);
         if (p.trips) setTrips(p.trips);
-        if (p.demSource) setDemSource(p.demSource);
+        if (p.uploadedDem) setUploadedDem(p.uploadedDem);
+        if (p.demSource === "uploaded" && !p.uploadedDem) setDemSource("imported");
+        else if (p.demSource) setDemSource(p.demSource);
         if (p.totalSigned != null) setTotalSigned(p.totalSigned);
         if (p.blockSize != null) setBlockSize(p.blockSize);
         if (p.includePT != null) setIncludePT(p.includePT);
@@ -1187,6 +1216,48 @@ export default function App() {
       }
     };
     rd.readAsText(file);
+  };
+
+  const parseDemandWorkbook = (wb) => {
+    const missing = DAYS.filter((d) => !wb.Sheets[d]);
+    if (missing.length) {
+      return { ok: false, error: `Missing sheet(s) for: ${missing.join(", ")}. All 7 day sheets (${DAYS.join(", ")}) must be present in the uploaded file.` };
+    }
+    const dem = {};
+    let paddedRows = 0, coercedCells = 0, extraRowsIgnored = 0;
+    for (const d of DAYS) {
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[d], { header: 1 });
+      const data = rows.slice(1);
+      const arr = new Array(N).fill(0);
+      for (let i = 0; i < N; i++) {
+        const row = data[i];
+        if (!row) { paddedRows++; continue; }
+        const pu = Number(row[1]), doo = Number(row[2]);
+        if (!Number.isFinite(pu)) coercedCells++;
+        if (!Number.isFinite(doo)) coercedCells++;
+        arr[i] = (Number.isFinite(pu) ? pu : 0) + (Number.isFinite(doo) ? doo : 0);
+      }
+      if (data.length > N) extraRowsIgnored += data.length - N;
+      dem[d] = arr;
+    }
+    return { ok: true, dem, summary: { paddedRows, coercedCells, extraRowsIgnored } };
+  };
+
+  const uploadDemand = (file) => {
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        const wb = XLSX.read(rd.result, { type: "array" });
+        const res = parseDemandWorkbook(wb);
+        if (!res.ok) { alert(res.error); return; }
+        setUploadedDem(res.dem);
+        setDemSource("uploaded");
+        setDemUploadResult(res.summary);
+      } catch (err) {
+        alert("Could not read that demand file. Make sure it's an .xlsx file matching the template.");
+      }
+    };
+    rd.readAsArrayBuffer(file);
   };
 
   const holidayCountForDay = useMemo(() => holidays.filter((h) => h.runsAs === day).length, [holidays, day]);
@@ -1405,8 +1476,8 @@ export default function App() {
             SIGNUP WORKBENCH
           </div>
           <div style={{ marginLeft: "auto", fontFamily: "'Barlow Condensed', sans-serif", fontSize: 22, fontWeight: 600 }}>
-            <span style={{ fontSize: 11, verticalAlign: "middle", padding: "2px 7px", marginRight: 8, borderRadius: 2, background: demSource === "sketched" ? demandAmber : supplyTeal, color: "#fff", letterSpacing: ".06em" }}>
-              {demSource === "sketched" ? "SKETCHED DEMAND" : "IMPORTED DEMAND"}
+            <span style={{ fontSize: 11, verticalAlign: "middle", padding: "2px 7px", marginRight: 8, borderRadius: 2, background: demSource === "sketched" ? demandAmber : demSource === "uploaded" ? supplyTeal : sampleGray, color: "#fff", letterSpacing: ".06em" }}>
+              {demSource === "sketched" ? "SKETCHED DEMAND" : demSource === "uploaded" ? "UPLOADED DEMAND" : "SAMPLE DATA"}
             </span>
             Weekly coverage score{" "}
             <span style={{ color: eng.weekScore >= 0.9 ? supplyTeal : demandAmber }}>
@@ -1424,7 +1495,7 @@ export default function App() {
         <div style={{ display: "flex", gap: 6, margin: "12px 0", flexWrap: "wrap" }}>
           <div className={"tabbtn" + (tab === "rules" ? " on" : "")} onClick={() => setTab("rules")}>RULES<TabDot done={!!(signupPeriod.start && signupPeriod.end)} /></div>
           <div className={"tabbtn" + (tab === "exceptions" ? " on" : "")} onClick={() => setTab("exceptions")}>EXCEPTIONS</div>
-          <div className={"tabbtn" + (tab === "demand" ? " on" : "")} onClick={() => setTab("demand")}>DEMAND<TabDot done={demSource === "sketched"} /></div>
+          <div className={"tabbtn" + (tab === "demand" ? " on" : "")} onClick={() => setTab("demand")}>DEMAND<TabDot done={demSource !== "imported"} /></div>
           <div className={"tabbtn" + (tab === "build" ? " on" : "")} onClick={() => setTab("build")}>AUTO-BUILD</div>
           <div className={"tabbtn" + (tab === "coverage" ? " on" : "")} onClick={() => setTab("coverage")}>COVERAGE<TabDot done={hasVisitedCoverage} /></div>
           <div className={"tabbtn" + (tab === "board" ? " on" : "")} onClick={() => setTab("board")}>BOARD DESIGNER<TabDot done={changedCount > 0} /></div>
@@ -1479,8 +1550,8 @@ export default function App() {
         {(() => {
           const checklistItems = [
             { key: "period", label: "Jurisdiction & signup period set", done: !!(signupPeriod.start && signupPeriod.end), reason: "Set a period and jurisdiction in Rules", onClick: () => setTab("rules") },
-            { key: "demand", label: "Demand source configured", done: demSource === "sketched", reason: "Still using shipped sample data — sketch your own in Demand", onClick: () => setTab("demand") },
-            { key: "envelope", label: "Signup envelope set", done: !(totalSigned === 50 && blockSize === 10), reason: "Still at sample defaults (50 signed / 10 extra board)", onClick: null },
+            { key: "demand", label: "Demand source configured", done: demSource !== "imported", reason: "Still using shipped sample data — sketch your own or upload real data in Demand", onClick: () => setTab("demand") },
+            { key: "envelope", label: "Signup envelope set", done: !(totalSigned === 125 && blockSize === 25), reason: "Still at sample defaults (125 signed / 25 extra board)", onClick: null },
             { key: "board", label: "Board built or edited", done: changedCount > 0, reason: "Board unchanged from the shipped sample", onClick: () => setTab("board") },
             { key: "coverage", label: "Coverage reviewed", done: hasVisitedCoverage, reason: "Not yet reviewed", onClick: () => setTab("coverage") },
             { key: "export", label: "Board exported", done: hasExported, reason: "Not yet exported", onClick: exportBoard },
@@ -1537,15 +1608,36 @@ export default function App() {
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>Demand source</div>
               <label style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
                 <input type="radio" checked={demSource === "imported"} onChange={() => setDemSource("imported")} />
-                Imported demand model
+                Sample demand data
               </label>
               <label style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
                 <input type="radio" checked={demSource === "sketched"} onChange={() => setDemSource("sketched")} />
                 Sketched demand
               </label>
-              <div style={{ fontSize: 12, color: "#5B6B75", flexBasis: "100%" }}>
-                No data export needed to get started: tell the tool roughly how many trips you run, then shape the curve by feel. Every screen scores against whichever source is active, and the badge in the header always shows which one that is. Import real data later without losing anything.
+              <label style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6, opacity: uploadedDem ? 1 : 0.5 }}>
+                <input type="radio" checked={demSource === "uploaded"} disabled={!uploadedDem} onChange={() => setDemSource("uploaded")} />
+                Uploaded real data{!uploadedDem ? " (upload below)" : ""}
+              </label>
+              <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+                <button style={nudgeBtn} onClick={downloadDemandTemplate}>Download template</button>
+                <button style={nudgeBtn} onClick={() => demFileRef.current && demFileRef.current.click()}>Upload demand data</button>
+                <input ref={demFileRef} type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  style={{ display: "none" }}
+                  onChange={(e) => { if (e.target.files && e.target.files[0]) uploadDemand(e.target.files[0]); e.target.value = ""; }} />
               </div>
+              <div style={{ fontSize: 12, color: "#5B6B75", flexBasis: "100%" }}>
+                No data export needed to get started: tell the tool roughly how many trips you run, then shape the curve by feel. Every screen scores against whichever source is active, and the badge in the header always shows which one that is. Or download the template, fill in your real 5-minute pickup/dropoff counts, and upload it — without losing anything you've already set up.
+              </div>
+              {demUploadResult && (
+                <div style={{ background: "#F2F8F7", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
+                  <b>Upload complete:</b> now scoring against your uploaded data.
+                  {demUploadResult.paddedRows > 0 || demUploadResult.coercedCells > 0 || demUploadResult.extraRowsIgnored > 0
+                    ? <>{" "}{demUploadResult.paddedRows > 0 && `${demUploadResult.paddedRows} missing row(s) padded with 0. `}
+                        {demUploadResult.coercedCells > 0 && `${demUploadResult.coercedCells} non-numeric cell(s) treated as 0. `}
+                        {demUploadResult.extraRowsIgnored > 0 && `${demUploadResult.extraRowsIgnored} extra row(s) ignored.`}</>
+                    : " All 7 sheets matched the template exactly."}
+                </div>
+              )}
             </div>
 
             <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", opacity: demSource === "sketched" ? 1 : 0.55 }}>
