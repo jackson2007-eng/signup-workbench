@@ -918,6 +918,37 @@ function Sketcher({ raw, setRaw, trips }) {
   );
 }
 
+function ActualCurve({ ev, label }) {
+  const W = 940, H = 260, PADL = 34, PADB = 22;
+  const maxV = Math.max(1, Math.max(...ev) * 1.15);
+  const x = (i) => PADL + (i / (N - 1)) * (W - PADL - 8);
+  const y = (v) => (H - PADB) - (Math.min(v, maxV) / maxV) * (H - PADB - 8);
+  const path = ev.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const area = `${path} L${x(N - 1).toFixed(1)},${y(0)} L${x(0).toFixed(1)},${y(0)} Z`;
+  const peakI = ev.indexOf(Math.max(...ev));
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: "#FBFCFC", border: "1px solid #E2E8EA", borderRadius: 2 }}>
+      {[6, 9, 12, 15, 18, 21, 24].map((h) => {
+        const i = Math.round((h * 60 - T0) / 5);
+        if (i < 0 || i >= N) return null;
+        return (
+          <g key={h}>
+            <line x1={x(i)} y1={8} x2={x(i)} y2={H - PADB} stroke="#EBF0F2" />
+            <text x={x(i)} y={H - 7} fontSize={11} fill="#8899A3" textAnchor="middle">{h}:00</text>
+          </g>
+        );
+      })}
+      {[25, 50, 75, 100].map((pct) => (
+        <line key={pct} x1={PADL} y1={y(maxV * pct / 100)} x2={W - 8} y2={y(maxV * pct / 100)} stroke="#F0F4F5" />
+      ))}
+      <path d={area} fill={demandAmber} fillOpacity={0.14} />
+      <path d={path} fill="none" stroke={demandAmber} strokeWidth={2.5} strokeLinejoin="round" />
+      <circle cx={x(peakI)} cy={y(ev[peakI])} r={5} fill="#C0392B" stroke="#fff" strokeWidth={1.2} />
+      <text x={PADL} y={16} fontSize={11} fill="#5B6B75">{label}</text>
+    </svg>
+  );
+}
+
 /* ---------- coverage chart ---------- */
 function CoverageChart({ P, day, minVeh, fleetCap, showBookout, height = 320, selBand }) {
   const data = useMemo(() => {
@@ -1048,6 +1079,11 @@ export default function App() {
     }
     return o;
   }, [demSource, uploadedDem, sketch, trips]);
+
+  const curveEv = useMemo(() => {
+    const days = CURVE_DAYS[curveTab];
+    return Array.from({ length: N }, (_, i) => days.reduce((s, d) => s + DEM[d][i], 0) / days.length);
+  }, [DEM, curveTab]);
 
   // lazy-load date-holidays only once the user opens Rules, so its bundled
   // per-country data doesn't inflate the main chunk for users who never touch it
@@ -1253,6 +1289,12 @@ export default function App() {
         setUploadedDem(res.dem);
         setDemSource("uploaded");
         setDemUploadResult(res.summary);
+        const impliedTrips = {};
+        for (const [curve, days] of Object.entries(CURVE_DAYS)) {
+          const total = days.reduce((s, d) => s + res.dem[d].reduce((a, b) => a + b, 0), 0) / days.length;
+          impliedTrips[curve] = Math.round(total / 2);
+        }
+        setTrips(impliedTrips);
       } catch (err) {
         alert("Could not read that demand file. Make sure it's an .xlsx file matching the template.");
       }
@@ -1634,7 +1676,7 @@ export default function App() {
               </div>
               {demUploadResult && (
                 <div style={{ background: "#F2F8F7", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
-                  <b>Upload complete:</b> now scoring against your uploaded data.
+                  <b>Upload complete:</b> now scoring against your uploaded data. Trip counts for weekday/Saturday/Sunday below were recalculated from your file.
                   {demUploadResult.paddedRows > 0 || demUploadResult.coercedCells > 0 || demUploadResult.extraRowsIgnored > 0
                     ? <>{" "}{demUploadResult.paddedRows > 0 && `${demUploadResult.paddedRows} missing row(s) padded with 0. `}
                         {demUploadResult.coercedCells > 0 && `${demUploadResult.coercedCells} non-numeric cell(s) treated as 0. `}
@@ -1643,6 +1685,36 @@ export default function App() {
                 </div>
               )}
             </div>
+
+            {demSource !== "sketched" && (
+              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+                  {Object.keys(CURVE_DAYS).map((c) => (
+                    <div key={c} className={"tabbtn" + (curveTab === c ? " on" : "")} style={{ padding: "6px 14px", fontSize: 15 }}
+                      onClick={() => setCurveTab(c)}>
+                      {c.toUpperCase()}
+                    </div>
+                  ))}
+                  <span style={{ marginLeft: "auto", fontSize: 12.5, color: "#41525C" }}>
+                    Scoring against {DEM_SOURCE_LABEL[demSource].toLowerCase()}
+                  </span>
+                </div>
+                <ActualCurve ev={curveEv} label="actual demand — events per 5-minute slot" />
+                {(() => {
+                  const tot = curveEv.reduce((a, b) => a + b, 0);
+                  let pk = 0, pkI = 0, am = 0;
+                  for (let i = 0; i < N; i++) {
+                    if (curveEv[i] > pk) { pk = curveEv[i]; pkI = i; }
+                    if (SLOT(i) < 720) am += curveEv[i];
+                  }
+                  return (
+                    <div style={{ fontSize: 12.5, color: "#41525C", marginTop: 8 }}>
+                      Peak {fmt(SLOT(pkI))} · {tot > 0 ? ((am / tot) * 100).toFixed(0) : 0}% of demand before noon · {Math.round(tot / 2).toLocaleString()} implied trips · {CURVE_DAYS[curveTab].map((d) => d.slice(0, 3)).join(", ")}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
 
             <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", opacity: demSource === "sketched" ? 1 : 0.55 }}>
               <div style={{ fontSize: 12.5, color: "#5B6B75", marginBottom: 10 }}>
