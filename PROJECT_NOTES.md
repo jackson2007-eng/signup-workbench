@@ -53,7 +53,7 @@ A **scheduler's workbench** for designing paratransit/microtransit operator sign
 - **Shift types** (editable in Rules; these are the shipped defaults): AM, NN (8h straights), AX (8h split), NN10 (10h STRAIGHT — no scheduled break), AX10 (10h split), BST (8h straight evening), BX (8h split late). Key semantics: `brk: true` means a break is **ALLOWED, not required** — "Float Break" shifts have operationally real but unscheduled breaks and must not be flagged for lacking one.
 - **Packaging rules**: min rest between shifts (default 10h), max consecutive working days (5), max report-time variation within a package (60 min), consecutive days-off blocks. 8h types → 5-day weeks; 10h types → 4-day weeks (both = 40 paid hours — this equality matters, see §5).
 - **Seniority desirability order** (for future bid-attractiveness features): NN10 → AM 8h → AX10 → AX 8h → BST → BX. Straight work and 3-day weekends are prized; splits keep the bus during breaks (no garage return).
-- **Signup period & statutory holidays**: a start/end calendar-date range plus jurisdiction (country/region), used to auto-detect public holidays. This is the only place calendar dates enter the app — the engine and every other tab stay day-of-week only. A holiday's `runsAs` is either an existing weekday name (reuses that day's board pattern — the fast default) or `"custom"`, which unlocks a tiny independent one-off shift list (`segs: []`, shape `{id, type, s, e, b}`) editable in the EXCEPTIONS tab: same per-shift legality checks as the main board, but no weekly-package rules and no coverage score, since a one-off date isn't a recurring week.
+- **Signup period & statutory holidays**: a start/end calendar-date range plus jurisdiction (country/region), used to auto-detect public holidays. This is the only place calendar dates enter the app — the engine and every other tab stay day-of-week only. A holiday's `runsAs` is either an existing weekday name (reuses that day's board pattern — the fast default) or `"custom"`, which unlocks a tiny independent one-off shift list (`segs: []`, shape `{id, type, s, e, b}`) editable inline in the Coverage tab (an "Exception days" tile row appears there for any custom-schedule holiday; clicking one expands the shift editor in place, no separate tab): same per-shift legality checks as the main board, but no weekly-package rules and no coverage score, since a one-off date isn't a recurring week.
 
 ---
 
@@ -88,7 +88,7 @@ A **scheduler's workbench** for designing paratransit/microtransit operator sign
 
 ## 6. UI map (tabs)
 
-DEMAND (sketch/import toggle, provenance badge in header) · AUTO-BUILD (two modes + 10-hour sweep) · COVERAGE (score, target chart, floor/fleet/stagger banners, gaps, share table, explainer) · BOARD DESIGNER (Gantt, tap-to-edit nudges, add/duplicate/remove/retype, day chips, Fix violations / Fix all flags, undo, KPI strip) · PACKAGING (grid = signup-sheet view, auto-package for loose runs, Refine day-to-day times) · SUGGESTIONS (ranked moves, Deep optimize, waste finder) · RULES (classification table, breaks, board limits, packaging rules, service span, reset to defaults).
+RULES (classification table, breaks, board limits, packaging rules, service span, signup period & holiday list, reset to defaults) · DEMAND (sketch/upload/sample toggle, provenance badge in header, template download + upload) · AUTO-BUILD (two modes + 10-hour sweep) · COVERAGE (score, target chart, floor/fleet/stagger banners, gaps, share table, explainer, plus an inline "Exception days" tile row + shift editor for any holiday set to "Custom schedule") · BOARD DESIGNER (Gantt, tap-to-edit nudges, add/duplicate/remove/retype, day chips, Fix violations / Fix all flags, undo, KPI strip) · PACKAGING (grid = signup-sheet view, auto-package for loose runs, Refine day-to-day times) · SUGGESTIONS (ranked moves, Deep optimize, waste finder).
 
 Global: Save/Load project (full state JSON), Export board (xlsx in signup-tab layout + summary sheet). Styling: desktop-first, HASTUS-inspired, Barlow Condensed/Inter, flat panels, teal=supply, amber=demand, red=gaps/violations. Number inputs need explicit white background + dark text (white-on-white iOS bug already fixed once).
 
@@ -96,11 +96,10 @@ Global: Save/Load project (full state JSON), Export board (xlsx in signup-tab la
 
 ## 7. Roadmap (agreed, in order)
 
-0. **Shipped**: signup period + jurisdiction, statutory-holiday auto-detection (`date-holidays`), per-holiday "runs as an existing weekday" or a fully custom one-off shift board (EXCEPTIONS tab), getting-started checklist + per-tab status indicators.
-1. **Next**: a real demand-import panel — downloadable template + upload/parse flow for real 5-minute pickup/dropoff counts. Today demand is either hand-sketched or the shipped sample; there's still no way to bring in an agency's actual data short of hand-authoring project JSON.
-2. **Compare & Publish module**: scenario management (incumbent vs drafts, side-by-side scores/mix/10h usage), posting-format export, blank signed-board template, auto-drafted change memo from the board diff.
-3. **Hardening**: certified ceiling computation (LP/MILP — the honest "how good could any legal board be"; premium-tier candidate), Gantt edge-drag on desktop, per-day sketch overrides, break-length moves in the suggestion engine.
-4. **SaaS layer (only when a second agency is real)**: accounts + per-tenant storage (the project-file schema IS the data model), then optional operator bidding tier. Adjacent product idea parked: driver training/compliance platform.
+0. **Shipped**: signup period + jurisdiction, statutory-holiday auto-detection (`date-holidays`), per-holiday "runs as an existing weekday" or a fully custom one-off shift board (inline "Exception days" section on the Coverage tab, not a separate tab), a real demand-import panel (downloadable xlsx template + upload/parse flow for 5-minute pickup/dropoff counts), getting-started checklist + per-tab status indicators.
+1. **Next**: Compare & Publish module — scenario management (incumbent vs drafts, side-by-side scores/mix/10h usage), posting-format export, blank signed-board template, auto-drafted change memo from the board diff.
+2. **Hardening**: certified ceiling computation (LP/MILP — the honest "how good could any legal board be"; premium-tier candidate), Gantt edge-drag on desktop, per-day sketch overrides, break-length moves in the suggestion engine.
+3. **SaaS layer (only when a second agency is real)**: accounts + per-tenant storage (the project-file schema IS the data model), then optional operator bidding tier. Adjacent product idea parked: driver training/compliance platform.
 
 ## 8. Deployment
 
