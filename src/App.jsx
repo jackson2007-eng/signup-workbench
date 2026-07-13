@@ -847,13 +847,6 @@ const Nudge = ({ label, onDec, onInc, value }) => (
   </div>
 );
 
-const TabDot = ({ done }) => (
-  <span style={{
-    display: "inline-block", width: 6, height: 6, borderRadius: "50%", marginLeft: 6,
-    background: done ? supplyTeal : "transparent", border: done ? "none" : `1px solid ${demandAmber}`,
-  }} />
-);
-
 /* ---------- demand sketcher ---------- */
 const CTRL_TIMES = Array.from({ length: 42 }, (_, k) => 300 + k * 30);
 const TPL = {
@@ -1024,8 +1017,6 @@ export default function App() {
   const [selHolSegId, setSelHolSegId] = useState(null);
   const [holFixResult, setHolFixResult] = useState(null);
   const [hasVisitedCoverage, setHasVisitedCoverage] = useState(false);
-  const [hasExported, setHasExported] = useState(false);
-  const [checklistOpen, setChecklistOpen] = useState(true);
 
   useEffect(() => {
     if (tab === "coverage") setHasVisitedCoverage(true);
@@ -1103,7 +1094,6 @@ export default function App() {
     URL.revokeObjectURL(a.href);
   };
   const exportBoard = () => {
-    setHasExported(true);
     const DOW = { Sunday: "SU", Monday: "MO", Tuesday: "TU", Wednesday: "WE", Thursday: "TH", Friday: "FR", Saturday: "SA" };
     const hm = (m) => `${Math.floor(m / 60) % 24}:${String(m % 60).padStart(2, "0")}`;
     const mil = (m) => `${String(Math.floor(m / 60) % 24).padStart(2, "0")}${String(m % 60).padStart(2, "0")}`;
@@ -1514,15 +1504,15 @@ export default function App() {
         {(() => {
           const PHASES = [
             { label: "Phase 1 · Setup", steps: [
-              { key: "rules", label: "RULES", done: !!(signupPeriod.start && signupPeriod.end) },
-              { key: "demand", label: "DEMAND", done: demSource !== "imported" },
+              { key: "rules", label: "RULES", done: !!(signupPeriod.start && signupPeriod.end), reason: "Set a period and jurisdiction in Rules" },
+              { key: "demand", label: "DEMAND", done: demSource !== "imported", reason: "Still using shipped sample data — sketch your own or upload real data in Demand" },
             ] },
             { label: "Phase 2 · Build", steps: [
               { key: "build", label: "AUTO-BUILD" },
-              { key: "board", label: "BOARD DESIGNER", done: changedCount > 0 },
+              { key: "board", label: "BOARD DESIGNER", done: changedCount > 0, reason: "Board unchanged from the shipped sample" },
             ] },
             { label: "Phase 3 · Review", steps: [
-              { key: "coverage", label: "COVERAGE", done: hasVisitedCoverage },
+              { key: "coverage", label: "COVERAGE", done: hasVisitedCoverage, reason: "Not yet reviewed" },
               { key: "suggest", label: "SUGGESTIONS" },
             ] },
             { label: "Phase 4 · Handoff", steps: [
@@ -1538,11 +1528,20 @@ export default function App() {
                       {phase.label}
                     </div>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      {phase.steps.map((s) => (
-                        <div key={s.key} className={"tabbtn" + (tab === s.key ? " on" : "")} onClick={() => setTab(s.key)}>
-                          {s.label}{s.done !== undefined && <TabDot done={s.done} />}
-                        </div>
-                      ))}
+                      {phase.steps.map((s) => {
+                        const selected = tab === s.key;
+                        const tint = selected ? {}
+                          : s.done === true ? { background: "#EAF4F3", borderColor: supplyTeal }
+                          : s.done === false ? { background: "#FBF1E6", borderColor: demandAmber }
+                          : {};
+                        return (
+                          <div key={s.key} className={"tabbtn" + (selected ? " on" : "")} style={tint}
+                            title={!selected && s.done === false ? s.reason : undefined} onClick={() => setTab(s.key)}>
+                            {s.done === true && <span style={{ color: supplyTeal, marginRight: 4 }}>✓</span>}
+                            {s.label}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                   {pi < PHASES.length - 1 && (
@@ -1567,7 +1566,7 @@ export default function App() {
           </div>
         )}
 
-        {/* envelope + getting started checklist, one cohesive block */}
+        {/* envelope */}
         <div style={{ border: "1px solid #E2E8EA", marginBottom: 12 }}>
           <div style={{ background: ink, color: "#fff", padding: "10px 14px" }}>
             <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
@@ -1589,45 +1588,6 @@ export default function App() {
               </div>
             </div>
           </div>
-
-          {(() => {
-            const checklistItems = [
-              { key: "period", label: "Jurisdiction & signup period set", done: !!(signupPeriod.start && signupPeriod.end), reason: "Set a period and jurisdiction in Rules", onClick: () => setTab("rules") },
-              { key: "demand", label: "Demand source configured", done: demSource !== "imported", reason: "Still using shipped sample data — sketch your own or upload real data in Demand", onClick: () => setTab("demand") },
-              { key: "envelope", label: "Signup envelope set", done: !(totalSigned === 125 && blockSize === 25), reason: "Still at sample defaults (125 signed / 25 extra board)", onClick: null },
-              { key: "board", label: "Board built or edited", done: changedCount > 0, reason: "Board unchanged from the shipped sample", onClick: () => setTab("board") },
-              { key: "coverage", label: "Coverage reviewed", done: hasVisitedCoverage, reason: "Not yet reviewed", onClick: () => setTab("coverage") },
-              { key: "export", label: "Board exported", done: hasExported, reason: "Not yet exported", onClick: exportBoard },
-            ];
-            const doneCount = checklistItems.filter((it) => it.done).length;
-            return (
-              <div style={{ background: card }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", cursor: "pointer" }} onClick={() => setChecklistOpen((o) => !o)}>
-                  <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 600 }}>
-                    Getting started ({doneCount}/{checklistItems.length})
-                  </div>
-                  <span style={{ fontSize: 12, color: "#5B6B75" }}>{checklistOpen ? "▾ hide" : "▸ show"}</span>
-                </div>
-                {checklistOpen && (
-                  <div style={{ padding: "0 14px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
-                    {checklistItems.map((it) => (
-                      <div key={it.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: it.onClick ? "pointer" : "default" }}
-                        onClick={it.onClick || undefined}>
-                        <span style={{
-                          width: 14, height: 14, borderRadius: "50%", flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
-                          fontSize: 10, color: "#fff", background: it.done ? supplyTeal : "transparent", border: it.done ? "none" : `1px solid ${demandAmber}`,
-                        }}>
-                          {it.done ? "✓" : ""}
-                        </span>
-                        <span style={{ color: it.done ? ink : "#41525C" }}>{it.label}</span>
-                        {!it.done && <span style={{ color: "#8899A3" }}>— {it.reason}</span>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })()}
         </div>
 
         {/* day paddles */}
