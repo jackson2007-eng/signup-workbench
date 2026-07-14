@@ -1699,6 +1699,7 @@ export default function App() {
   const fileRef = useRef(null);
   const [hist, setHist] = useState([]);
   const [selId, setSelId] = useState(null);
+  const [editAllDays, setEditAllDays] = useState(true); // time edits hit every day the segment works vs. split out just the viewed day
   const nextId = useRef(RAW.segments.length + 1000);
   const designed = totalSigned - blockSize;
 
@@ -2263,7 +2264,21 @@ export default function App() {
       setHist((h) => [...h.slice(-49), d.boardSnapshot]);
       setSugsStale(true);
       setSelId(d.sgId);
-      setDragging({ id: d.sgId, mode: d.mode, startDayScore: d.startDayScore, days: d.orig.days });
+      if (!editAllDays && d.orig.days.length > 1) {
+        // day-scoped drag: carve the viewed day out of the shared times at activation —
+        // the dragged segment keeps its id (so the bar under the pointer survives the
+        // re-render) and shrinks to just this day; a new sibling keeps the other days
+        const restId = nextId.current++;
+        setBoard((b) => b.flatMap((s) => {
+          if (s.id !== d.sgId) return [s];
+          const rest = { ...cloneSeg(s), id: restId, days: s.days.filter((x) => x !== day) };
+          return [{ ...cloneSeg(s), days: [day] }, rest];
+        }));
+        d.orig = { ...d.orig, days: [day] };
+        setDragging({ id: d.sgId, mode: d.mode, startDayScore: d.startDayScore, days: [day] });
+      } else {
+        setDragging({ id: d.sgId, mode: d.mode, startDayScore: d.startDayScore, days: d.orig.days });
+      }
     }
     // snap to the 5-minute grid DURING the drag — and skip the board update entirely
     // unless the quantized delta moved to a new slot, so most pointer events are free
@@ -2282,8 +2297,26 @@ export default function App() {
     if (!d.active) setSelId(sg.id); // never crossed the threshold — behaves as the plain click it was
   };
 
+  // When "apply to all working days" is off, a time/break edit on a multi-day segment
+  // splits the viewed day out of the package's shared times: the edited segment keeps its
+  // id (so ghosts, was-hints, and the drag under the pointer all survive) and shrinks to
+  // just this day; a new sibling segment carries the other days at the original times.
+  // Same shift number, so it's still one package — just day-variant now, which the whole
+  // app (week strip, variance checks, retime consolidation) already understands.
+  // Only time/break patches split; type and days edits are package-wide by nature.
   const patchSel = (patch) => {
     if (!sel) return;
+    const timeOnly = Object.keys(patch).every((k) => k === "s" || k === "e" || k === "b");
+    if (!editAllDays && timeOnly && sel.days.length > 1) {
+      const restId = nextId.current++;
+      mutate((b) => b.flatMap((s) => {
+        if (s.id !== sel.id) return [s];
+        const rest = { ...cloneSeg(s), id: restId, days: s.days.filter((d) => d !== day) };
+        const edited = { ...cloneSeg(s), ...patch, days: [day] };
+        return [edited, rest];
+      }));
+      return;
+    }
     mutate((b) => b.map((s) => (s.id === sel.id ? { ...cloneSeg(s), ...patch } : s)));
   };
   // step the selection through the day's board order (the gantt's unfiltered sort),
@@ -3478,7 +3511,16 @@ export default function App() {
                       {d.slice(0, 2).toUpperCase()}
                     </span>
                   ))}
+                  <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", color: editAllDays ? "#41525C" : demandAmber }}>
+                    <input type="checkbox" checked={editAllDays} onChange={(e) => setEditAllDays(e.target.checked)} />
+                    Apply time changes to all working days
+                  </label>
                 </div>
+                {!editAllDays && sel.days.length > 1 && (
+                  <div style={{ fontSize: 11.5, color: demandAmber, marginTop: 4 }}>
+                    Day-scoped editing: the next time or break change splits {day} out of this package's shared times — the other days keep their current schedule. Type and working-day changes still apply to the whole package.
+                  </div>
+                )}
                 {selIssues.length > 0 && (
                   <div style={{ marginTop: 10, borderLeft: `3px solid ${gapRed}`, background: "#FDF6F5", padding: "6px 10px" }}>
                     {selIssues.map((iss, i) => <div key={i} style={{ fontSize: 12.5, color: gapRed }}>⚠ {iss}</div>)}
