@@ -76,6 +76,11 @@ function buildTypeSequence(blocks, nPackages) {
 /* ---------- editable rule defaults ---------- */
 const DEFAULT_RULES = JSON.parse(JSON.stringify(RAW.rules));
 const DEFAULT_GLOBAL = JSON.parse(JSON.stringify(RAW.global));
+// "Average trip cycle time" (pickup to dropoff to next pickup, including deadhead) is the
+// user-facing input — more intuitive to estimate from real experience than an abstract
+// trips/vehicle-hour ratio. Productivity is derived from it wherever needed (60 / cycle time),
+// never stored directly, so there's a single source of truth.
+const DEFAULT_AVG_CYCLE_TIME = Math.round((60 / (DEFAULT_GLOBAL.productivity || 1.75)) * 10) / 10;
 const DEFAULT_SPANS = {
   Sunday: [360, 1470], Saturday: [360, 1470],
   Monday: [315, 1470], Tuesday: [315, 1470], Wednesday: [315, 1470],
@@ -1281,6 +1286,18 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, productivity, sh
     const bk = RAW.bookout[day];
     const bkMap = {};
     if (bk) for (const [t, b] of bk) bkMap[t] = b;
+    // "Suggested vehicles" is meant to read as "how many vehicles does this stretch of the
+    // day sustain," not spike on whichever single 5-minute slot happened to be busiest — so it's
+    // driven by a centered ~30-minute rolling average of demand (SMOOTH_HALF_SLOTS slots each
+    // side), not the raw per-slot event count.
+    const SMOOTH_HALF_SLOTS = 3;
+    const smoothedEv = (i) => {
+      let sum = 0, count = 0;
+      for (let k = Math.max(0, i - SMOOTH_HALF_SLOTS); k <= Math.min(N - 1, i + SMOOTH_HALF_SLOTS); k++) {
+        sum += P.ev[k]; count++;
+      }
+      return count > 0 ? sum / count : 0;
+    };
     const rows = [];
     for (let i = 0; i < N; i++) {
       const t = SLOT(i), tgt = P.target[i];
@@ -1291,7 +1308,7 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, productivity, sh
         covered: Math.round(Math.min(tgt, P.sup[i]) * 10) / 10,
         gap: tgt - P.sup[i] > 0.05 ? Math.round(tgt * 10) / 10 : null,
         bookout: bkMap[t] ?? null,
-        sugVeh: productivity > 0 ? Math.round((P.ev[i] * 12 / (2 * productivity)) * 10) / 10 : null,
+        sugVeh: productivity > 0 ? Math.round((smoothedEv(i) * 12 / (2 * productivity)) * 10) / 10 : null,
         ev: P.ev[i],
       });
     }
@@ -1343,7 +1360,7 @@ export default function App() {
   const [signupUploadResult, setSignupUploadResult] = useState(null);
   const signupFileRef = useRef(null);
   const [rules, setRules] = useState(() => JSON.parse(JSON.stringify(DEFAULT_RULES)));
-  const [glob, setGlob] = useState(() => JSON.parse(JSON.stringify(DEFAULT_GLOBAL)));
+  const [glob, setGlob] = useState(() => ({ ...JSON.parse(JSON.stringify(DEFAULT_GLOBAL)), avgCycleTime: DEFAULT_AVG_CYCLE_TIME }));
   const [spans, setSpans] = useState(() => JSON.parse(JSON.stringify(DEFAULT_SPANS)));
   const [newType, setNewType] = useState("");
   const [demSource, setDemSource] = useState("imported"); // "imported" | "sketched" | "uploaded"
@@ -1618,6 +1635,9 @@ export default function App() {
             g.maxStartVarWeekend = g.maxStartVar;
             g.maxStartVarCross = g.maxStartVar;
           }
+          if (g.avgCycleTime == null) {
+            g.avgCycleTime = Math.round((60 / (g.productivity || 1.75)) * 10) / 10;
+          }
           setGlob(g);
         }
         if (p.spans) setSpans(p.spans);
@@ -1802,6 +1822,7 @@ export default function App() {
     return s.size;
   }, [board, rules]);
   const flagCount = useMemo(() => board.filter((sg) => validateSeg(sg, rules, glob).length > 0).length, [board, rules, glob]);
+  const productivity = glob.avgCycleTime > 0 ? 60 / glob.avgCycleTime : 0;
 
   const daySegs = useMemo(() => {
     const list = board.filter((sg) => sg.days.includes(day));
@@ -2527,7 +2548,7 @@ export default function App() {
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
                 {day} — service hours vs demand-aligned target
               </div>
-              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} productivity={glob.productivity} showProductivity={showProductivity} height={340} />
+              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} productivity={productivity} showProductivity={showProductivity} height={340} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
                 The dark line shows where {day}'s {P.supVH.toFixed(0)} service hours would sit if they exactly followed the demand pattern. Red = times you're lighter than demand suggests; teal above the line = heavier.
               </div>
@@ -2899,7 +2920,7 @@ export default function App() {
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
                 Live {day} coverage
               </div>
-              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} productivity={glob.productivity} showProductivity={showProductivity} height={280}
+              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} productivity={productivity} showProductivity={showProductivity} height={280}
                 selBand={sel ? [sel.s, sel.e] : null} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
                 Dashed lines mark the selected shift. The KPI strip and shift editor stay pinned while you scroll.
@@ -3141,7 +3162,7 @@ export default function App() {
               <button style={{ ...nudgeBtn, marginLeft: "auto", borderColor: demandAmber }}
                 onClick={() => {
                   setRules(JSON.parse(JSON.stringify(DEFAULT_RULES)));
-                  setGlob(JSON.parse(JSON.stringify(DEFAULT_GLOBAL)));
+                  setGlob({ ...JSON.parse(JSON.stringify(DEFAULT_GLOBAL)), avgCycleTime: DEFAULT_AVG_CYCLE_TIME });
                   setSpans(JSON.parse(JSON.stringify(DEFAULT_SPANS)));
                 }}>
                 Reset to CA defaults
@@ -3304,11 +3325,11 @@ export default function App() {
                   <NumField value={glob.deadheadOutMin} step={5} onCommit={(v) => setGlob((g) => ({ ...g, deadheadOutMin: Math.round(v) }))} />
                   <span>Pull-in time after last trip (min)</span>
                   <NumField value={glob.deadheadInMin} step={5} onCommit={(v) => setGlob((g) => ({ ...g, deadheadInMin: Math.round(v) }))} />
-                  <span>Productivity (trips/vehicle-hour)</span>
-                  <NumField value={glob.productivity} step={0.05} onCommit={(v) => setGlob((g) => ({ ...g, productivity: v }))} />
+                  <span>Average trip cycle time (min)</span>
+                  <NumField value={glob.avgCycleTime} step={0.5} onCommit={(v) => setGlob((g) => ({ ...g, avgCycleTime: v }))} />
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
-                  Pull-out/pull-in affects only Auto-Build's placement — a generated shift may start before the first trip it serves and end after the last, within this lead time. Productivity only draws the "Suggested vehicles" reference line on the Coverage chart; it does not affect scoring or generation.
+                  Pull-out/pull-in affects only Auto-Build's placement — a generated shift may start before the first trip it serves and end after the last, within this lead time. Cycle time (pickup to dropoff to next pickup, including deadhead) only draws the "Suggested vehicles" reference line on the Coverage chart, smoothed over a ~30-minute window so a single busy 5-minute slot doesn't spike the line — it does not affect scoring or generation.
                 </div>
               </div>
             </div>
