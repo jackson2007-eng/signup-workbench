@@ -165,7 +165,7 @@ const SIGNUP_HEADER_ALIASES = {
 const DOW_CODE = { SU: "Sunday", MO: "Monday", TU: "Tuesday", WE: "Wednesday", TH: "Thursday", FR: "Friday", SA: "Saturday" };
 const EXCEPTION_DEFAULT_TYPE = "AX";
 
-function parseSignupWorkbook(wb, sheetName) {
+function parseSignupWorkbook(wb, sheetName, classifyRules = DEFAULT_RULES) {
   const name = sheetName && wb.Sheets[sheetName] ? sheetName : wb.SheetNames.find((n) => n.toLowerCase() !== "instructions") || wb.SheetNames[0];
   const ws = wb.Sheets[name];
   if (!ws) return { ok: false, error: "The file has no readable sheet." };
@@ -277,14 +277,49 @@ function parseSignupWorkbook(wb, sheetName) {
   if (rawByShift.size === 0 && rawExceptions.length === 0) return { ok: false, error: "No usable rows found — check the file matches the template." };
 
   // pass 2: resolve each shift's canonical type/days-off/split-type from whichever
-  // row in its group carries it, then build one segment per row
+  // row in its group carries it, then build one segment per row.
+  // Shifts with NO classification anywhere in their group get auto-classified by
+  // matching their actual times against every rule type's windows (start, end, spread,
+  // work hours, break-allowed) — every row of the package must fit. A unique fit is
+  // assigned outright; multiple fits take the type with the tightest windows (most
+  // specific); no fit stays blank and is flagged downstream as always.
+  const classifyGroup = (group) => {
+    let best = null, bestSpan = Infinity, matches = 0;
+    for (const [t, R] of Object.entries(classifyRules)) {
+      let ok = true;
+      for (const g of group) {
+        const spread = g.e - g.s;
+        const brkLen = g.b ? g.b[1] - g.b[0] : 0;
+        const work = spread - brkLen;
+        if (g.s < R.s[0] || g.s > R.s[1] || g.e < R.e[0] || g.e > R.e[1] ||
+          spread < R.spr[0] || spread > R.spr[1] || Math.abs(work - R.work) > 1 ||
+          (!R.brk && g.b)) { ok = false; break; }
+      }
+      if (!ok) continue;
+      matches++;
+      const span = (R.s[1] - R.s[0]) + (R.e[1] - R.e[0]) + (R.spr[1] - R.spr[0]);
+      if (span < bestSpan) { bestSpan = span; best = t; }
+    }
+    return { best, matches };
+  };
   const segments = [];
   let nextTempId = 1;
   const unrecognizedTypes = new Set();
   const resolvedTypeByShift = new Map();
+  let autoClassified = 0, ambiguousClassified = 0, unclassified = 0;
   for (const shiftNo of shiftOrder) {
     const group = rawByShift.get(shiftNo);
-    const type = (group.find((g) => g.typeRaw) || {}).typeRaw || "";
+    let type = (group.find((g) => g.typeRaw) || {}).typeRaw || "";
+    if (!type) {
+      const c = classifyGroup(group);
+      if (c.best) {
+        type = c.best;
+        autoClassified++;
+        if (c.matches > 1) ambiguousClassified++;
+      } else {
+        unclassified++;
+      }
+    }
     const splitType = (group.find((g) => g.splitTypeRaw) || {}).splitTypeRaw || "";
     let daysOff = (group.find((g) => g.daysOffRaw) || {}).daysOffRaw || "";
     if (!daysOff) {
@@ -293,7 +328,7 @@ function parseSignupWorkbook(wb, sheetName) {
       daysOff = DAYS.filter((d) => !worked.has(d)).map((d) => d.slice(0, 2).toUpperCase()).join("-");
     }
     resolvedTypeByShift.set(shiftNo, type);
-    if (type && !DEFAULT_RULES[type]) unrecognizedTypes.add(type);
+    if (type && !classifyRules[type]) unrecognizedTypes.add(type);
     for (const g of group) {
       segments.push({
         id: nextTempId++, shift: shiftNo, run: g.run,
@@ -310,7 +345,7 @@ function parseSignupWorkbook(wb, sheetName) {
   const exceptionsByDate = new Map();
   for (const ex of rawExceptions) {
     let type = ex.typeRaw || resolvedTypeByShift.get(ex.shiftNo) || EXCEPTION_DEFAULT_TYPE;
-    if (type && !DEFAULT_RULES[type]) unrecognizedTypes.add(type);
+    if (type && !classifyRules[type]) unrecognizedTypes.add(type);
     if (!exceptionsByDate.has(ex.dateISO)) exceptionsByDate.set(ex.dateISO, []);
     exceptionsByDate.get(ex.dateISO).push({ type, s: ex.s, e: ex.e, b: ex.b, sourceShift: ex.shiftNo, sourceRun: ex.run });
   }
@@ -324,6 +359,7 @@ function parseSignupWorkbook(wb, sheetName) {
       shifts: shiftOrder.length, rows: segments.length,
       dateSpecificSkipped, footerRowsSkipped,
       unrecognizedTypes: [...unrecognizedTypes],
+      autoClassified, ambiguousClassified, unclassified,
       exceptionDates: exceptionDays.length,
       exceptionRows: exceptionDays.reduce((n, ed) => n + ed.segs.length, 0),
     },
@@ -2062,7 +2098,7 @@ export default function App() {
     rd.onload = () => {
       try {
         const wb = isCsv ? XLSX.read(rd.result, { type: "string" }) : XLSX.read(rd.result, { type: "array" });
-        const res = parseSignupWorkbook(wb);
+        const res = parseSignupWorkbook(wb, undefined, rules); // live rules, so auto-classification matches renamed/custom types
         if (!res.ok) { alert(res.error); return; }
         const startId = nextId.current;
         const segments = res.segments.map((sg, i) => ({ ...sg, id: startId + i }));
@@ -2770,7 +2806,9 @@ export default function App() {
               {signupUploadResult && (
                 <div style={{ background: "#F2F8F7", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
                   <b>Upload complete:</b> now working from {signupUploadResult.shifts} shifts ({signupUploadResult.rows} rows) — this is also your new comparison baseline.
-                  {(signupUploadResult.dateSpecificSkipped > 0 || signupUploadResult.footerRowsSkipped > 0 || signupUploadResult.unrecognizedTypes.length > 0 || signupUploadResult.exceptionDates > 0) && <>{" "}
+                  {(signupUploadResult.dateSpecificSkipped > 0 || signupUploadResult.footerRowsSkipped > 0 || signupUploadResult.unrecognizedTypes.length > 0 || signupUploadResult.exceptionDates > 0 || signupUploadResult.autoClassified > 0 || signupUploadResult.unclassified > 0) && <>{" "}
+                    {signupUploadResult.autoClassified > 0 && `${signupUploadResult.autoClassified} shift(s) had no classification and were auto-matched to your Rules windows from their times${signupUploadResult.ambiguousClassified > 0 ? ` (${signupUploadResult.ambiguousClassified} fit more than one type — the tightest window was chosen; review in Shift Builder)` : ""}. `}
+                    {signupUploadResult.unclassified > 0 && `${signupUploadResult.unclassified} shift(s) had no classification and matched no type in Rules — they're flagged until you assign one. `}
                     {signupUploadResult.exceptionDates > 0 && `${signupUploadResult.exceptionRows} exception-day shift row(s) across ${signupUploadResult.exceptionDates} date(s) were imported into Exception days (Coverage tab) — any existing custom schedule for those dates was overwritten. `}
                     {signupUploadResult.dateSpecificSkipped > 0 && `${signupUploadResult.dateSpecificSkipped} date-specific relief row(s) skipped (not part of the recurring weekly pattern). `}
                     {signupUploadResult.footerRowsSkipped > 0 && `${signupUploadResult.footerRowsSkipped} row(s) skipped (no valid shift number or times). `}
