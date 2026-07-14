@@ -643,8 +643,12 @@ function segContrib(seg) {
   return a;
 }
 
-const SLIDES = [-60, -45, -30, -20, -15, -10, -5, 5, 10, 15, 20, 30, 45, 60];
-const BRK_SLIDES = [-90, -60, -45, -30, -15, -10, -5, 5, 10, 15, 30, 45, 60, 90];
+// every 5-minute step across the range, so a suggestion reports the true optimal slide
+// (e.g. +35 min) instead of snapping to the nearest coarse preset
+const SLIDES = [];
+for (let m = -120; m <= 120; m += 5) if (m !== 0) SLIDES.push(m);
+const BRK_SLIDES = [];
+for (let m = -90; m <= 90; m += 5) if (m !== 0) BRK_SLIDES.push(m);
 
 function startsPerSlot(board) {
   const starts = {};
@@ -2198,6 +2202,30 @@ export default function App() {
   }, [board, originalMap]);
   const changedCount = boardDiff.added.length + boardDiff.removed.length + boardDiff.modified.length;
 
+  // per-change weekly-coverage impact: for each change, the score delta vs undoing JUST
+  // that one change on the current board. Marginal, not additive — but it's the honest
+  // answer to "did this particular change help or hurt?" Only computed while the changes
+  // panel is open (one engine pass per change).
+  const changeDeltas = useMemo(() => {
+    if (!showDiff || changedCount === 0) return null;
+    const score = (b) => computeEngine(DEM, buildSupply(b), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias).weekScore;
+    const cur = score(board);
+    const map = new Map();
+    for (const { seg, orig } of boardDiff.modified) {
+      map.set(seg.id, (cur - score(board.map((s) => (s.id === seg.id ? cloneSeg(orig) : s)))) * 100);
+    }
+    for (const sg of boardDiff.added) {
+      map.set(sg.id, (cur - score(board.filter((s) => s.id !== sg.id))) * 100);
+    }
+    for (const o of boardDiff.removed) {
+      map.set("rm" + o.id, (cur - score([...board.map(cloneSeg), cloneSeg(o)])) * 100);
+    }
+    return map;
+  }, [showDiff, changedCount, boardDiff, board, DEM, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias]);
+  const deltaPill = (d) => d == null ? null : (
+    <span style={{ fontWeight: 700, color: d >= 0 ? supplyTeal : gapRed }}> {d >= 0 ? "+" : ""}{d.toFixed(2)} cov</span>
+  );
+
   const distinctShifts = useMemo(() => new Set(board.map((s) => s.shift)).size, [board]);
   const signupStats = useMemo(() => {
     const perDay = {};
@@ -2720,7 +2748,7 @@ export default function App() {
                   const max = startDeltas.length ? Math.max(...startDeltas) : 0;
                   return (
                     <div style={{ background: "#F7FAF9", border: "1px solid #DCE7E4", padding: "8px 12px", marginBottom: 10, fontSize: 12.5 }}>
-                      <b>Summary vs loaded signup:</b>{" "}
+                      <b>Summary vs loaded signup</b> (each change's ±cov = weekly coverage impact vs undoing just that change):{" "}
                       {startDeltas.length > 0 && `${startDeltas.length} report-time change${startDeltas.length === 1 ? "" : "s"} (avg ${avg} min, largest ${max} min)`}
                       {startDeltas.length > 0 && (brkChanged > 0 || retyped > 0 || daysChanged > 0) && " · "}
                       {brkChanged > 0 && `${brkChanged} break change${brkChanged === 1 ? "" : "s"}`}
@@ -2737,7 +2765,7 @@ export default function App() {
                     <div style={{ fontWeight: 700, color: supplyTeal, marginBottom: 4 }}>Added ({boardDiff.added.length})</div>
                     {boardDiff.added.map((s) => (
                       <div key={s.id} style={{ cursor: "pointer", padding: "2px 0" }} onClick={() => { setSelId(s.id); setShowDiff(false); }}>
-                        Shift {s.shift}·{s.run} {s.type} — {fmt(s.s)}–{fmt(s.e)}
+                        Shift {s.shift}·{s.run} {s.type} — {fmt(s.s)}–{fmt(s.e)}{deltaPill(changeDeltas && changeDeltas.get(s.id))}
                       </div>
                     ))}
                   </div>
@@ -2747,7 +2775,7 @@ export default function App() {
                     <div style={{ fontWeight: 700, color: gapRed, marginBottom: 4 }}>Removed ({boardDiff.removed.length})</div>
                     {boardDiff.removed.map((o) => (
                       <div key={o.id} style={{ padding: "2px 0" }}>
-                        Shift {o.shift}·{o.run} {o.type} — {fmt(o.s)}–{fmt(o.e)}
+                        Shift {o.shift}·{o.run} {o.type} — {fmt(o.s)}–{fmt(o.e)}{deltaPill(changeDeltas && changeDeltas.get("rm" + o.id))}
                       </div>
                     ))}
                   </div>
@@ -2773,6 +2801,7 @@ export default function App() {
                         <div key={seg.id} style={{ cursor: "pointer", padding: "2px 0" }} onClick={() => { setSelId(seg.id); setShowDiff(false); }}>
                           Shift {seg.shift}·{seg.run} {seg.type} — {fmt(orig.s)}–{fmt(orig.e)}{orig.b ? ` (break ${fmt(orig.b[0])}–${fmt(orig.b[1])})` : ""} → {fmt(seg.s)}–{fmt(seg.e)}{seg.b ? ` (break ${fmt(seg.b[0])}–${fmt(seg.b[1])})` : ""}
                           {parts.length > 0 && <span style={{ color: demandAmber, fontWeight: 600 }}>  [{parts.join(" · ")}]</span>}
+                          {deltaPill(changeDeltas && changeDeltas.get(seg.id))}
                         </div>
                       );
                     })}
