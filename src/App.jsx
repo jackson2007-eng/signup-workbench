@@ -1722,6 +1722,7 @@ export default function App() {
   const optRunning = !!(optRun && optRun.running);
   const [followBaselinePattern, setFollowBaselinePattern] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
+  const [compareChangedOnly, setCompareChangedOnly] = useState(false);
   const [refineBusy, setRefineBusy] = useState(false);
   const [refineResult, setRefineResult] = useState(null);
   const [fixResult, setFixResult] = useState(null);
@@ -2608,6 +2609,7 @@ export default function App() {
             { label: "Phase 3 · Review", steps: [
               { key: "coverage", label: "COVERAGE", done: hasVisitedCoverage, reason: "Not yet reviewed" },
               { key: "suggest", label: "SUGGESTIONS" },
+              { key: "compare", label: "COMPARE" },
             ] },
             { label: "Phase 4 · Handoff", steps: [
               { key: "pack", label: "PACKAGING" },
@@ -3713,6 +3715,128 @@ export default function App() {
             </div>
           </>
         )}
+        {tab === "compare" && (() => {
+          // Original vs revised, one row per run for the viewed day. Runs are matched by
+          // SHIFT NUMBER (the stable business key — survives retime and manual edits alike);
+          // the loaded signup draws as a dashed ghost behind the current solid bar.
+          const shifts = [...new Set([
+            ...baselineBoard.filter((s) => s.days.includes(day)).map((s) => s.shift),
+            ...board.filter((s) => s.days.includes(day)).map((s) => s.shift),
+          ])].sort((a, b) => a - b);
+          const sgn = (v) => (v > 0 ? `+${v}` : `${v}`);
+          const rows = shifts.map((sh) => {
+            const orig = baselineBoard.find((s) => s.shift === sh && s.days.includes(day)) || null;
+            const cur = board.find((s) => s.shift === sh && s.days.includes(day)) || null;
+            let status = "same";
+            const parts = [];
+            if (orig && !cur) status = "removed";
+            else if (!orig && cur) status = "added";
+            else if (orig && cur) {
+              if (cur.s !== orig.s) parts.push(`start ${sgn(cur.s - orig.s)}m`);
+              if (cur.e !== orig.e) parts.push(`end ${sgn(cur.e - orig.e)}m`);
+              if (!orig.b && cur.b) parts.push("break added");
+              else if (orig.b && !cur.b) parts.push("break removed");
+              else if (orig.b && cur.b) {
+                if (cur.b[0] !== orig.b[0]) parts.push(`brk ${sgn(cur.b[0] - orig.b[0])}m`);
+                const dl = (cur.b[1] - cur.b[0]) - (orig.b[1] - orig.b[0]);
+                if (dl !== 0) parts.push(`brk len ${sgn(dl)}m`);
+              }
+              if (cur.type !== orig.type) parts.push(`${orig.type}→${cur.type}`);
+              if (parts.length) status = "changed";
+            }
+            return { sh, orig, cur, status, delta: parts.join(" · ") };
+          });
+          const visible = compareChangedOnly ? rows.filter((r) => r.status !== "same") : rows;
+          const changedWeek = boardDiff.modified.length;
+          return (
+            <>
+              <div className="kpistrip" style={{ top: ENVELOPE_H }}>
+                <div className="kpi"><span className="l">loaded signup · week</span><span className="v">{(base.weekScore * 100).toFixed(1)}%</span></div>
+                <div className="kpi"><span className="l">current board · week</span><span className="v" style={{ color: eng.weekScore >= base.weekScore ? "#7FD1C0" : "#F09E93" }}>{(eng.weekScore * 100).toFixed(1)}%</span></div>
+                <div className="kpi"><span className="l">{day} cov · was → now</span><span className="v">{(base.perDay[day].dayScore * 100).toFixed(1)}% → {(P.dayScore * 100).toFixed(1)}%</span></div>
+                <div className="kpi"><span className="l">modified / added / removed</span><span className="v">{changedWeek} / {boardDiff.added.length} / {boardDiff.removed.length}</span></div>
+              </div>
+
+              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 10px" }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600 }}>
+                    {day} — loaded signup (dashed) vs current board (solid)
+                  </div>
+                  <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 6 }}>
+                    <input type="checkbox" checked={compareChangedOnly} onChange={(e) => setCompareChangedOnly(e.target.checked)} />
+                    Changed runs only
+                  </label>
+                  <div style={{ marginLeft: "auto", fontSize: 11, color: "#5B6B75" }}>{fmt(T0)} — {fmt(T1)} · tap a row to open it in Shift Builder</div>
+                </div>
+                <div style={{ display: "flex", gap: 6, margin: "6px 0 2px" }}>
+                  <div className="glabel" />
+                  <div style={{ position: "relative", flex: 1, height: 14 }}>
+                    {[6, 8, 10, 12, 14, 16, 18, 20, 22, 24].map((h) => (
+                      <div key={h} style={{ position: "absolute", left: `${pctPos(h * 60)}%`, fontSize: 9.5, color: "#8899A3", transform: "translateX(-50%)" }}>{h}</div>
+                    ))}
+                  </div>
+                  <div style={{ width: 128, flex: "none" }} />
+                </div>
+                {visible.length === 0 && (
+                  <div style={{ fontSize: 13, color: "#5B6B75", padding: "14px 6px" }}>
+                    {compareChangedOnly ? `No runs changed on ${day} vs the loaded signup.` : `No runs work ${day}.`}
+                  </div>
+                )}
+                <div style={{ maxHeight: 560, overflowY: "auto" }}>
+                  {visible.map(({ sh, orig, cur, status, delta }) => {
+                    const show = cur || orig;
+                    return (
+                      <div key={sh} className="ganttrow" style={{ cursor: cur ? "pointer" : "default", opacity: status === "same" && !compareChangedOnly ? 0.55 : 1 }}
+                        onClick={() => { if (cur) { setSelId(cur.id); setTab("board"); } }}>
+                        <div className="glabel" style={{ color: status === "removed" ? gapRed : undefined, fontWeight: status !== "same" ? 700 : 400 }}>
+                          {sh} {show.type}
+                        </div>
+                        <div className="gtrack">
+                          {[360, 600, 840, 1080, 1320].map((m) => (
+                            <div key={m} style={{ position: "absolute", left: `${pctPos(m)}%`, top: 0, bottom: 0, width: 1, background: "#E2E8EA" }} />
+                          ))}
+                          {orig && (
+                            <div title={`was ${fmt(orig.s)}–${fmt(orig.e)}${orig.b ? ` (break ${fmt(orig.b[0])}–${fmt(orig.b[1])})` : ""}`} style={{
+                              position: "absolute", left: `${pctPos(orig.s)}%`, width: `${pctPos(Math.min(orig.e, T1)) - pctPos(orig.s)}%`,
+                              top: 0, height: 14, borderRadius: 2, background: status === "removed" ? "#F6E4E1" : "transparent",
+                              border: `1.5px dashed ${tColor(orig.type)}`, boxSizing: "border-box", opacity: 0.85, pointerEvents: "none",
+                            }} />
+                          )}
+                          {orig && orig.b && (
+                            <div style={{
+                              position: "absolute", left: `${pctPos(orig.b[0])}%`, width: `${pctPos(orig.b[1]) - pctPos(orig.b[0])}%`,
+                              top: 0, height: 14, border: "1.5px dashed #AEBAC0", boxSizing: "border-box", opacity: 0.7, pointerEvents: "none",
+                            }} />
+                          )}
+                          {cur && (
+                            <div title={`now ${fmt(cur.s)}–${fmt(cur.e)}${cur.b ? ` (break ${fmt(cur.b[0])}–${fmt(cur.b[1])})` : ""}`} style={{
+                              position: "absolute", left: `${pctPos(cur.s)}%`, width: `${pctPos(Math.min(cur.e, T1)) - pctPos(cur.s)}%`,
+                              top: 3, height: 8, borderRadius: 2, background: tColor(cur.type), opacity: 0.95,
+                            }} />
+                          )}
+                          {cur && cur.b && (
+                            <div style={{
+                              position: "absolute", left: `${pctPos(cur.b[0])}%`, width: `${pctPos(cur.b[1]) - pctPos(cur.b[0])}%`,
+                              top: 3, height: 8, background: "repeating-linear-gradient(45deg,#fff,#fff 2px,#AEBAC0 2px,#AEBAC0 4px)",
+                            }} />
+                          )}
+                        </div>
+                        <div style={{ width: 128, flex: "none", fontSize: 10.5, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                          color: status === "removed" ? gapRed : status === "added" ? supplyTeal : status === "changed" ? demandAmber : "#8899A3" }}
+                          title={delta || status}>
+                          {status === "removed" ? "removed" : status === "added" ? "new" : status === "changed" ? delta : "unchanged"}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ fontSize: 11, color: "#5B6B75", marginTop: 8 }}>
+                  Dashed outline = the run as it was in the loaded signup · solid bar = the run on the current board · hatched = break. Runs are matched by shift number; a generated-from-scratch board therefore shows the whole loaded signup as removed and the new runs as added — that comparison is honest, just busy.
+                </div>
+              </div>
+            </>
+          );
+        })()}
         {tab === "pack" && (() => {
           const byShift = new Map();
           for (const sg of board) {
