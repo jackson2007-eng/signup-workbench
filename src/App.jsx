@@ -594,7 +594,7 @@ function segContrib(seg) {
 }
 
 const SLIDES = [-60, -45, -30, -20, -15, -10, -5, 5, 10, 15, 20, 30, 45, 60];
-const BRK_SLIDES = [-90, -60, -45, -30, -15, 15, 30, 45, 60, 90];
+const BRK_SLIDES = [-90, -60, -45, -30, -15, -10, -5, 5, 10, 15, 30, 45, 60, 90];
 
 function startsPerSlot(board) {
   const starts = {};
