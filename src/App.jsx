@@ -2087,12 +2087,17 @@ export default function App() {
     // tab switch, dialog, or dropped pointer), the next press anywhere clears it
     setDragging((cur) => (cur ? null : cur));
     const mode = ev.target && ev.target.dataset ? ev.target.dataset.dragmode || null : null;
+    // only the bar/break/handles are interactive — a press on the row background, label,
+    // or empty track does nothing, so touch-scrolling through the list never selects a shift
+    if (!mode) return;
     const track = ev.currentTarget.querySelector(".gtrack");
     if (!track) return;
+    const pxPerMin = track.getBoundingClientRect().width / (T1 - T0);
+    if (!(pxPerMin > 0)) return; // degenerate layout (hidden/zero-width track) — dividing by this would drag times to NaN
     dragRef.current = {
       sgId: sg.id, mode, orig: cloneSeg(sg),
       startX: ev.clientX,
-      pxPerMin: track.getBoundingClientRect().width / (T1 - T0),
+      pxPerMin,
       lastDelta: 0, active: false,
       boardSnapshot: board, startDayScore: P.dayScore,
     };
@@ -2310,13 +2315,13 @@ export default function App() {
         table.shares td, table.shares th { padding:5px 8px; font-size:12.5px; border-bottom:1px solid #E7EDEF; text-align:right; }
         table.shares th { text-transform:uppercase; letter-spacing:.06em; font-size:10.5px; color:#5B6B75; }
         table.shares td:first-child, table.shares th:first-child { text-align:left; }
-        .ganttrow { display:flex; align-items:center; gap:6px; height:20px; cursor:pointer; user-select:none; }
+        .ganttrow { display:flex; align-items:center; gap:6px; height:20px; user-select:none; }
         .glabel { font-size:10.5px; width:118px; flex:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums; }
         .gtrack { position:relative; flex:1; height:14px; background:#EFF3F4; }
-        .gbar { position:absolute; top:0; height:14px; border-radius:2px; cursor:grab; touch-action:none; }
-        .gbrk { position:absolute; top:0; height:14px; background:repeating-linear-gradient(45deg,#fff,#fff 3px,#AEBAC0 3px,#AEBAC0 6px); border-left:1px solid rgba(0,0,0,.35); border-right:1px solid rgba(0,0,0,.35); cursor:grab; touch-action:none; z-index:1; }
+        .gbar { position:absolute; top:0; height:14px; border-radius:2px; cursor:grab; touch-action:pan-y; }
+        .gbrk { position:absolute; top:0; height:14px; background:repeating-linear-gradient(45deg,#fff,#fff 3px,#AEBAC0 3px,#AEBAC0 6px); border-left:1px solid rgba(0,0,0,.35); border-right:1px solid rgba(0,0,0,.35); cursor:grab; touch-action:pan-y; z-index:1; }
         .gbar.lifted, .gbrk.lifted { transform:scaleY(1.35); box-shadow:0 2px 6px rgba(0,0,0,.35); z-index:2; cursor:grabbing; }
-        .ghandle { position:absolute; top:-2px; height:18px; width:7px; cursor:col-resize; touch-action:none; z-index:3; }
+        .ghandle { position:absolute; top:-2px; height:18px; width:7px; cursor:col-resize; touch-action:pan-y; z-index:3; }
         .daychip { cursor:pointer; padding:5px 8px; border:1px solid #B9C6CC; font-size:11.5px; border-radius:2px; user-select:none; }
         .daychip.on { background:${supplyTeal}; color:#fff; border-color:${supplyTeal}; }
         .kpistrip { position:sticky; top:0; z-index:5; display:flex; gap:14px; align-items:center; flex-wrap:wrap; background:${ink}; color:#fff; padding:8px 14px; margin-bottom:12px; }
