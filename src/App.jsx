@@ -3455,7 +3455,7 @@ export default function App() {
                             <span title="Click to rename — every shift using this code follows along"
                               onClick={() => { setEditingType(t); setTypeDraft(t); }}
                               style={{ fontSize: 12, padding: "2px 8px", background: tColor(t), color: "#fff", borderRadius: 2, fontWeight: 600, cursor: "pointer" }}>
-                              {t} <span style={{ opacity: 0.65, fontSize: 10 }}>✎</span>
+                              {t}
                             </span>
                           )}
                         </td>
