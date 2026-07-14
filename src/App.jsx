@@ -2010,7 +2010,7 @@ export default function App() {
             g.avgCycleTime = Math.round((60 / (g.productivity || 1.75)) * 10) / 10;
           }
           if (g.demandShare == null) g.demandShare = DEFAULT_DEMAND_SHARE;
-          if (g.offPeakBias == null) g.offPeakBias = 0;
+          if (g.offPeakBias == null) g.offPeakBias = 30; // matches the shipped default; note scores are only comparable at the same weighting
           setGlob(g);
         }
         if (p.spans) setSpans(p.spans);
@@ -3429,7 +3429,7 @@ export default function App() {
                               onDec={() => patchHolSeg({ s: selHolSeg.s - 5 })} onInc={() => patchHolSeg({ s: selHolSeg.s + 5 })} />
                             <Nudge label="End" value={fmt(selHolSeg.e)}
                               onDec={() => patchHolSeg({ e: selHolSeg.e - 5 })} onInc={() => patchHolSeg({ e: selHolSeg.e + 5 })} />
-                            <Nudge label="Whole shift" value={`${((selHolSeg.e - selHolSeg.s) / 60).toFixed(2)}h`}
+                            <Nudge label="Shift spread" value={`${((selHolSeg.e - selHolSeg.s) / 60).toFixed(2)}h`}
                               onDec={() => patchHolSeg({ s: selHolSeg.s - 5, e: selHolSeg.e - 5, b: selHolSeg.b ? [selHolSeg.b[0] - 5, selHolSeg.b[1] - 5] : null })}
                               onInc={() => patchHolSeg({ s: selHolSeg.s + 5, e: selHolSeg.e + 5, b: selHolSeg.b ? [selHolSeg.b[0] + 5, selHolSeg.b[1] + 5] : null })} />
                             {selHolSeg.b && (
@@ -3562,9 +3562,15 @@ export default function App() {
                           onDec={() => patchSel({ e: sel.e - 5 })} onInc={() => patchSel({ e: sel.e + 5 })} />
                         {origSel && origSel.e !== sel.e && <div style={{ fontSize: 10.5, color: "#8899A3", marginLeft: 80 }}>was {fmt(origSel.e)}</div>}
                       </div>
-                      <Nudge label="Whole shift" value={`${((sel.e - sel.s) / 60).toFixed(2)}h`}
+                      <Nudge label="Shift spread" value={`${((sel.e - sel.s) / 60).toFixed(2)}h`}
                         onDec={() => patchSel({ s: sel.s - 5, e: sel.e - 5, b: sel.b ? [sel.b[0] - 5, sel.b[1] - 5] : null })}
                         onInc={() => patchSel({ s: sel.s + 5, e: sel.e + 5, b: sel.b ? [sel.b[0] + 5, sel.b[1] + 5] : null })} />
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 11.5, color: "#5B6B75" }}>Working hours</span>
+                        <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>
+                          {((sel.e - sel.s - (sel.b ? sel.b[1] - sel.b[0] : 0)) / 60).toFixed(2)}h
+                        </span>
+                      </div>
                       {sel.b && (
                         <>
                           <div>
