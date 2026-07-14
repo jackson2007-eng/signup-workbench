@@ -3471,9 +3471,18 @@ export default function App() {
                         </td>
                         <td style={{ padding: "3px 8px", fontSize: 12, color: inUse ? "#182430" : "#8899A3" }}>{inUse}</td>
                         <td style={{ padding: "3px 6px" }}>
-                          {inUse === 0 && (
+                          {Object.keys(rules).length > 1 && (
                             <button style={{ ...nudgeBtn, padding: "3px 8px", fontSize: 12, color: gapRed, borderColor: gapRed }}
-                              onClick={() => setRules((old) => { const n = { ...old }; delete n[t]; return n; })}>
+                              title={inUse > 0 ? `${inUse} shift${inUse === 1 ? "" : "s"} use this type — they'll be flagged until retyped` : "Remove this type"}
+                              onClick={() => {
+                                // flag-never-block: removing an in-use type is allowed, but the
+                                // shifts keep their code and get a "not defined in Rules" flag —
+                                // visible, fixable by retyping, and undone by re-adding the type
+                                if (inUse > 0 && !window.confirm(
+                                  `${inUse} shift${inUse === 1 ? "" : "s"} on the board still use ${t}. ` +
+                                  `They won't be deleted — they'll be flagged until you retype them or re-add ${t}. Remove the type?`)) return;
+                                setRules((old) => { const n = { ...old }; delete n[t]; return n; });
+                              }}>
                               remove
                             </button>
                           )}
