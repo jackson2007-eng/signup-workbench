@@ -712,7 +712,12 @@ function buildCandidates(rules, glob) {
   return cands;
 }
 
-function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, includePT, typeSequence = null, startShiftNumber = null) {
+// opts.rng + opts.noise let the optimization monitor perturb tie-breaks so repeated calls
+// explore different constructions; with opts omitted the build is deterministic, exactly
+// as the single-shot Generate button has always been.
+function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, includePT, typeSequence = null, startShiftNumber = null, opts = {}) {
+  const rng = opts.rng || null;
+  const noise = rng && opts.noise > 0 ? opts.noise : 0;
   let evaluated = 0;
   let weekEv = 0;
   for (const d of DAYS) weekEv += DEM[d].reduce((a, b) => a + b, 0);
@@ -795,6 +800,7 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
             total += dayVal[d];
           }
           if (!ok) continue;
+          if (noise) total += (rng() - 0.5) * noise;
           if (total > bestVal) { bestVal = total; best = { c, days }; }
         }
       }
@@ -837,7 +843,14 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
 // bid-recognizable and diffs cleanly against the baseline (segments keep their ids).
 // Day-variant packages consolidate to one uniform time across their days — consistent
 // report times by construction, same philosophy as generateBoard.
-function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT) {
+// opts.rng shuffles placement order and opts.noise jitters near-tie choices (for the
+// optimization monitor's randomized restarts); opts.subsetShifts (Set) locks every package
+// NOT in the set at its current times — the ruin-and-recreate move re-places only the subset.
+// With opts omitted the retime is deterministic, exactly as the single-shot button.
+function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT, opts = {}) {
+  const rng = opts.rng || null;
+  const noise = rng && opts.noise > 0 ? opts.noise : 0;
+  const subset = opts.subsetShifts || null;
   let evaluated = 0;
   let weekEv = 0;
   for (const d of DAYS) weekEv += DEM[d].reduce((a, b) => a + b, 0);
@@ -854,12 +867,13 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT) {
     const first = segs[0];
     const R = rules[first.type];
     const days = [...new Set(segs.flatMap((sg) => sg.days))].sort((a, b) => DAYS.indexOf(a) - DAYS.indexOf(b));
-    if (!R) { passthrough.push(...segs); continue; }
+    if (!R || (subset && !subset.has(shift))) { passthrough.push(...segs); continue; }
     pkgs.push({ shift, run: first.run, daysOff: first.daysOff, splitBase: first.splitType, id: first.id, type: first.type, days, work: R.work, origSegs: segs });
   }
   // larger work blocks place first (the generator's 10-hour-first logic, minus the forcing —
   // the mix is given), then original shift order for determinism
   pkgs.sort((a, b) => (b.work - a.work) || (a.shift - b.shift));
+  if (rng) for (let i = pkgs.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [pkgs[i], pkgs[j]] = [pkgs[j], pkgs[i]]; }
 
   const sup = {}, starts = {};
   for (const d of DAYS) {
@@ -929,6 +943,7 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT) {
         total += g - starts[d][c.startSlot] * 0.15;
       }
       if (!ok) continue;
+      if (noise) total += (rng() - 0.5) * noise;
       if (total > bestVal) { bestVal = total; best = c; }
     }
     let seg;
@@ -1539,6 +1554,128 @@ export default function App() {
   const [buildBusy, setBuildBusy] = useState(false);
   const [retimeResult, setRetimeResult] = useState(null);
   const [retimeBusy, setRetimeBusy] = useState(false);
+
+  /* ---- optimization monitor ----
+     A long-running, time-sliced search: one iteration per setTimeout(0) tick so the UI
+     keeps painting between passes. Strategy: randomized restarts (full rebuilds with
+     shuffled order + tie-break noise) until 12 consecutive restarts fail to improve,
+     then mostly ruin-and-recreate around the best board (re-place a random handful of
+     packages, everything else locked), with an occasional fresh restart to escape
+     plateaus. The best score can only ever go up. All inputs are snapshotted at Start
+     so mid-run edits elsewhere can't corrupt the search. The heavy per-tick data lives
+     in a ref; state carries only the numbers the monitor displays. */
+  const [optRun, setOptRun] = useState(null);
+  const [optMode, setOptMode] = useState("retime"); // "retime" | "generate"
+  const optRef = useRef(null);
+
+  const optTick = () => {
+    const st = optRef.current;
+    if (!st || st.abort) return;
+    const { cfg } = st;
+    const rng = Math.random;
+    const inRestartPhase = st.best == null || st.restartFails < 12;
+    const doRestart = inRestartPhase || rng() < 0.05;
+    let segs, ev;
+    if (doRestart) {
+      st.restarts++;
+      const o = { rng, noise: st.iter === 0 ? 0 : 3 }; // first pass deterministic = the single-shot result
+      if (cfg.mode === "generate") {
+        const g = generateBoard(cfg.glob.max10, cfg.buildN, cfg.rules, cfg.glob, cfg.DEM, cfg.spans, cfg.glob.minVeh, cfg.includePT, cfg.typeSequence, cfg.startShiftNumber, o);
+        segs = g.segs; ev = g.evaluated;
+      } else {
+        const r = retimeBoard(cfg.baseline, cfg.rules, cfg.glob, cfg.DEM, cfg.spans, cfg.glob.minVeh, cfg.includePT, o);
+        segs = r.segs; ev = r.evaluated;
+      }
+    } else {
+      st.refines++;
+      const shifts = [...new Set(st.best.map((s) => s.shift))];
+      const k = Math.min(shifts.length, 4 + Math.floor(rng() * 9));
+      const subset = new Set();
+      while (subset.size < k) subset.add(shifts[Math.floor(rng() * shifts.length)]);
+      const r = retimeBoard(st.best, cfg.rules, cfg.glob, cfg.DEM, cfg.spans, cfg.glob.minVeh, cfg.includePT, { rng, noise: 2, subsetShifts: subset });
+      segs = r.segs; ev = r.evaluated;
+    }
+    st.iter++;
+    st.evaluated += ev;
+    const sc = st.scoreFn(segs);
+    const tSec = (performance.now() - st.startedAt) / 1000;
+    if (cfg.mode === "generate" && st.baselineScore == null) st.baselineScore = sc; // reference = the plain single-shot Generate
+    if (sc > st.bestScore + 1e-12) {
+      st.best = segs;
+      st.bestScore = sc;
+      st.lastImproveT = tSec;
+      if (doRestart) st.restartFails = 0;
+      st.history.push({ t: Math.round(tSec * 10) / 10, score: Math.round(sc * 10000) / 100 });
+    } else if (doRestart) {
+      st.restartFails++;
+    }
+    if (tSec - st.lastBeat > 5 && st.bestScore > -Infinity) {
+      st.lastBeat = tSec;
+      st.history.push({ t: Math.round(tSec * 10) / 10, score: Math.round(st.bestScore * 10000) / 100 });
+    }
+    setOptRun({
+      running: true, mode: cfg.mode, iter: st.iter, restarts: st.restarts, refines: st.refines,
+      evaluated: st.evaluated, bestScore: st.bestScore, baselineScore: st.baselineScore,
+      elapsed: tSec, lastImproveT: st.lastImproveT, history: st.history.slice(),
+    });
+    setTimeout(optTick, 0);
+  };
+
+  const startOptimize = (mode) => {
+    if (optRef.current && !optRef.current.abort) return;
+    const cfg = {
+      mode,
+      baseline: baselineBoard.map(cloneSeg),
+      rules: JSON.parse(JSON.stringify(rules)),
+      glob: { ...glob },
+      DEM,
+      spans: JSON.parse(JSON.stringify(spans)),
+      includePT,
+      buildN,
+      typeSequence: mode === "generate" && followBaselinePattern ? buildTypeSequence(deriveTypeBlocks(baselineBoard), buildN) : null,
+      startShiftNumber: mode === "generate" && followBaselinePattern
+        ? Math.max(glob.shiftSeriesBase || 6000, 1 + Math.max(0, ...board.map((s) => s.shift), ...baselineBoard.map((s) => s.shift)))
+        : null,
+    };
+    const scoreFn = (segs) => computeEngine(cfg.DEM, buildSupply(segs), cfg.includePT, cfg.glob.minVeh, cfg.spans, cfg.glob.maxFleet).weekScore;
+    const baselineScore = mode === "retime" ? scoreFn(cfg.baseline) : null;
+    optRef.current = {
+      abort: false, cfg, scoreFn,
+      // retime mode seeds the loaded signup itself as the incumbent — the search can only
+      // ever improve on what's already in hand, never hand back something worse
+      best: mode === "retime" ? cfg.baseline : null,
+      bestScore: mode === "retime" ? baselineScore : -Infinity,
+      baselineScore,
+      iter: 0, restarts: 0, refines: 0, evaluated: 0, restartFails: 0,
+      startedAt: performance.now(), lastImproveT: 0, lastBeat: 0,
+      history: mode === "retime" ? [{ t: 0, score: Math.round(baselineScore * 10000) / 100 }] : [],
+    };
+    setOptRun({ running: true, mode, iter: 0, restarts: 0, refines: 0, evaluated: 0, bestScore: null, baselineScore: optRef.current.baselineScore, elapsed: 0, lastImproveT: 0, history: [] });
+    setTimeout(optTick, 0);
+  };
+
+  const stopOptimize = () => {
+    const st = optRef.current;
+    if (!st || st.abort) return;
+    st.abort = true;
+    if (st.best) {
+      // one polish pass on the final best: whole-segment slides preserve package identity in
+      // both modes; per-day refinement (which splits day-variants) only for generated boards
+      const engineArgs = [st.cfg.DEM, st.cfg.includePT, st.cfg.glob.minVeh, st.cfg.spans, st.cfg.glob.maxFleet];
+      const polished = st.cfg.mode === "generate"
+        ? deepOptimize(st.best, engineArgs, st.cfg.rules, st.cfg.glob).board
+        : optimizeToConvergence(st.best, engineArgs, st.cfg.rules, st.cfg.glob).board;
+      const pScore = st.scoreFn(polished);
+      if (pScore >= st.bestScore) { st.best = polished; st.bestScore = pScore; }
+      const tSec = (performance.now() - st.startedAt) / 1000;
+      st.history.push({ t: Math.round(tSec * 10) / 10, score: Math.round(st.bestScore * 10000) / 100 });
+    }
+    setOptRun((o) => (o ? {
+      ...o, running: false, bestScore: st.bestScore > -Infinity ? st.bestScore : null,
+      elapsed: (performance.now() - st.startedAt) / 1000, history: st.history.slice(),
+    } : o));
+  };
+  const optRunning = !!(optRun && optRun.running);
   const [followBaselinePattern, setFollowBaselinePattern] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
   const [refineBusy, setRefineBusy] = useState(false);
@@ -2804,7 +2941,7 @@ export default function App() {
                   Weekly packages to build
                   <NumField value={buildN} onCommit={(v) => setBuildN(Math.round(v))} style={numInput} />
                 </label>
-                <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink, opacity: buildBusy ? 0.5 : 1 }} disabled={buildBusy}
+                <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink, opacity: buildBusy || optRunning ? 0.5 : 1 }} disabled={buildBusy || optRunning}
                   onClick={() => {
                     setBuildBusy(true);
                     setTimeout(() => {
@@ -2858,8 +2995,8 @@ export default function App() {
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>
                   Retime the loaded signup within the rules
                 </div>
-                <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink, opacity: retimeBusy || !baselineBoard.length ? 0.5 : 1 }}
-                  disabled={retimeBusy || !baselineBoard.length}
+                <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink, opacity: retimeBusy || optRunning || !baselineBoard.length ? 0.5 : 1 }}
+                  disabled={retimeBusy || optRunning || !baselineBoard.length}
                   onClick={() => {
                     setRetimeBusy(true);
                     setTimeout(() => {
@@ -2901,6 +3038,78 @@ export default function App() {
                 </button>
               </div>
             )}
+
+            <div style={{ background: card, border: `1px solid ${optRunning ? supplyTeal : "#E2E8EA"}`, padding: "12px 14px", marginTop: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+                <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>
+                  Optimization monitor
+                </div>
+                <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+                  <input type="radio" checked={optMode === "retime"} disabled={optRunning} onChange={() => setOptMode("retime")} />
+                  Retime the loaded signup
+                </label>
+                <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+                  <input type="radio" checked={optMode === "generate"} disabled={optRunning} onChange={() => setOptMode("generate")} />
+                  New signup from rules &amp; demand ({buildN} packages{followBaselinePattern ? ", following type pattern" : ""})
+                </label>
+                {!optRunning ? (
+                  <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink, marginLeft: "auto" }}
+                    disabled={optMode === "retime" && !baselineBoard.length}
+                    onClick={() => startOptimize(optMode)}>
+                    ▶ Start optimizing
+                  </button>
+                ) : (
+                  <button style={{ ...nudgeBtn, background: gapRed, color: "#fff", borderColor: gapRed, marginLeft: "auto" }}
+                    onClick={stopOptimize}>
+                    ■ Stop
+                  </button>
+                )}
+              </div>
+              <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 6 }}>
+                Runs until you stop it: randomized full rebuilds explore different constructions, then the search digs around the best board found by re-placing a few runs at a time with everything else locked — millions of placements deep. The best score only ever goes up. Inputs (rules, demand, signup) are snapshotted when you press Start; keep this page open while it runs. Stopping finishes with a polish pass before the result is final.
+              </div>
+
+              {optRun && (
+                <>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "12px 0 0" }}>
+                    <Stat label="Runtime" value={`${Math.floor(optRun.elapsed / 60)}:${String(Math.floor(optRun.elapsed % 60)).padStart(2, "0")}`} sub={optRun.running ? "running" : "stopped"} tone={optRun.running ? supplyTeal : sampleGray} />
+                    <Stat label="Iterations" value={optRun.iter.toLocaleString()} sub={`${optRun.restarts.toLocaleString()} rebuilds · ${optRun.refines.toLocaleString()} refinements`} tone={targetInk} />
+                    <Stat label="Placements evaluated" value={optRun.evaluated.toLocaleString()} tone={demandAmber} />
+                    <Stat label="Best weekly coverage"
+                      value={optRun.bestScore != null ? `${(optRun.bestScore * 100).toFixed(2)}%` : "—"}
+                      sub={optRun.bestScore != null && optRun.baselineScore != null
+                        ? `${optRun.bestScore >= optRun.baselineScore ? "+" : ""}${((optRun.bestScore - optRun.baselineScore) * 100).toFixed(2)} vs ${optRun.mode === "retime" ? "loaded signup" : "single-shot build"}`
+                        : undefined}
+                      tone={supplyTeal} />
+                    <Stat label="Last improvement" value={optRun.lastImproveT > 0 ? `${Math.round(optRun.elapsed - optRun.lastImproveT)}s ago` : "—"} tone={sampleGray} />
+                  </div>
+                  {optRun.history.length > 1 && (
+                    <div style={{ marginTop: 10 }}>
+                      <ResponsiveContainer width="100%" height={90}>
+                        <ComposedChart data={optRun.history} margin={{ top: 4, right: 14, left: -14, bottom: 0 }}>
+                          <XAxis dataKey="t" tick={{ fontSize: 9.5 }} tickLine={false} unit="s" type="number" domain={[0, "dataMax"]} />
+                          <YAxis tick={{ fontSize: 9.5 }} tickLine={false} axisLine={false} domain={["dataMin - 0.05", "dataMax + 0.05"]} width={54} tickFormatter={(v) => v.toFixed(1) + "%"} />
+                          <Line type="stepAfter" dataKey="score" stroke={supplyTeal} strokeWidth={1.8} dot={false} isAnimationActive={false} />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                      <div style={{ fontSize: 11, color: "#8899A3", textAlign: "right" }}>best coverage over time</div>
+                    </div>
+                  )}
+                  {optRun.bestScore != null && (
+                    <button style={{ ...nudgeBtn, marginTop: 10, background: supplyTeal, color: "#fff", borderColor: supplyTeal }}
+                      onClick={() => {
+                        const st = optRef.current;
+                        if (!st || !st.best) return;
+                        mutate(() => st.best.map(cloneSeg));
+                        setSelId(null);
+                        setTab("board");
+                      }}>
+                      Load best into the Designer
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
           </>
         )}
 
