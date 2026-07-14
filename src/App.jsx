@@ -675,6 +675,42 @@ function findSuggestions(board, eng, DEM, rules, glob) {
 }
 
 /* ---------- auto-builder ---------- */
+// shared by generateBoard and retimeBoard: every legal placement shape, one entry per
+// type × grid start × (break length × break position, where the type takes one)
+const slotIdx = (t) => Math.max(0, Math.min(N, Math.round((t - T0) / 5)));
+function buildCandidates(rules, glob) {
+  const cands = [];
+  for (const [t, R] of Object.entries(rules)) {
+    const startLo = Math.ceil(R.s[0] / 5) * 5;
+    if (!R.brk) {
+      const spread = R.work;
+      if (spread < R.spr[0] || spread > R.spr[1]) continue;
+      for (let s = startLo; s <= R.s[1]; s += 5) {
+        const e = s + spread;
+        if (e < R.e[0] || e > R.e[1]) continue;
+        cands.push({ type: t, s, e, b: null, work: R.work, is10: R.work === 600, startSlot: slotIdx(s) });
+      }
+    } else {
+      const blLo = Math.max(30, Math.ceil(glob.brkLen[0] / 30) * 30);
+      const blHi = Math.min(240, glob.brkLen[1]);
+      for (let bl = blLo; bl <= blHi; bl += 30) {
+        const spread = R.work + bl;
+        if (spread < R.spr[0] || spread > R.spr[1]) continue;
+        const offLo = Math.ceil(glob.brkAfter[0] / 30) * 30;
+        const offHi = Math.min(glob.brkAfter[1], R.work);
+        for (let off = offLo; off <= offHi; off += 30) {
+          for (let s = startLo; s <= R.s[1]; s += 5) {
+            const e = s + spread;
+            if (e < R.e[0] || e > R.e[1]) continue;
+            cands.push({ type: t, s, e, b: [s + off, s + off + bl], work: R.work, is10: R.work === 600, startSlot: slotIdx(s) });
+          }
+        }
+      }
+    }
+  }
+  return cands;
+}
+
 function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, includePT, typeSequence = null, startShiftNumber = null) {
   let evaluated = 0;
   let weekEv = 0;
@@ -690,38 +726,8 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
     for (let i = 0; i < N; i++) target[d].push((DEM[d][i] / weekEv) * planned);
   }
 
-  const idx = (t) => Math.max(0, Math.min(N, Math.round((t - T0) / 5)));
-
-  // candidates: type × start × (break length × break position, where the type takes one)
-  const cands = [];
-  for (const [t, R] of Object.entries(rules)) {
-    const startLo = Math.ceil(R.s[0] / 5) * 5;
-    if (!R.brk) {
-      const spread = R.work;
-      if (spread < R.spr[0] || spread > R.spr[1]) continue;
-      for (let s = startLo; s <= R.s[1]; s += 5) {
-        const e = s + spread;
-        if (e < R.e[0] || e > R.e[1]) continue;
-        cands.push({ type: t, s, e, b: null, work: R.work, is10: R.work === 600, startSlot: idx(s) });
-      }
-    } else {
-      const blLo = Math.max(30, Math.ceil(glob.brkLen[0] / 30) * 30);
-      const blHi = Math.min(240, glob.brkLen[1]);
-      for (let bl = blLo; bl <= blHi; bl += 30) {
-        const spread = R.work + bl;
-        if (spread < R.spr[0] || spread > R.spr[1]) continue;
-        const offLo = Math.ceil(glob.brkAfter[0] / 30) * 30;
-        const offHi = Math.min(glob.brkAfter[1], R.work);
-        for (let off = offLo; off <= offHi; off += 30) {
-          for (let s = startLo; s <= R.s[1]; s += 5) {
-            const e = s + spread;
-            if (e < R.e[0] || e > R.e[1]) continue;
-            cands.push({ type: t, s, e, b: [s + off, s + off + bl], work: R.work, is10: R.work === 600, startSlot: idx(s) });
-          }
-        }
-      }
-    }
-  }
+  const idx = slotIdx;
+  const cands = buildCandidates(rules, glob);
 
   const patterns = { 5: [], 4: [] };
   for (let st = 0; st < 7; st++) {
@@ -822,6 +828,132 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
   const mix = {};
   for (const o of packs) mix[o.type] = (mix[o.type] || 0) + 1;
   return { segs, paidHours, mix, used10, runDays, packages: packs.length, evaluated };
+}
+
+// "Same runs, better times": re-place every package of the loaded signup within the full
+// rule windows, keeping its shift number, run, classification, and days-off pattern fixed.
+// Times, break placement, and break length are the only free choices, so the output is
+// bid-recognizable and diffs cleanly against the baseline (segments keep their ids).
+// Day-variant packages consolidate to one uniform time across their days — consistent
+// report times by construction, same philosophy as generateBoard.
+function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT) {
+  let evaluated = 0;
+  let weekEv = 0;
+  for (const d of DAYS) weekEv += DEM[d].reduce((a, b) => a + b, 0);
+
+  // group baseline segments into packages by shift number
+  const byShift = new Map();
+  for (const sg of baseline) {
+    if (!byShift.has(sg.shift)) byShift.set(sg.shift, []);
+    byShift.get(sg.shift).push(sg);
+  }
+  const pkgs = [];
+  const passthrough = []; // types not defined in Rules — kept exactly as uploaded
+  for (const [shift, segs] of byShift) {
+    const first = segs[0];
+    const R = rules[first.type];
+    const days = [...new Set(segs.flatMap((sg) => sg.days))].sort((a, b) => DAYS.indexOf(a) - DAYS.indexOf(b));
+    if (!R) { passthrough.push(...segs); continue; }
+    pkgs.push({ shift, run: first.run, daysOff: first.daysOff, splitBase: first.splitType, id: first.id, type: first.type, days, work: R.work, origSegs: segs });
+  }
+  // larger work blocks place first (the generator's 10-hour-first logic, minus the forcing —
+  // the mix is given), then original shift order for determinism
+  pkgs.sort((a, b) => (b.work - a.work) || (a.shift - b.shift));
+
+  const sup = {}, starts = {};
+  for (const d of DAYS) {
+    sup[d] = includePT ? RAW.pt[d].slice() : new Array(N).fill(0);
+    starts[d] = new Array(N).fill(0);
+  }
+  const ptSlots = includePT ? DAYS.reduce((a, d) => a + RAW.pt[d].reduce((x, y) => x + y, 0), 0) : 0;
+  const idx = slotIdx;
+  const addSeg = (sg) => {
+    for (const d of sg.days) {
+      const a = idx(sg.s), z = idx(sg.e);
+      for (let i = a; i < z; i++) sup[d][i]++;
+      if (sg.b) for (let i = idx(sg.b[0]); i < idx(sg.b[1]); i++) sup[d][i]--;
+      starts[d][idx(sg.s)]++;
+    }
+  };
+  for (const sg of passthrough) addSeg(sg);
+
+  // target scaled to this board's actual work slots, not the generator's per-package average
+  const planned = ptSlots + pkgs.reduce((a, p) => a + (p.work / 5) * p.days.length, 0);
+  const target = {};
+  for (const d of DAYS) {
+    target[d] = [];
+    for (let i = 0; i < N; i++) target[d].push((DEM[d][i] / weekEv) * planned);
+  }
+
+  const cands = buildCandidates(rules, glob);
+  const maxPull = glob.maxPullout || 0;
+  const outSlots = Math.round((glob.deadheadOutMin || 0) / 5);
+  const inSlots = Math.round((glob.deadheadInMin || 0) / 5);
+
+  const placed = [];
+  let retimed = 0, kept = 0;
+  for (const pkg of pkgs) {
+    const PG = {}, PC = {};
+    for (const d of pkg.days) {
+      const [s0, s1] = spans[d];
+      const pg = new Array(N + 1).fill(0), pc = new Array(N + 1).fill(0);
+      for (let i = 0; i < N; i++) {
+        let tgt = target[d][i];
+        if (outSlots > 0) tgt = Math.max(tgt, target[d][Math.min(N - 1, i + outSlots)]);
+        if (inSlots > 0) tgt = Math.max(tgt, target[d][Math.max(0, i - inSlots)]);
+        let g = Math.max(0, Math.min(1, tgt - sup[d][i]));
+        const t = SLOT(i);
+        if (t >= s0 && t < s1 && sup[d][i] < minVeh) g += 0.5;
+        pg[i + 1] = pg[i] + g;
+        pc[i + 1] = pc[i] + (glob.maxFleet > 0 && sup[d][i] >= glob.maxFleet ? 1 : 0);
+      }
+      PG[d] = pg; PC[d] = pc;
+    }
+    let best = null, bestVal = -Infinity;
+    for (const c of cands) {
+      if (c.type !== pkg.type) continue;
+      evaluated++;
+      let total = 0, ok = true;
+      for (const d of pkg.days) {
+        if (maxPull > 0 && starts[d][c.startSlot] >= maxPull) { ok = false; break; }
+        const a = idx(c.s), z = idx(c.e);
+        let cap = PC[d][z] - PC[d][a];
+        let g = PG[d][z] - PG[d][a];
+        if (c.b) {
+          const b0 = idx(c.b[0]), b1 = idx(c.b[1]);
+          cap -= PC[d][b1] - PC[d][b0];
+          g -= PG[d][b1] - PG[d][b0];
+        }
+        if (cap > 0) { ok = false; break; } // would exceed the fleet cap somewhere it covers
+        total += g - starts[d][c.startSlot] * 0.15;
+      }
+      if (!ok) continue;
+      if (total > bestVal) { bestVal = total; best = c; }
+    }
+    let seg;
+    if (best) {
+      seg = {
+        id: pkg.id, shift: pkg.shift, run: pkg.run, type: pkg.type,
+        daysOff: pkg.daysOff, splitType: best.b ? "Split Break" : "Straight",
+        days: pkg.days, s: best.s, e: best.e, b: best.b ? [...best.b] : null,
+      };
+      retimed++;
+    } else {
+      // every candidate vetoed (stagger/fleet edge case) — keep the original times unchanged
+      seg = { ...pkg.origSegs[0], b: pkg.origSegs[0].b ? [...pkg.origSegs[0].b] : null, days: pkg.days };
+      kept++;
+    }
+    addSeg(seg);
+    placed.push(seg);
+  }
+
+  const segs = [...placed, ...passthrough.map((sg) => ({ ...sg, b: sg.b ? [...sg.b] : null, days: [...sg.days] }))]
+    .sort((a, b) => (a.shift - b.shift) || (a.id - b.id));
+  const mix = {};
+  for (const p of pkgs) mix[p.type] = (mix[p.type] || 0) + 1;
+  const passShifts = new Set(passthrough.map((s) => s.shift));
+  for (const sh of passShifts) { const t = byShift.get(sh)[0].type; mix[t] = (mix[t] || 0) + 1; }
+  return { segs, retimed, kept: kept + passShifts.size, evaluated, mix, packages: pkgs.length + passShifts.size };
 }
 
 function optimizeToConvergence(board0, engine0Args, rules, glob, maxIter = 25) {
@@ -1404,6 +1536,8 @@ export default function App() {
   const [buildN, setBuildN] = useState(100);
   const [buildResult, setBuildResult] = useState(null);
   const [buildBusy, setBuildBusy] = useState(false);
+  const [retimeResult, setRetimeResult] = useState(null);
+  const [retimeBusy, setRetimeBusy] = useState(false);
   const [followBaselinePattern, setFollowBaselinePattern] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
   const [refineBusy, setRefineBusy] = useState(false);
@@ -2656,7 +2790,7 @@ export default function App() {
             </div>
 
             {buildResult && (
-              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", maxWidth: 420 }}>
+              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", maxWidth: 420, marginBottom: 14 }}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "0 0 10px" }}>
                   <Stat label="Weekly coverage score" value={`${(buildResult.score * 100).toFixed(1)}%`} sub={`${(buildResult.evaluated || 0).toLocaleString()} placements evaluated`} tone={supplyTeal} />
                   <Stat label="Paid hours / week" value={buildResult.paidHours.toFixed(0)} tone={targetInk} />
@@ -2672,6 +2806,55 @@ export default function App() {
                     setTab("board");
                   }}>
                   Load this board into the Designer
+                </button>
+              </div>
+            )}
+
+            <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+                <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>
+                  Retime the loaded signup within the rules
+                </div>
+                <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink, opacity: retimeBusy || !baselineBoard.length ? 0.5 : 1 }}
+                  disabled={retimeBusy || !baselineBoard.length}
+                  onClick={() => {
+                    setRetimeBusy(true);
+                    setTimeout(() => {
+                      const r = retimeBoard(baselineBoard, rules, glob, DEM, spans, glob.minVeh, includePT);
+                      const score = computeEngine(DEM, buildSupply(r.segs), includePT, glob.minVeh, spans, glob.maxFleet).weekScore;
+                      const baselineScore = computeEngine(DEM, buildSupply(baselineBoard), includePT, glob.minVeh, spans, glob.maxFleet).weekScore;
+                      setRetimeResult({ ...r, score, baselineScore });
+                      setRetimeBusy(false);
+                    }, 30);
+                  }}>
+                  {retimeBusy ? "Retiming…" : "Retime signup"}
+                </button>
+              </div>
+              <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 6 }}>
+                "Same runs, better times": every run keeps its shift number, run number, classification, and days-off pattern — only report time, end time, and break placement are re-chosen, from the full rule windows in Rules, to maximize coverage. Because the runs stay recognizable, the result compares one-for-one against the loaded signup (ghost bars and the change list show every move). Starts from the loaded signup, not local edits. Runs whose times vary by day are consolidated to one consistent time across their days; runs whose type isn't defined in Rules pass through unchanged. Fleet cap, minimum vehicles, sign-in stagger, and pull-out/pull-in lead all steer every placement.
+              </div>
+            </div>
+
+            {retimeResult && (
+              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", maxWidth: 460 }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "0 0 10px" }}>
+                  <Stat label="Weekly coverage score"
+                    value={`${(retimeResult.baselineScore * 100).toFixed(1)}% → ${(retimeResult.score * 100).toFixed(1)}%`}
+                    sub={`${retimeResult.score >= retimeResult.baselineScore ? "+" : ""}${((retimeResult.score - retimeResult.baselineScore) * 100).toFixed(1)} vs loaded signup`}
+                    tone={retimeResult.score >= retimeResult.baselineScore ? supplyTeal : gapRed} />
+                  <Stat label="Runs retimed" value={retimeResult.retimed} sub={`${retimeResult.kept} kept as-is`} tone={targetInk} />
+                  <Stat label="Placements evaluated" value={(retimeResult.evaluated || 0).toLocaleString()} tone={demandAmber} />
+                </div>
+                <div style={{ fontSize: 12.5, color: "#41525C" }}>
+                  Mix (unchanged by construction): {Object.entries(retimeResult.mix).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${t} ${n}`).join(" · ")}
+                </div>
+                <button style={{ ...nudgeBtn, marginTop: 10, background: supplyTeal, color: "#fff", borderColor: supplyTeal }}
+                  onClick={() => {
+                    mutate(() => retimeResult.segs.map(cloneSeg));
+                    setSelId(null);
+                    setTab("board");
+                  }}>
+                  Load the retimed signup into the Designer
                 </button>
               </div>
             )}
