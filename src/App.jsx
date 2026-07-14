@@ -905,6 +905,11 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT, opts 
   const rng = opts.rng || null;
   const noise = rng && opts.noise > 0 ? opts.noise : 0;
   const subset = opts.subsetShifts || null;
+  // stability preference: each candidate pays a small penalty per hour its report time
+  // moves from the run's current time, so near-equal options resolve to "keep the run
+  // that's already there" instead of score-neutral swaps between runs — while genuine
+  // coverage gains (typically much larger) still override it and move the closest run.
+  const stability = opts.stability != null ? opts.stability : 3;
   let evaluated = 0;
   const gammaT = demandGamma(glob);
   const WD = {};
@@ -925,7 +930,7 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT, opts 
     const R = rules[first.type];
     const days = [...new Set(segs.flatMap((sg) => sg.days))].sort((a, b) => DAYS.indexOf(a) - DAYS.indexOf(b));
     if (!R || (subset && !subset.has(shift))) { passthrough.push(...segs); continue; }
-    pkgs.push({ shift, run: first.run, daysOff: first.daysOff, splitBase: first.splitType, id: first.id, type: first.type, days, work: R.work, origSegs: segs });
+    pkgs.push({ shift, run: first.run, daysOff: first.daysOff, splitBase: first.splitType, id: first.id, type: first.type, days, work: R.work, origS: first.s, origSegs: segs });
   }
   // larger work blocks place first (the generator's 10-hour-first logic, minus the forcing —
   // the mix is given), then original shift order for determinism
@@ -1001,6 +1006,7 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT, opts 
       }
       if (!ok) continue;
       if (noise) total += (rng() - 0.5) * noise;
+      if (stability) total -= (Math.abs(c.s - pkg.origS) / 60) * stability;
       if (total > bestVal) { bestVal = total; best = c; }
     }
     let seg;
@@ -3125,7 +3131,7 @@ export default function App() {
                 </button>
               </div>
               <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 6 }}>
-                "Same runs, better times": every run keeps its shift number, run number, classification, and days-off pattern — only report time, end time, and break placement are re-chosen, from the full rule windows in Rules, to maximize coverage. Because the runs stay recognizable, the result compares one-for-one against the loaded signup (ghost bars and the change list show every move). Starts from the loaded signup, not local edits. Runs whose times vary by day are consolidated to one consistent time across their days; runs whose type isn't defined in Rules pass through unchanged. Fleet cap, minimum vehicles, sign-in stagger, and pull-out/pull-in lead all steer every placement.
+                "Same runs, better times": every run keeps its shift number, run number, classification, and days-off pattern — only report time, end time, and break placement are re-chosen, from the full rule windows in Rules, to maximize coverage. Placement prefers keeping each run near its current report time: near-equal options resolve to the run already at that hour instead of swapping two runs’ times, and only genuine coverage gains move a run far. Because the runs stay recognizable, the result compares one-for-one against the loaded signup (ghost bars and the change list show every move). Starts from the loaded signup, not local edits. Runs whose times vary by day are consolidated to one consistent time across their days; runs whose type isn't defined in Rules pass through unchanged. Fleet cap, minimum vehicles, sign-in stagger, and pull-out/pull-in lead all steer every placement.
               </div>
             </div>
 
