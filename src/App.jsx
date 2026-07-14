@@ -2243,12 +2243,15 @@ export default function App() {
     return { perDay, overall: totalVehHours > 0 ? totalTrips / totalVehHours : null };
   }, [uploadedDem, baselineBoard, signupSource, glob.demandShare]);
 
+  const [ganttSort, setGanttSort] = useState("run"); // "run" | "time" | "type"
   const daySegs = useMemo(() => {
     const list = board.filter((sg) => sg.days.includes(day));
-    list.sort((a, b) =>
+    if (ganttSort === "time") list.sort((a, b) => (a.s - b.s) || (a.shift - b.shift));
+    else if (ganttSort === "type") list.sort((a, b) =>
       (TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type)) || (a.s - b.s) || (a.shift - b.shift));
+    else list.sort((a, b) => (a.shift - b.shift) || (a.s - b.s));
     return list;
-  }, [board, day]);
+  }, [board, day, ganttSort]);
 
   const selSeg = selId != null ? board.find((s) => s.id === selId) : null;
   const selShift = selSeg ? selSeg.shift : null;
@@ -3617,11 +3620,19 @@ export default function App() {
 
             {/* gantt */}
             <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 10px", marginBottom: 12 }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600 }}>
                   {day} board — {ganttSegs.length} working segment{ganttSegs.length === 1 ? "" : "s"}
                   {selShift != null && <span style={{ fontSize: 12, fontWeight: 400, color: "#5B6B75" }}> (showing shift {selShift} only — {daySegs.length} total this day)</span>}
                 </div>
+                <label style={{ fontSize: 12, color: "#41525C", display: "flex", alignItems: "center", gap: 6 }}>
+                  Sort
+                  <select value={ganttSort} onChange={(e) => setGanttSort(e.target.value)} style={{ fontSize: 12 }}>
+                    <option value="run">Run number</option>
+                    <option value="time">Start time</option>
+                    <option value="type">Type, then time</option>
+                  </select>
+                </label>
                 <div style={{ marginLeft: "auto", fontSize: 11, color: "#5B6B75" }}>{fmt(T0)} — {fmt(T1)}</div>
               </div>
               <div style={{ display: "flex", gap: 6, margin: "6px 0 2px" }}>
