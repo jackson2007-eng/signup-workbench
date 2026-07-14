@@ -2148,7 +2148,13 @@ export default function App() {
         .kpi { display:flex; flex-direction:column; }
         .kpi .l { font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; opacity:.7; }
         .kpi .v { font-family:'Barlow Condensed',sans-serif; font-size:20px; font-weight:700; line-height:1.1; }
-        @media (max-width:640px){ .hdr-title{font-size:24px !important;} .glabel{width:84px;} .phase-row{flex-direction:column;} }
+        @media (max-width:640px){
+          .hdr-title{font-size:24px !important;} .glabel{width:84px;} .phase-row{flex-direction:column;}
+          /* phones: nothing stays pinned — the sticky stack (package banner + paddles +
+             KPI strip + shift editor) would consume nearly the whole viewport, hiding the
+             gantt and coverage chart the user is actually working on */
+          .envlock, .kpistrip, .seleditor { position: static !important; }
+        }
       `}</style>
 
       <div style={{ maxWidth: 1240, margin: "0 auto", padding: "16px 12px 40px" }}>
@@ -2289,8 +2295,10 @@ export default function App() {
           </>
         )}
 
-        {/* envelope + day paddles, locked together while scrolling */}
-        <div style={{ position: "sticky", top: 0, zIndex: 10, background: paper, marginBottom: 12 }}>
+        {/* envelope + day paddles, locked together while scrolling (desktop only — on
+            phones the pinned stack would swallow most of the viewport, so .envlock/.seleditor/
+            .kpistrip all fall back to normal scrolling under the 640px breakpoint) */}
+        <div className="envlock" style={{ position: "sticky", top: 0, zIndex: 10, background: paper, marginBottom: 12 }}>
           <div style={{ border: "1px solid #E2E8EA" }}>
             <div style={{ background: ink, color: "#fff", padding: "10px 14px" }}>
               <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
@@ -2912,7 +2920,7 @@ export default function App() {
 
             {/* selected shift editor */}
             {sel ? (
-              <div style={{ background: card, border: `1px solid ${selIssues.length ? gapRed : "#E2E8EA"}`, padding: "12px 14px", marginBottom: 12, position: "sticky", top: ENVELOPE_H + KPI_H, zIndex: 4 }}>
+              <div className="seleditor" style={{ background: card, border: `1px solid ${selIssues.length ? gapRed : "#E2E8EA"}`, padding: "12px 14px", marginBottom: 12, position: "sticky", top: ENVELOPE_H + KPI_H, zIndex: 4 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700 }}>
                     Shift {sel.shift} · Run {sel.run}
@@ -2979,7 +2987,7 @@ export default function App() {
                 <WeekStrip segs={selShiftSegs} day={day} onPick={setDay} />
               </div>
             ) : selShift != null ? (
-              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 12, position: "sticky", top: ENVELOPE_H + KPI_H, zIndex: 4 }}>
+              <div className="seleditor" style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 12, position: "sticky", top: ENVELOPE_H + KPI_H, zIndex: 4 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700 }}>
                     Shift {selShift}
@@ -3117,7 +3125,7 @@ export default function App() {
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} productivity={productivity} demandShare={glob.demandShare} showProductivity={showProductivity} height={280}
                 selBand={sel ? [sel.s, sel.e] : null} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
-                Dashed lines mark the selected shift. The KPI strip and shift editor stay pinned while you scroll.
+                Dashed lines mark the selected shift. On desktop, the KPI strip and shift editor stay pinned while you scroll; on phones everything scrolls freely so the board and this chart get the full screen.
               </div>
             </div>
           </>
