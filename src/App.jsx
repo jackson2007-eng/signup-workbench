@@ -3239,7 +3239,7 @@ export default function App() {
                   setGlob({ ...JSON.parse(JSON.stringify(DEFAULT_GLOBAL)), avgCycleTime: DEFAULT_AVG_CYCLE_TIME, demandShare: DEFAULT_DEMAND_SHARE });
                   setSpans(JSON.parse(JSON.stringify(DEFAULT_SPANS)));
                 }}>
-                Reset to CA defaults
+                Reset to defaults
               </button>
             </div>
 
