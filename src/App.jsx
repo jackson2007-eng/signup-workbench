@@ -82,17 +82,18 @@ const DEFAULT_GLOBAL = JSON.parse(JSON.stringify(RAW.global));
 // "Average trip cycle time" (pickup to dropoff to next pickup, including deadhead) is the
 // user-facing input — more intuitive to estimate from real experience than an abstract
 // trips/vehicle-hour ratio. Productivity is derived from it wherever needed (60 / cycle time),
-// never stored directly, so there's a single source of truth.
-const DEFAULT_AVG_CYCLE_TIME = Math.round((60 / (DEFAULT_GLOBAL.productivity || 1.75)) * 10) / 10;
+// never stored directly, so there's a single source of truth. (Old project files without
+// this field still migrate from their saved productivity value in loadProject.)
+const DEFAULT_AVG_CYCLE_TIME = 31;
 // Share of total demand this signup's fleet serves (%). Multi-provider systems upload
 // system-wide demand but sign up only their own vehicles — absolute displays (suggested
 // vehicles, productivity calibration) must scale by this or they describe a fleet that
 // doesn't exist. Coverage scoring is scale-free and ignores it entirely.
 const DEFAULT_DEMAND_SHARE = 50;
 const DEFAULT_SPANS = {
-  Sunday: [360, 1470], Saturday: [360, 1470],
-  Monday: [315, 1470], Tuesday: [315, 1470], Wednesday: [315, 1470],
-  Thursday: [315, 1470], Friday: [315, 1470],
+  Sunday: [360, 1440], Saturday: [360, 1485],
+  Monday: [315, 1440], Tuesday: [315, 1440], Wednesday: [315, 1440],
+  Thursday: [315, 1440], Friday: [315, 1485],
 };
 const parseHM = (str) => {
   const m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(str || "");
