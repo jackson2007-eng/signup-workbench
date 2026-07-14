@@ -2435,6 +2435,27 @@ export default function App() {
 
             {showDiff && changedCount > 0 && (
               <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 12, fontSize: 12.5 }}>
+                {boardDiff.modified.length > 0 && (() => {
+                  const startDeltas = boardDiff.modified.filter(({ seg, orig }) => seg.s !== orig.s).map(({ seg, orig }) => Math.abs(seg.s - orig.s));
+                  const brkChanged = boardDiff.modified.filter(({ seg, orig }) => JSON.stringify(seg.b) !== JSON.stringify(orig.b)).length;
+                  const retyped = boardDiff.modified.filter(({ seg, orig }) => seg.type !== orig.type).length;
+                  const daysChanged = boardDiff.modified.filter(({ seg, orig }) => seg.days.join() !== orig.days.join()).length;
+                  const avg = startDeltas.length ? Math.round(startDeltas.reduce((a, b) => a + b, 0) / startDeltas.length) : 0;
+                  const max = startDeltas.length ? Math.max(...startDeltas) : 0;
+                  return (
+                    <div style={{ background: "#F7FAF9", border: "1px solid #DCE7E4", padding: "8px 12px", marginBottom: 10, fontSize: 12.5 }}>
+                      <b>Summary vs loaded signup:</b>{" "}
+                      {startDeltas.length > 0 && `${startDeltas.length} report-time change${startDeltas.length === 1 ? "" : "s"} (avg ${avg} min, largest ${max} min)`}
+                      {startDeltas.length > 0 && (brkChanged > 0 || retyped > 0 || daysChanged > 0) && " · "}
+                      {brkChanged > 0 && `${brkChanged} break change${brkChanged === 1 ? "" : "s"}`}
+                      {brkChanged > 0 && (retyped > 0 || daysChanged > 0) && " · "}
+                      {retyped > 0 && `${retyped} retyped`}
+                      {retyped > 0 && daysChanged > 0 && " · "}
+                      {daysChanged > 0 && `${daysChanged} day-pattern change${daysChanged === 1 ? "" : "s"}`}
+                      {startDeltas.length === 0 && brkChanged === 0 && retyped === 0 && daysChanged === 0 && "end-time-only adjustments"}
+                    </div>
+                  );
+                })()}
                 {boardDiff.added.length > 0 && (
                   <div style={{ marginBottom: 8 }}>
                     <div style={{ fontWeight: 700, color: supplyTeal, marginBottom: 4 }}>Added ({boardDiff.added.length})</div>
@@ -2458,11 +2479,27 @@ export default function App() {
                 {boardDiff.modified.length > 0 && (
                   <div>
                     <div style={{ fontWeight: 700, color: demandAmber, marginBottom: 4 }}>Modified ({boardDiff.modified.length})</div>
-                    {boardDiff.modified.map(({ seg, orig }) => (
-                      <div key={seg.id} style={{ cursor: "pointer", padding: "2px 0" }} onClick={() => { setSelId(seg.id); setShowDiff(false); }}>
-                        Shift {seg.shift}·{seg.run} {seg.type} — {fmt(orig.s)}–{fmt(orig.e)}{orig.b ? ` (break ${fmt(orig.b[0])}–${fmt(orig.b[1])})` : ""} → {fmt(seg.s)}–{fmt(seg.e)}{seg.b ? ` (break ${fmt(seg.b[0])}–${fmt(seg.b[1])})` : ""}
-                      </div>
-                    ))}
+                    {boardDiff.modified.map(({ seg, orig }) => {
+                      const sgn = (v) => (v > 0 ? `+${v}` : `${v}`);
+                      const parts = [];
+                      if (seg.s !== orig.s) parts.push(`start ${sgn(seg.s - orig.s)}m`);
+                      if (seg.e !== orig.e) parts.push(`end ${sgn(seg.e - orig.e)}m`);
+                      if (!orig.b && seg.b) parts.push("break added");
+                      else if (orig.b && !seg.b) parts.push("break removed");
+                      else if (orig.b && seg.b) {
+                        if (seg.b[0] !== orig.b[0]) parts.push(`break start ${sgn(seg.b[0] - orig.b[0])}m`);
+                        const dLen = (seg.b[1] - seg.b[0]) - (orig.b[1] - orig.b[0]);
+                        if (dLen !== 0) parts.push(`break ${sgn(dLen)}m ${dLen > 0 ? "longer" : "shorter"}`);
+                      }
+                      if (seg.type !== orig.type) parts.push(`type ${orig.type}→${seg.type}`);
+                      if (seg.days.join() !== orig.days.join()) parts.push("days changed");
+                      return (
+                        <div key={seg.id} style={{ cursor: "pointer", padding: "2px 0" }} onClick={() => { setSelId(seg.id); setShowDiff(false); }}>
+                          Shift {seg.shift}·{seg.run} {seg.type} — {fmt(orig.s)}–{fmt(orig.e)}{orig.b ? ` (break ${fmt(orig.b[0])}–${fmt(orig.b[1])})` : ""} → {fmt(seg.s)}–{fmt(seg.e)}{seg.b ? ` (break ${fmt(seg.b[0])}–${fmt(seg.b[1])})` : ""}
+                          {parts.length > 0 && <span style={{ color: demandAmber, fontWeight: 600 }}>  [{parts.join(" · ")}]</span>}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
