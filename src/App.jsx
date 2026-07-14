@@ -1406,13 +1406,18 @@ function Sketcher({ raw, setRaw, trips }) {
 }
 
 function ActualCurve({ ev, label }) {
-  const W = 940, H = 260, PADL = 34, PADB = 22;
+  const W = 940, H = 260, PADL = 38, PADB = 22;
   const maxV = Math.max(1, Math.max(...ev) * 1.15);
   const x = (i) => PADL + (i / (N - 1)) * (W - PADL - 8);
   const y = (v) => (H - PADB) - (Math.min(v, maxV) / maxV) * (H - PADB - 8);
   const path = ev.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
   const area = `${path} L${x(N - 1).toFixed(1)},${y(0)} L${x(0).toFixed(1)},${y(0)} Z`;
   const peakI = ev.indexOf(Math.max(...ev));
+  const totalTrips = Math.round(ev.reduce((a, b) => a + b, 0) / 2);
+  // gridline labels read in trips per 5-minute slot (events ÷ 2 — each trip is one
+  // pickup + one dropoff), matching how schedulers talk about volume
+  const tripsVal = (v) => { const t = v / 2; return t >= 20 ? Math.round(t).toString() : t.toFixed(1); };
+  const peakLeft = peakI > N * 0.75; // flip the peak label when the dot is near the right edge
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: "#FBFCFC", border: "1px solid #E2E8EA", borderRadius: 2 }}>
       {[6, 9, 12, 15, 18, 21, 24].map((h) => {
@@ -1426,12 +1431,19 @@ function ActualCurve({ ev, label }) {
         );
       })}
       {[25, 50, 75, 100].map((pct) => (
-        <line key={pct} x1={PADL} y1={y(maxV * pct / 100)} x2={W - 8} y2={y(maxV * pct / 100)} stroke="#F0F4F5" />
+        <g key={pct}>
+          <line x1={PADL} y1={y(maxV * pct / 100)} x2={W - 8} y2={y(maxV * pct / 100)} stroke="#F0F4F5" />
+          <text x={PADL - 4} y={y(maxV * pct / 100) + 3.5} fontSize={10} fill="#8899A3" textAnchor="end">{tripsVal(maxV * pct / 100)}</text>
+        </g>
       ))}
       <path d={area} fill={demandAmber} fillOpacity={0.14} />
       <path d={path} fill="none" stroke={demandAmber} strokeWidth={2.5} strokeLinejoin="round" />
       <circle cx={x(peakI)} cy={y(ev[peakI])} r={5} fill="#C0392B" stroke="#fff" strokeWidth={1.2} />
-      <text x={PADL} y={16} fontSize={11} fill="#5B6B75">{label}</text>
+      <text x={x(peakI) + (peakLeft ? -9 : 9)} y={y(ev[peakI]) - 6} fontSize={11} fontWeight={700} fill="#C0392B" textAnchor={peakLeft ? "end" : "start"}>
+        {tripsVal(ev[peakI])} trips / 5 min
+      </text>
+      <text x={PADL} y={16} fontSize={11} fill="#5B6B75">{label} · axis in trips per 5-minute slot</text>
+      <text x={W - 8} y={16} fontSize={13} fontWeight={700} fill="#182430" textAnchor="end">{totalTrips.toLocaleString()} passenger trips today</text>
     </svg>
   );
 }
@@ -2847,7 +2859,7 @@ export default function App() {
                     Scoring against {DEM_SOURCE_LABEL[demSource].toLowerCase()}
                   </span>
                 </div>
-                <ActualCurve ev={DEM[day]} label="actual demand — events per 5-minute slot" />
+                <ActualCurve ev={DEM[day]} label="actual demand" />
                 {(() => {
                   const ev = DEM[day];
                   const tot = ev.reduce((a, b) => a + b, 0);
