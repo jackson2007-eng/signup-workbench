@@ -81,6 +81,11 @@ const DEFAULT_GLOBAL = JSON.parse(JSON.stringify(RAW.global));
 // trips/vehicle-hour ratio. Productivity is derived from it wherever needed (60 / cycle time),
 // never stored directly, so there's a single source of truth.
 const DEFAULT_AVG_CYCLE_TIME = Math.round((60 / (DEFAULT_GLOBAL.productivity || 1.75)) * 10) / 10;
+// Share of total demand this signup's fleet serves (%). Multi-provider systems upload
+// system-wide demand but sign up only their own vehicles — absolute displays (suggested
+// vehicles, productivity calibration) must scale by this or they describe a fleet that
+// doesn't exist. Coverage scoring is scale-free and ignores it entirely.
+const DEFAULT_DEMAND_SHARE = 50;
 const DEFAULT_SPANS = {
   Sunday: [360, 1470], Saturday: [360, 1470],
   Monday: [315, 1470], Tuesday: [315, 1470], Wednesday: [315, 1470],
@@ -1281,7 +1286,7 @@ function ActualCurve({ ev, label }) {
 }
 
 /* ---------- coverage chart ---------- */
-function CoverageChart({ P, day, minVeh, fleetCap, showBookout, productivity, showProductivity, height = 320, selBand }) {
+function CoverageChart({ P, day, minVeh, fleetCap, showBookout, productivity, demandShare = 100, showProductivity, height = 320, selBand }) {
   const data = useMemo(() => {
     const bk = RAW.bookout[day];
     const bkMap = {};
@@ -1301,6 +1306,13 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, productivity, sh
     const rows = [];
     for (let i = 0; i < N; i++) {
       const t = SLOT(i), tgt = P.target[i];
+      // trips/hr (smoothed) is the actual quantity "Suggested vehicles" is derived from —
+      // events are pickup+dropoff pairs (÷2 for trips) in a single 5-minute slot (×12 for
+      // an hourly rate). The demand curve is system-wide; this signup's fleet only serves
+      // demandShare% of it, so the vehicle count scales by that share. The tooltip shows
+      // both rates so what's displayed always matches what's driving the vehicle count.
+      const tripsPerHr = (smoothedEv(i) * 12) / 2;
+      const shareTripsPerHr = tripsPerHr * (demandShare / 100);
       rows.push({
         time: fmt(t),
         target: Math.round(tgt * 10) / 10,
@@ -1308,12 +1320,13 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, productivity, sh
         covered: Math.round(Math.min(tgt, P.sup[i]) * 10) / 10,
         gap: tgt - P.sup[i] > 0.05 ? Math.round(tgt * 10) / 10 : null,
         bookout: bkMap[t] ?? null,
-        sugVeh: productivity > 0 ? Math.round((smoothedEv(i) * 12 / (2 * productivity)) * 10) / 10 : null,
-        ev: P.ev[i],
+        sugVeh: productivity > 0 ? Math.round((shareTripsPerHr / productivity) * 10) / 10 : null,
+        tripsPerHr,
+        shareTripsPerHr,
       });
     }
     return rows;
-  }, [P, day, productivity]);
+  }, [P, day, productivity, demandShare]);
   return (
     <ResponsiveContainer width="100%" height={height}>
       <ComposedChart data={data} margin={{ top: 5, right: 14, left: -8, bottom: 0 }}>
@@ -1324,7 +1337,10 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, productivity, sh
           formatter={(v, name) => [v, { target: "Demand-aligned target", sup: "Supply", covered: "Aligned", bookout: "Observed (sample)", gap: "Target (underweighted)", sugVeh: "Suggested vehicles (productivity)" }[name] || name]}
           labelFormatter={(l, pl) => {
             const r = pl && pl[0] && pl[0].payload;
-            return r ? `${l} · ${r.ev.toFixed(1)} events/hr` : l;
+            if (!r) return l;
+            const shareTxt = demandShare < 100 ? ` · your share ~${r.shareTripsPerHr.toFixed(1)}` : "";
+            const sugTxt = r.sugVeh != null ? ` · ${r.sugVeh.toFixed(1)} suggested` : "";
+            return `${l} · ${r.tripsPerHr.toFixed(1)} trips/hr (smoothed)${shareTxt}${sugTxt}`;
           }}
           contentStyle={{ fontSize: 12, border: "1px solid #D7DFE2" }} />
         <Legend wrapperStyle={{ fontSize: 12 }} />
@@ -1360,7 +1376,7 @@ export default function App() {
   const [signupUploadResult, setSignupUploadResult] = useState(null);
   const signupFileRef = useRef(null);
   const [rules, setRules] = useState(() => JSON.parse(JSON.stringify(DEFAULT_RULES)));
-  const [glob, setGlob] = useState(() => ({ ...JSON.parse(JSON.stringify(DEFAULT_GLOBAL)), avgCycleTime: DEFAULT_AVG_CYCLE_TIME }));
+  const [glob, setGlob] = useState(() => ({ ...JSON.parse(JSON.stringify(DEFAULT_GLOBAL)), avgCycleTime: DEFAULT_AVG_CYCLE_TIME, demandShare: DEFAULT_DEMAND_SHARE }));
   const [spans, setSpans] = useState(() => JSON.parse(JSON.stringify(DEFAULT_SPANS)));
   const [newType, setNewType] = useState("");
   const [demSource, setDemSource] = useState("imported"); // "imported" | "sketched" | "uploaded"
@@ -1638,6 +1654,7 @@ export default function App() {
           if (g.avgCycleTime == null) {
             g.avgCycleTime = Math.round((60 / (g.productivity || 1.75)) * 10) / 10;
           }
+          if (g.demandShare == null) g.demandShare = DEFAULT_DEMAND_SHARE;
           setGlob(g);
         }
         if (p.spans) setSpans(p.spans);
@@ -1683,22 +1700,43 @@ export default function App() {
     }
     const dem = {};
     let paddedRows = 0, coercedCells = 0, extraRowsIgnored = 0;
+    const suspiciousDays = [];
     for (const d of DAYS) {
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[d], { header: 1 });
       const data = rows.slice(1);
       const arr = new Array(N).fill(0);
+      const keys = new Array(N).fill("0|0");
       for (let i = 0; i < N; i++) {
         const row = data[i];
         if (!row) { paddedRows++; continue; }
         const pu = Number(row[1]), doo = Number(row[2]);
         if (!Number.isFinite(pu)) coercedCells++;
         if (!Number.isFinite(doo)) coercedCells++;
-        arr[i] = (Number.isFinite(pu) ? pu : 0) + (Number.isFinite(doo) ? doo : 0);
+        const puN = Number.isFinite(pu) ? pu : 0, dooN = Number.isFinite(doo) ? doo : 0;
+        arr[i] = puN + dooN;
+        keys[i] = puN + "|" + dooN;
       }
       if (data.length > N) extraRowsIgnored += data.length - N;
       dem[d] = arr;
+
+      // A run of 6+ identical consecutive nonzero slots covering most of the day's active
+      // time is the signature of coarser-granularity totals (e.g. half-hourly) pasted into
+      // every 5-minute slot instead of split across them — flag it rather than silently
+      // trusting numbers that would badly inflate anything derived from them.
+      let activeSlots = 0, suspiciousSlots = 0, i2 = 0;
+      while (i2 < N) {
+        let j = i2;
+        while (j < N && keys[j] === keys[i2]) j++;
+        const len = j - i2;
+        if (keys[i2] !== "0|0") {
+          activeSlots += len;
+          if (len >= 6) suspiciousSlots += len;
+        }
+        i2 = j;
+      }
+      if (activeSlots > 0 && suspiciousSlots / activeSlots >= 0.5) suspiciousDays.push(d);
     }
-    return { ok: true, dem, summary: { paddedRows, coercedCells, extraRowsIgnored } };
+    return { ok: true, dem, summary: { paddedRows, coercedCells, extraRowsIgnored, suspiciousDays } };
   };
 
   const uploadDemand = (file) => {
@@ -1823,6 +1861,29 @@ export default function App() {
   }, [board, rules]);
   const flagCount = useMemo(() => board.filter((sg) => validateSeg(sg, rules, glob).length > 0).length, [board, rules, glob]);
   const productivity = glob.avgCycleTime > 0 ? 60 / glob.avgCycleTime : 0;
+
+  // Derives an empirical trips/vehicle-hour figure from the user's own real demand + real
+  // signup, instead of trusting one assumed universal constant — only available once both
+  // sides are real uploads. Uploaded demand is system-wide, so trips scale by demandShare
+  // before dividing by this signup's vehicle-hours — otherwise the result describes a fleet
+  // serving work it doesn't do. A wildly high result (implying an implausibly short cycle
+  // time) is usually the same data-quality issue parseDemandWorkbook's suspiciousDays flag
+  // catches, so callers should check that before offering a one-click "use this" suggestion.
+  const empiricalProductivity = useMemo(() => {
+    if (!uploadedDem || signupSource !== "uploaded") return null;
+    const share = (glob.demandShare > 0 ? glob.demandShare : 100) / 100;
+    const cov = buildSupply(baselineBoard);
+    let totalTrips = 0, totalVehHours = 0;
+    const perDay = {};
+    for (const d of DAYS) {
+      const trips = (uploadedDem[d].reduce((a, b) => a + b, 0) / 2) * share;
+      const vehHours = (cov[d].reduce((a, b) => a + b, 0) * 5) / 60;
+      perDay[d] = vehHours > 0 ? trips / vehHours : null;
+      totalTrips += trips;
+      totalVehHours += vehHours;
+    }
+    return { perDay, overall: totalVehHours > 0 ? totalTrips / totalVehHours : null };
+  }, [uploadedDem, baselineBoard, signupSource, glob.demandShare]);
 
   const daySegs = useMemo(() => {
     const list = board.filter((sg) => sg.days.includes(day));
@@ -2304,6 +2365,17 @@ export default function App() {
                     : " All 7 sheets matched the template exactly."}
                 </div>
               )}
+              {demUploadResult && demUploadResult.suspiciousDays && demUploadResult.suspiciousDays.length > 0 && (
+                <div style={{ background: "#FDF3E7", border: `1px solid ${demandAmber}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
+                  <b>Possible data-entry issue on {demUploadResult.suspiciousDays.join(", ")}:</b> most of the active 5-minute
+                  slots on {demUploadResult.suspiciousDays.length > 1 ? "these days" : "this day"} repeat the same pickup/dropoff
+                  values in runs of 6 or more — the usual sign that coarser totals (e.g. half-hourly) were pasted into every
+                  5-minute row instead of split across them. That would inflate trip counts and anything derived from them
+                  (like Suggested vehicles on Coverage) by roughly the run length. This doesn't block anything — your uploaded
+                  numbers are used exactly as-is — but if this wasn't intentional, re-check the source file before relying on
+                  totals derived from it.
+                </div>
+              )}
             </div>
 
             {demSource !== "sketched" && (
@@ -2330,7 +2402,8 @@ export default function App() {
                   }
                   return (
                     <div style={{ fontSize: 12.5, color: "#41525C", marginTop: 8 }}>
-                      Peak {fmt(SLOT(pkI))} · {tot > 0 ? ((am / tot) * 100).toFixed(0) : 0}% of demand before noon · {Math.round(tot / 2).toLocaleString()} implied trips · {day}
+                      Peak {fmt(SLOT(pkI))} · {tot > 0 ? ((am / tot) * 100).toFixed(0) : 0}% of demand before noon · {Math.round(tot / 2).toLocaleString()} implied trips
+                      {glob.demandShare < 100 ? ` (all providers; this signup ≈ ${Math.round((tot / 2) * (glob.demandShare / 100)).toLocaleString()} at its ${glob.demandShare}% share)` : ""} · {day}
                     </div>
                   );
                 })()}
@@ -2493,7 +2566,8 @@ export default function App() {
               </summary>
               <div style={{ marginTop: 8, lineHeight: 1.55, color: "#33434D" }}>
                 <b>Coverage score</b> answers one question: of all the trip demand in the period, what share happens while your service hours are proportionally in place to serve it? 100% would mean your hours perfectly trace the demand pattern — impossible in practice, since shifts come in fixed lengths with rules. Use the score to compare boards: higher means hours better matched to demand.<br /><br />
-                On each day tile, <b>demand</b> is that day's share of the week's trips, and <b>cov</b> is that day's coverage score. In the chart, the dark line is the <b>demand-aligned target</b> — your own hours redrawn to follow demand exactly. <b>Red</b> = you're lighter than demand suggests at that time. <b>Teal above the line</b> = heavier than demand suggests (those hours earn no score). <b>Misplaced hours</b> totals the hours sitting in the heavy zones.
+                On each day tile, <b>demand</b> is that day's share of the week's trips, and <b>cov</b> is that day's coverage score. In the chart, the dark line is the <b>demand-aligned target</b> — your own hours redrawn to follow demand exactly. <b>Red</b> = you're lighter than demand suggests at that time. <b>Teal above the line</b> = heavier than demand suggests (those hours earn no score). <b>Misplaced hours</b> totals the hours sitting in the heavy zones.<br /><br />
+                <b>Suggested vehicles</b> (optional overlay) is a different kind of number: it estimates how many vehicles a single instant of demand would need if the fleet were sized for that exact minute alone (trips/hour × this signup's demand share ÷ your average trip cycle time, both set in Rules). Treat it as a theoretical peak-instant floor, not a fleet prediction — a real roster covers the day with overlapping shifts rather than sizing to one worst instant, so your actual peak vehicle count in service will typically run below this line. It's a visual reference only and never affects the coverage score or generation.
               </div>
             </details>
 
@@ -2548,7 +2622,7 @@ export default function App() {
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
                 {day} — service hours vs demand-aligned target
               </div>
-              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} productivity={productivity} showProductivity={showProductivity} height={340} />
+              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} productivity={productivity} demandShare={glob.demandShare} showProductivity={showProductivity} height={340} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
                 The dark line shows where {day}'s {P.supVH.toFixed(0)} service hours would sit if they exactly followed the demand pattern. Red = times you're lighter than demand suggests; teal above the line = heavier.
               </div>
@@ -2920,7 +2994,7 @@ export default function App() {
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
                 Live {day} coverage
               </div>
-              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} productivity={productivity} showProductivity={showProductivity} height={280}
+              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} productivity={productivity} demandShare={glob.demandShare} showProductivity={showProductivity} height={280}
                 selBand={sel ? [sel.s, sel.e] : null} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
                 Dashed lines mark the selected shift. The KPI strip and shift editor stay pinned while you scroll.
@@ -3162,7 +3236,7 @@ export default function App() {
               <button style={{ ...nudgeBtn, marginLeft: "auto", borderColor: demandAmber }}
                 onClick={() => {
                   setRules(JSON.parse(JSON.stringify(DEFAULT_RULES)));
-                  setGlob({ ...JSON.parse(JSON.stringify(DEFAULT_GLOBAL)), avgCycleTime: DEFAULT_AVG_CYCLE_TIME });
+                  setGlob({ ...JSON.parse(JSON.stringify(DEFAULT_GLOBAL)), avgCycleTime: DEFAULT_AVG_CYCLE_TIME, demandShare: DEFAULT_DEMAND_SHARE });
                   setSpans(JSON.parse(JSON.stringify(DEFAULT_SPANS)));
                 }}>
                 Reset to CA defaults
@@ -3327,10 +3401,32 @@ export default function App() {
                   <NumField value={glob.deadheadInMin} step={5} onCommit={(v) => setGlob((g) => ({ ...g, deadheadInMin: Math.round(v) }))} />
                   <span>Average trip cycle time (min)</span>
                   <NumField value={glob.avgCycleTime} step={0.5} onCommit={(v) => setGlob((g) => ({ ...g, avgCycleTime: v }))} />
+                  <span>Share of demand served by this signup (%)</span>
+                  <NumField value={glob.demandShare} step={5} onCommit={(v) => setGlob((g) => ({ ...g, demandShare: Math.min(100, Math.max(1, Math.round(v))) }))} />
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
-                  Pull-out/pull-in affects only Auto-Build's placement — a generated shift may start before the first trip it serves and end after the last, within this lead time. Cycle time (pickup to dropoff to next pickup, including deadhead) only draws the "Suggested vehicles" reference line on the Coverage chart, smoothed over a ~30-minute window so a single busy 5-minute slot doesn't spike the line — it does not affect scoring or generation.
+                  Pull-out/pull-in affects only Auto-Build's placement — a generated shift may start before the first trip it serves and end after the last, within this lead time. Cycle time (pickup to dropoff to next pickup, including deadhead) only draws the "Suggested vehicles" reference line on the Coverage chart, smoothed over a ~30-minute window so a single busy 5-minute slot doesn't spike the line — it does not affect scoring or generation. If contractors or other providers serve part of the demand you upload, set the share this signup's fleet covers — the reference line and the calibration below scale by it, while coverage scoring (shape-based, scale-free) is unaffected.
                 </div>
+                {empiricalProductivity && empiricalProductivity.overall > 0 && (
+                  empiricalProductivity.overall <= 7.5 ? (
+                    <div style={{ background: "#F2F8F7", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12, marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <span>
+                        Your uploaded demand{glob.demandShare < 100 ? ` (at this signup's ${glob.demandShare}% share)` : ""} + signup imply <b>{empiricalProductivity.overall.toFixed(2)} trips/vehicle-hour</b> ({(60 / empiricalProductivity.overall).toFixed(1)} min cycle time) on average — calibrated from your own real vehicle-hours, not an assumed constant.
+                      </span>
+                      <button style={nudgeBtn}
+                        onClick={() => setGlob((g) => ({ ...g, avgCycleTime: Math.round((60 / empiricalProductivity.overall) * 10) / 10 }))}>
+                        Use this
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ background: "#FDF3E7", border: `1px solid ${demandAmber}`, padding: "8px 12px", fontSize: 12, marginTop: 10 }}>
+                      Your uploaded demand{glob.demandShare < 100 ? ` (at this signup's ${glob.demandShare}% share)` : ""} + signup imply {empiricalProductivity.overall.toFixed(1)} trips/vehicle-hour — an
+                      unrealistically short {(60 / empiricalProductivity.overall).toFixed(1)}-minute cycle time. That usually means
+                      the demand file has a data-quality issue (check the warning banner on the Demand tab) or the demand share
+                      above is set too high for what this fleet really serves — fix that before using it to set cycle time.
+                    </div>
+                  )
+                )}
               </div>
             </div>
 
