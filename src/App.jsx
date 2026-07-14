@@ -2218,6 +2218,14 @@ export default function App() {
     }
     return s.size;
   }, [board, rules]);
+  const eightCount = useMemo(() => {
+    const s = new Set();
+    for (const sg of board) {
+      const R = rules[sg.type];
+      if (R && R.work === 480) s.add(sg.shift);
+    }
+    return s.size;
+  }, [board, rules]);
   const flagCount = useMemo(() => board.filter((sg) => validateSeg(sg, rules, glob).length > 0).length, [board, rules, glob]);
 
   // Derives an empirical trips/vehicle-hour figure from the user's own real demand + real
@@ -3502,6 +3510,7 @@ export default function App() {
               <div className="kpi"><span className="l">peak / fleet</span><span className="v" style={{ color: P.peakSup > glob.maxFleet ? "#F09E93" : "#fff" }}>{P.peakSup}/{glob.maxFleet}</span></div>
               <div className="kpi"><span className="l">rule flags</span><span className="v" style={{ color: flagCount ? "#F09E93" : "#7FD1C0" }}>{flagCount}</span></div>
               <div className="kpi"><span className="l">10-hour</span><span className="v" style={{ color: tenCount > glob.max10 ? "#F09E93" : "#fff" }}>{tenCount}/{glob.max10}</span></div>
+              <div className="kpi"><span className="l">8-hour</span><span className="v">{eightCount}</span></div>
               <div className="kpi"><span className="l">runs</span><span className="v">{distinctShifts}</span></div>
               <div className="kpi"><span className="l">changes</span><span className="v">{changedCount}</span></div>
               {holidayCountForDay > 0 && (
