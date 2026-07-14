@@ -1485,15 +1485,17 @@ function ActualCurve({ ev, label }) {
 }
 
 /* ---------- coverage chart ---------- */
-function CoverageChart({ P, day, minVeh, fleetCap, showBookout, productivity, demandShare = 100, showProductivity, height = 320, selBand }) {
+function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity, height = 320, selBand }) {
   const data = useMemo(() => {
     const bk = RAW.bookout[day];
     const bkMap = {};
     if (bk) for (const [t, b] of bk) bkMap[t] = b;
-    // "Suggested vehicles" is meant to read as "how many vehicles does this stretch of the
-    // day sustain," not spike on whichever single 5-minute slot happened to be busiest — so it's
-    // driven by a centered ~30-minute rolling average of demand (SMOOTH_HALF_SLOTS slots each
-    // side), not the raw per-slot event count.
+    // "Suggested vehicles" allocates the DAY'S OWN scheduled vehicle-slots along the day's
+    // trip-share curve: sug(i) = (demand share of slot i within the day) × (today's total
+    // supply slots). No productivity constant, no demand-share scaling — it's this board's
+    // fleet redistributed by trip percentage, so it always integrates back to exactly the
+    // vehicle-hours already on the board. Smoothed over ~30 minutes so a single busy
+    // 5-minute slot doesn't spike the line.
     const SMOOTH_HALF_SLOTS = 3;
     const smoothedEv = (i) => {
       let sum = 0, count = 0;
@@ -1502,16 +1504,11 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, productivity, de
       }
       return count > 0 ? sum / count : 0;
     };
+    let dayEv = 0, daySup = 0;
+    for (let i = 0; i < N; i++) { dayEv += P.ev[i]; daySup += P.sup[i]; }
     const rows = [];
     for (let i = 0; i < N; i++) {
       const t = SLOT(i), tgt = P.target[i];
-      // trips/hr (smoothed) is the actual quantity "Suggested vehicles" is derived from —
-      // events are pickup+dropoff pairs (÷2 for trips) in a single 5-minute slot (×12 for
-      // an hourly rate). The demand curve is system-wide; this signup's fleet only serves
-      // demandShare% of it, so the vehicle count scales by that share. The tooltip shows
-      // both rates so what's displayed always matches what's driving the vehicle count.
-      const tripsPerHr = (smoothedEv(i) * 12) / 2;
-      const shareTripsPerHr = tripsPerHr * (demandShare / 100);
       rows.push({
         time: fmt(t),
         target: Math.round(tgt * 10) / 10,
@@ -1519,13 +1516,12 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, productivity, de
         covered: Math.round(Math.min(tgt, P.sup[i]) * 10) / 10,
         gap: tgt - P.sup[i] > 0.05 ? Math.round(tgt * 10) / 10 : null,
         bookout: bkMap[t] ?? null,
-        sugVeh: productivity > 0 ? Math.round((shareTripsPerHr / productivity) * 10) / 10 : null,
-        tripsPerHr,
-        shareTripsPerHr,
+        sugVeh: dayEv > 0 && daySup > 0 ? Math.round((smoothedEv(i) / dayEv) * daySup * 10) / 10 : null,
+        events: P.ev[i],
       });
     }
     return rows;
-  }, [P, day, productivity, demandShare]);
+  }, [P, day]);
   return (
     <ResponsiveContainer width="100%" height={height}>
       <ComposedChart data={data} margin={{ top: 5, right: 14, left: -8, bottom: 0 }}>
@@ -1533,13 +1529,13 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, productivity, de
         <XAxis dataKey="time" tick={{ fontSize: 10.5 }} interval={23} tickLine={false} />
         <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
         <Tooltip
-          formatter={(v, name) => [v, { target: "Demand-aligned target", sup: "Supply", covered: "Aligned", bookout: "Observed (sample)", gap: "Target (underweighted)", sugVeh: "Suggested vehicles (productivity)" }[name] || name]}
+          formatter={(v, name) => [v, { target: "Demand-aligned target", sup: "Supply", covered: "Aligned", bookout: "Observed (sample)", gap: "Target (underweighted)", sugVeh: "Suggested vehicles (day share)" }[name] || name]}
           labelFormatter={(l, pl) => {
             const r = pl && pl[0] && pl[0].payload;
             if (!r) return l;
-            const shareTxt = demandShare < 100 ? ` · your share ~${r.shareTripsPerHr.toFixed(1)}` : "";
-            const sugTxt = r.sugVeh != null ? ` · ${r.sugVeh.toFixed(1)} suggested` : "";
-            return `${l} · ${r.tripsPerHr.toFixed(1)} trips/hr (smoothed)${shareTxt}${sugTxt}`;
+            const evTxt = r.events >= 10 ? Math.round(r.events).toString() : r.events.toFixed(1);
+            const sugTxt = r.sugVeh != null ? ` · ${r.sugVeh.toFixed(1)} suggested vehicles` : "";
+            return `${l} · ${evTxt} events${sugTxt}`;
           }}
           contentStyle={{ fontSize: 12, border: "1px solid #D7DFE2" }} />
         <Legend wrapperStyle={{ fontSize: 12 }} />
@@ -1554,7 +1550,7 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, productivity, de
         {showBookout && RAW.bookout[day] &&
           <Line type="monotone" dataKey="bookout" name="Observed (sample)" stroke={bookoutViolet} strokeWidth={1.6} strokeDasharray="5 4" dot={false} connectNulls />}
         {showProductivity &&
-          <Line type="stepAfter" dataKey="sugVeh" name="Suggested vehicles (productivity)" stroke={sampleGray} strokeWidth={1.6} strokeDasharray="2 3" dot={false} connectNulls />}
+          <Line type="stepAfter" dataKey="sugVeh" name="Suggested vehicles (day share)" stroke={sampleGray} strokeWidth={1.6} strokeDasharray="2 3" dot={false} connectNulls />}
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -2193,7 +2189,6 @@ export default function App() {
     return s.size;
   }, [board, rules]);
   const flagCount = useMemo(() => board.filter((sg) => validateSeg(sg, rules, glob).length > 0).length, [board, rules, glob]);
-  const productivity = glob.avgCycleTime > 0 ? 60 / glob.avgCycleTime : 0;
 
   // Derives an empirical trips/vehicle-hour figure from the user's own real demand + real
   // signup, instead of trusting one assumed universal constant — only available once both
@@ -3216,7 +3211,7 @@ export default function App() {
               </label>
               <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 7 }}>
                 <input type="checkbox" checked={showProductivity} onChange={(e) => setShowProductivity(e.target.checked)} />
-                Suggested vehicles (productivity)
+                Suggested vehicles (day share)
               </label>
             </div>
 
@@ -3227,7 +3222,7 @@ export default function App() {
               <div style={{ marginTop: 8, lineHeight: 1.55, color: "#33434D" }}>
                 <b>Coverage score</b> answers one question: of all the trip demand in the period, what share happens while your service hours are proportionally in place to serve it? 100% would mean your hours perfectly trace the demand pattern — impossible in practice, since shifts come in fixed lengths with rules. Use the score to compare boards: higher means hours better matched to demand.<br /><br />
                 On each day tile, <b>demand</b> is that day's share of the week's trips, and <b>cov</b> is that day's coverage score. In the chart, the dark line is the <b>demand-aligned target</b> — your own hours redrawn to follow demand exactly. <b>Red</b> = you're lighter than demand suggests at that time. <b>Teal above the line</b> = heavier than demand suggests (those hours earn no score). <b>Misplaced hours</b> totals the hours sitting in the heavy zones.<br /><br />
-                <b>Suggested vehicles</b> (optional overlay) is a different kind of number: it estimates how many vehicles a single instant of demand would need if the fleet were sized for that exact minute alone (trips/hour × this signup's demand share ÷ your average trip cycle time, both set in Rules). Treat it as a theoretical peak-instant floor, not a fleet prediction — a real roster covers the day with overlapping shifts rather than sizing to one worst instant, so your actual peak vehicle count in service will typically run below this line. It's a visual reference only and never affects the coverage score or generation.
+                <b>Suggested vehicles</b> (optional overlay) takes the vehicle-hours already on today's board and redistributes them along the day's trip-share curve: at each moment it shows how many of your own vehicles would be in service if the day's fleet were allocated purely by that moment's percentage of the day's trips. No assumed constants — it always adds back up to exactly the hours you've scheduled, so where it sits above the supply line you're proportionally light, and below it you're proportionally heavy. It differs from the demand-aligned target only in scope: the target spreads the whole week's hours by the week's demand, this line spreads today's hours by today's. Visual reference only — never affects the coverage score or generation.
               </div>
             </details>
 
@@ -3282,7 +3277,7 @@ export default function App() {
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
                 {day} — service hours vs demand-aligned target
               </div>
-              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} productivity={productivity} demandShare={glob.demandShare} showProductivity={showProductivity} height={340} />
+              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} showProductivity={showProductivity} height={340} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
                 The dark line shows where {day}'s {P.supVH.toFixed(0)} service hours would sit if they exactly followed the demand pattern. Red = times you're lighter than demand suggests; teal above the line = heavier.
               </div>
@@ -3710,7 +3705,7 @@ export default function App() {
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
                 Live {day} coverage
               </div>
-              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} productivity={productivity} demandShare={glob.demandShare} showProductivity={showProductivity} height={280}
+              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} showProductivity={showProductivity} height={280}
                 selBand={sel ? [sel.s, sel.e] : null} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
                 Dashed lines mark the selected shift. On desktop, the KPI strip and shift editor stay pinned while you scroll; on phones everything scrolls freely so the board and this chart get the full screen.
@@ -4152,7 +4147,7 @@ export default function App() {
                   <NumField value={glob.demandShare} step={5} onCommit={(v) => setGlob((g) => ({ ...g, demandShare: Math.min(100, Math.max(1, Math.round(v))) }))} />
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
-                  Pull-out/pull-in affects only Auto-Build's placement — a generated shift may start before the first trip it serves and end after the last, within this lead time. Cycle time (pickup to dropoff to next pickup, including deadhead) only draws the "Suggested vehicles" reference line on the Coverage chart, smoothed over a ~30-minute window so a single busy 5-minute slot doesn't spike the line — it does not affect scoring or generation. If contractors or other providers serve part of the demand you upload, set the share this signup's fleet covers — the reference line and the calibration below scale by it, while coverage scoring (shape-based, scale-free) is unaffected.
+                  Pull-out/pull-in affects only Auto-Build's placement — a generated shift may start before the first trip it serves and end after the last, within this lead time. Cycle time (pickup to dropoff to next pickup, including deadhead) is an operational reference: the calibration below compares it against what your uploaded demand + signup imply. It no longer drives the Coverage chart's "Suggested vehicles" line, which now simply redistributes each day's scheduled vehicle-hours along that day's trip-share curve. If contractors or other providers serve part of the demand you upload, set the share this signup's fleet covers — the calibration and the absolute trip captions scale by it, while coverage scoring (shape-based, scale-free) is unaffected.
                 </div>
                 {empiricalProductivity && empiricalProductivity.overall > 0 && (
                   empiricalProductivity.overall <= 7.5 ? (
