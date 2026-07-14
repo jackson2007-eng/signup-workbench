@@ -2274,6 +2274,17 @@ export default function App() {
     if (!sel) return;
     mutate((b) => b.map((s) => (s.id === sel.id ? { ...cloneSeg(s), ...patch } : s)));
   };
+  // step the selection through the day's board order (the gantt's unfiltered sort),
+  // wrapping at the ends; from a shift that doesn't work this day, ▶ starts at the
+  // first run of the day and ◀ at the last
+  const navSel = (dir) => {
+    if (!daySegs.length) return;
+    const idx = sel ? daySegs.findIndex((s) => s.id === sel.id) : -1;
+    const next = idx < 0
+      ? (dir > 0 ? daySegs[0] : daySegs[daySegs.length - 1])
+      : daySegs[(idx + dir + daySegs.length) % daySegs.length];
+    setSelId(next.id);
+  };
   const shiftBreak = (delta) => {
     if (!sel || !sel.b) return;
     patchSel({ b: [sel.b[0] + delta, sel.b[1] + delta] });
@@ -3398,6 +3409,7 @@ export default function App() {
             {sel ? (
               <div className="seleditor" style={{ background: card, border: `1px solid ${selIssues.length ? gapRed : "#E2E8EA"}`, padding: "12px 14px", marginBottom: 12, position: "sticky", top: ENVELOPE_H + KPI_H, zIndex: 4 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <button style={nudgeBtn} title="Previous run this day" onClick={() => navSel(-1)}>◀</button>
                   <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700 }}>
                     Shift {sel.shift} · Run {sel.run}
                   </div>
@@ -3412,6 +3424,7 @@ export default function App() {
                     {selIssues.length > 0 && <button style={{ ...nudgeBtn, background: gapRed, color: "#fff", borderColor: gapRed }} onClick={fixSel}>Fix violations</button>}
                     {isChanged && <button style={{ ...nudgeBtn, borderColor: demandAmber }} onClick={resetSel}>Reset</button>}
                     <button style={nudgeBtn} onClick={() => setSelId(null)}>Close</button>
+                    <button style={nudgeBtn} title="Next run this day" onClick={() => navSel(1)}>▶</button>
                   </div>
                 </div>
                 {(() => {
@@ -3465,11 +3478,15 @@ export default function App() {
             ) : selShift != null ? (
               <div className="seleditor" style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 12, position: "sticky", top: ENVELOPE_H + KPI_H, zIndex: 4 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <button style={nudgeBtn} title="Last run this day" onClick={() => navSel(-1)}>◀</button>
                   <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700 }}>
                     Shift {selShift}
                   </div>
                   <span style={{ fontSize: 13, color: "#5B6B75" }}>doesn't work {day}</span>
-                  <button style={{ ...nudgeBtn, marginLeft: "auto" }} onClick={() => setSelId(null)}>Close</button>
+                  <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                    <button style={nudgeBtn} onClick={() => setSelId(null)}>Close</button>
+                    <button style={nudgeBtn} title="First run this day" onClick={() => navSel(1)}>▶</button>
+                  </div>
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>This shift's week — tap a day to view and edit it:</div>
                 <WeekStrip segs={selShiftSegs} day={day} onPick={setDay} />
@@ -3516,7 +3533,7 @@ export default function App() {
                       onPointerUp={(ev) => onGanttPointerUp(ev, sg)}
                       onPointerCancel={(ev) => onGanttPointerUp(ev, sg)}>
                       <div className="glabel" style={{ fontWeight: isSel ? 700 : 400, color: bad ? gapRed : undefined }}>
-                        {sg.shift}·{sg.run} {sg.type}
+                        {sg.shift} {sg.type}
                       </div>
                       <div className="gtrack" title={isDrag ? undefined : barTitle}>
                         {[360, 600, 840, 1080, 1320].map((m) => (
