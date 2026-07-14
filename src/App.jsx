@@ -1767,6 +1767,7 @@ export default function App() {
   const [sugsStale, setSugsStale] = useState(false);
   const fileRef = useRef(null);
   const [hist, setHist] = useState([]);
+  const [future, setFuture] = useState([]); // redo stack — cleared by any new edit
   const [selId, setSelId] = useState(null);
   const [editAllDays, setEditAllDays] = useState(true); // time edits hit every day the segment works vs. split out just the viewed day
   const nextId = useRef(RAW.segments.length + 1000);
@@ -1793,16 +1794,25 @@ export default function App() {
 
   const mutate = (fn) => {
     setHist((h) => [...h.slice(-49), board]);
+    setFuture([]);
     setBoard(fn);
     setSugsStale(true);
   };
   const undo = () => {
     if (!hist.length) return;
+    setFuture((f) => [...f.slice(-49), board]);
     setBoard(hist[hist.length - 1]);
     setHist((h) => h.slice(0, -1));
   };
+  const redo = () => {
+    if (!future.length) return;
+    setHist((h) => [...h.slice(-49), board]);
+    setBoard(future[future.length - 1]);
+    setFuture((f) => f.slice(0, -1));
+  };
   const resetAll = () => {
     setHist((h) => [...h.slice(-49), board]);
+    setFuture([]);
     setBoard(baselineBoard.map(cloneSeg));
     setSelId(null);
   };
@@ -2052,7 +2062,7 @@ export default function App() {
         // older saves have no typeColors — shipped codes fall back to TYPE_COLOR, renamed/custom
         // ones get ink until the user touches them again, so merging over the defaults is safe
         setTypeColors(p.typeColors ? { ...TYPE_COLOR, ...p.typeColors } : { ...TYPE_COLOR });
-        setHist([]); setSelId(null); setSugs(null); setSugsStale(false);
+        setHist([]); setFuture([]); setSelId(null); setSugs(null); setSugsStale(false);
       } catch (err) {
         alert("Could not read that project file.");
       }
@@ -2142,7 +2152,7 @@ export default function App() {
         setSignupSource("uploaded");
         setFollowBaselinePattern(true);
         setSignupUploadResult(res.summary);
-        setHist([]); setSelId(null); setSugs(null); setSugsStale(false);
+        setHist([]); setFuture([]); setSelId(null); setSugs(null); setSugsStale(false);
         if (res.exceptionDays && res.exceptionDays.length) {
           // ids assigned synchronously here (not inside the setHolidays updater below) —
           // React can invoke a state updater more than once, and nextId.current++ inside
@@ -2366,6 +2376,7 @@ export default function App() {
       if (!d.mode || Math.abs(dx) < DRAG_THRESHOLD_PX) return;
       d.active = true;
       setHist((h) => [...h.slice(-49), d.boardSnapshot]);
+      setFuture([]);
       setSugsStale(true);
       setSelId(d.sgId);
       if (!editAllDays && d.orig.days.length > 1) {
@@ -2481,7 +2492,7 @@ export default function App() {
       return n;
     });
     setSugs(null); setSugsStale(false);
-    setHist([]); // old snapshots reference the old code; undoing into them would strand segments on a type that no longer exists
+    setHist([]); setFuture([]); // old snapshots reference the old code; undoing into them would strand segments on a type that no longer exists
     return true;
   };
   const duplicateSel = () => {
@@ -2725,6 +2736,7 @@ export default function App() {
           <>
             <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
               <button style={{ ...nudgeBtn, opacity: hist.length ? 1 : 0.4 }} onClick={undo} disabled={!hist.length}>↶ Undo</button>
+              <button style={{ ...nudgeBtn, opacity: future.length ? 1 : 0.4 }} onClick={redo} disabled={!future.length}>↷ Redo</button>
               <button style={{ ...nudgeBtn, borderColor: changedCount ? demandAmber : "#B9C6CC", opacity: changedCount ? 1 : 0.4 }} onClick={resetAll} disabled={!changedCount}>Reset board</button>
               {flagCount > 0 && (
                 <button style={{ ...nudgeBtn, background: gapRed, color: "#fff", borderColor: gapRed }} onClick={fixAll}>
