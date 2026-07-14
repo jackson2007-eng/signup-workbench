@@ -31,6 +31,9 @@ const TYPE_COLOR = {
   AM: "#0F7B7A", NN: "#2E86AB", AX: "#6C5B9E", NN10: "#1B6E53",
   AX10: "#8E5B3B", BST: "#B07D2B", BX: "#7A3E5F", BS: "#4B5D67",
 };
+// colors handed to types created or renamed at runtime — same muted family as TYPE_COLOR,
+// cycled in order so each new code stays visually distinct from the shipped ones
+const TYPE_COLOR_EXTRA = ["#3E6B8A", "#7A6C3E", "#5F7A3E", "#8A3E52", "#3E8A78", "#6B3E8A", "#8A5E3E", "#4A4A72"];
 const IMPORTED_DEM = (() => {
   const o = {};
   for (const d of DAYS) {
@@ -1376,6 +1379,12 @@ export default function App() {
   const [signupUploadResult, setSignupUploadResult] = useState(null);
   const signupFileRef = useRef(null);
   const [rules, setRules] = useState(() => JSON.parse(JSON.stringify(DEFAULT_RULES)));
+  // per-code chip/bar colors — state (not the static TYPE_COLOR map) so a renamed type
+  // keeps its color and a brand-new type gets a distinct one instead of the ink fallback
+  const [typeColors, setTypeColors] = useState(() => ({ ...TYPE_COLOR }));
+  const tColor = (t) => typeColors[t] || TYPE_COLOR[t] || ink;
+  const [editingType, setEditingType] = useState(null); // type code whose chip is in rename mode
+  const [typeDraft, setTypeDraft] = useState("");
   const [glob, setGlob] = useState(() => ({ ...JSON.parse(JSON.stringify(DEFAULT_GLOBAL)), avgCycleTime: DEFAULT_AVG_CYCLE_TIME, demandShare: DEFAULT_DEMAND_SHARE }));
   const [spans, setSpans] = useState(() => JSON.parse(JSON.stringify(DEFAULT_SPANS)));
   const [newType, setNewType] = useState("");
@@ -1504,7 +1513,7 @@ export default function App() {
       v: 1, savedAt: new Date().toISOString(),
       demSource, sketch, trips, sketchMode, uploadedDem, board, rules, glob, spans,
       totalSigned, blockSize, includePT, signupPeriod, holidays,
-      baselineBoard, signupSource,
+      baselineBoard, signupSource, typeColors,
     };
     const blob = new Blob([JSON.stringify(payload, null, 1)], { type: "application/json" });
     const a = document.createElement("a");
@@ -1685,6 +1694,9 @@ export default function App() {
         if (Array.isArray(p.baselineBoard)) setBaselineBoard(p.baselineBoard.map(cloneSeg));
         if (p.signupSource === "uploaded" && !Array.isArray(p.baselineBoard)) setSignupSource("imported");
         else if (p.signupSource) setSignupSource(p.signupSource);
+        // older saves have no typeColors — shipped codes fall back to TYPE_COLOR, renamed/custom
+        // ones get ink until the user touches them again, so merging over the defaults is safe
+        setTypeColors(p.typeColors ? { ...TYPE_COLOR, ...p.typeColors } : { ...TYPE_COLOR });
         setHist([]); setSelId(null); setSugs(null); setSugsStale(false);
       } catch (err) {
         alert("Could not read that project file.");
@@ -2005,6 +2017,35 @@ export default function App() {
     if (!sel) return;
     const days = sel.days.includes(d) ? sel.days.filter((x) => x !== d) : [...sel.days, d].sort((a, b) => DAYS.indexOf(a) - DAYS.indexOf(b));
     patchSel({ days });
+  };
+  // Renaming a classification is a global relabel, not a board edit: the rules entry is
+  // re-keyed in place (order preserved), every segment referencing the code — live board,
+  // comparison baseline, exception-day one-offs — follows, and the color travels with it.
+  // Deliberately NOT pushed to undo history: undo can't restore the rules key, so a
+  // half-undone rename would strand segments on a type that no longer exists.
+  const renameType = (oldCode, newCodeRaw) => {
+    const newCode = String(newCodeRaw || "").toUpperCase().trim();
+    if (!newCode || newCode === oldCode || rules[newCode]) return false;
+    setRules((old) => {
+      const next = {};
+      for (const k of Object.keys(old)) next[k === oldCode ? newCode : k] = old[k];
+      return next;
+    });
+    const remap = (sg) => (sg.type === oldCode ? { ...cloneSeg(sg), type: newCode } : sg);
+    setBoard((b) => b.map(remap));
+    setBaselineBoard((b) => b.map(remap));
+    setHolidays((hs) => hs.map((h) => (h.segs && h.segs.some((sg) => sg.type === oldCode)
+      ? { ...h, segs: h.segs.map((sg) => (sg.type === oldCode ? { ...sg, type: newCode } : sg)) }
+      : h)));
+    setTypeColors((tc) => {
+      const n = { ...tc };
+      n[newCode] = n[oldCode] || TYPE_COLOR[oldCode] || TYPE_COLOR_EXTRA[Object.keys(n).length % TYPE_COLOR_EXTRA.length];
+      delete n[oldCode];
+      return n;
+    });
+    setSugs(null); setSugsStale(false);
+    setHist([]); // old snapshots reference the old code; undoing into them would strand segments on a type that no longer exists
+    return true;
   };
   const duplicateSel = () => {
     if (!sel) return;
@@ -2401,7 +2442,7 @@ export default function App() {
                   <tbody>
                     {Object.entries(signupStats.byType).sort((a, b) => b[1] - a[1]).map(([t, hrs]) => (
                       <tr key={t}>
-                        <td><span style={{ fontSize: 10.5, padding: "1px 6px", background: TYPE_COLOR[t] || ink, color: "#fff", borderRadius: 2 }}>{t}</span></td>
+                        <td><span style={{ fontSize: 10.5, padding: "1px 6px", background: tColor(t), color: "#fff", borderRadius: 2 }}>{t}</span></td>
                         <td>{hrs.toFixed(0)}</td>
                       </tr>
                     ))}
@@ -2870,7 +2911,7 @@ export default function App() {
                                   ))}
                                   <div className="gbar" style={{
                                     left: `${pctPos(sg.s)}%`, width: `${pctPos(Math.min(sg.e, T1)) - pctPos(sg.s)}%`,
-                                    background: TYPE_COLOR[sg.type] || ink,
+                                    background: tColor(sg.type),
                                     outline: isSel ? `2px solid ${ink}` : (bad ? `2px solid ${gapRed}` : "none"),
                                   }} />
                                   {sg.b && (
@@ -3050,7 +3091,7 @@ export default function App() {
                           <div title={`was ${fmt(ghost.s)}–${fmt(ghost.e)}`} style={{
                             position: "absolute", left: `${pctPos(ghost.s)}%`, width: `${pctPos(Math.min(ghost.e, T1)) - pctPos(ghost.s)}%`,
                             top: 0, height: 14, borderRadius: 2, background: "transparent",
-                            border: `1.5px dashed ${TYPE_COLOR[ghost.type] || ink}`, boxSizing: "border-box",
+                            border: `1.5px dashed ${tColor(ghost.type)}`, boxSizing: "border-box",
                             opacity: 0.7, pointerEvents: "none",
                           }} />
                         )}
@@ -3063,7 +3104,7 @@ export default function App() {
                         )}
                         <div className={"gbar" + (isDrag ? " lifted" : "")} data-dragmode="move" style={{
                           left: `${barL}%`, width: `${barR - barL}%`,
-                          background: TYPE_COLOR[sg.type] || ink,
+                          background: tColor(sg.type),
                           outline: isSel ? `2px solid ${ink}` : (bad ? `2px solid ${gapRed}` : "none"),
                         }} />
                         <div className="ghandle" data-dragmode="seg-start" style={{ left: `calc(${barL}% - 3px)` }} />
@@ -3108,9 +3149,12 @@ export default function App() {
                 })}
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
-                {TYPE_ORDER.filter(t => ganttSegs.some(s => s.type === t)).map(t => (
+                {[...new Set(ganttSegs.map((s) => s.type))].sort((a, b) => {
+                  const ia = TYPE_ORDER.indexOf(a), ib = TYPE_ORDER.indexOf(b);
+                  return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+                }).map(t => (
                   <span key={t} style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 4 }}>
-                    <span style={{ width: 12, height: 10, background: TYPE_COLOR[t], display: "inline-block", borderRadius: 2 }} />{t}
+                    <span style={{ width: 12, height: 10, background: tColor(t), display: "inline-block", borderRadius: 2 }} />{t}
                   </span>
                 ))}
                 <span style={{ fontSize: 11, color: "#5B6B75" }}>hatched notch = break · red outline = rule flag · dashed outline = original position before edits · hover a bar for hours</span>
@@ -3212,7 +3256,7 @@ export default function App() {
                         onClick={() => { setSelId(segs[0].id); setTab("board"); setDay(segs[0].days[0]); }}>
                         <td style={{ padding: "4px 10px", fontWeight: 600, fontSize: 12.5, color: info.issues.length ? gapRed : ink }}>{sh}</td>
                         <td style={{ padding: "4px 8px" }}>
-                          <span style={{ fontSize: 10.5, padding: "1px 6px", background: TYPE_COLOR[segs[0].type] || ink, color: "#fff", borderRadius: 2 }}>{segs[0].type}</span>
+                          <span style={{ fontSize: 10.5, padding: "1px 6px", background: tColor(segs[0].type), color: "#fff", borderRadius: 2 }}>{segs[0].type}</span>
                         </td>
                         <td style={{ padding: "4px 8px", fontSize: 11.5, color: "#5B6B75" }}>{segs[0].daysOff || DAYS.filter((d) => !info.daysWorked.has(d)).map((d) => d.slice(0, 2).toUpperCase()).join("-") || "—"}</td>
                         {DAYS.map((d) => {
@@ -3359,13 +3403,14 @@ export default function App() {
           <>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
               <div style={{ fontSize: 13, color: "#5B6B75" }}>
-                Every number here drives validation and scoring live. Edits flag existing shifts immediately — nothing is blocked, only flagged.
+                Every number here drives validation and scoring live. Edits flag existing shifts immediately — nothing is blocked, only flagged. Click a type code to rename it — every shift using it follows along.
               </div>
               <button style={{ ...nudgeBtn, marginLeft: "auto", borderColor: demandAmber }}
                 onClick={() => {
                   setRules(JSON.parse(JSON.stringify(DEFAULT_RULES)));
                   setGlob({ ...JSON.parse(JSON.stringify(DEFAULT_GLOBAL)), avgCycleTime: DEFAULT_AVG_CYCLE_TIME, demandShare: DEFAULT_DEMAND_SHARE });
                   setSpans(JSON.parse(JSON.stringify(DEFAULT_SPANS)));
+                  setTypeColors({ ...TYPE_COLOR });
                 }}>
                 Reset to defaults
               </button>
@@ -3392,7 +3437,27 @@ export default function App() {
                     return (
                       <tr key={t}>
                         <td style={{ padding: "4px 8px" }}>
-                          <span style={{ fontSize: 12, padding: "2px 8px", background: TYPE_COLOR[t] || ink, color: "#fff", borderRadius: 2, fontWeight: 600 }}>{t}</span>
+                          {editingType === t ? (
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                              <input autoFocus value={typeDraft}
+                                onChange={(e) => setTypeDraft(e.target.value.toUpperCase().slice(0, 6))}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") { if (renameType(t, typeDraft) || typeDraft.trim().toUpperCase() === t) setEditingType(null); }
+                                  if (e.key === "Escape") setEditingType(null);
+                                }}
+                                onBlur={() => { renameType(t, typeDraft); setEditingType(null); }}
+                                style={{ width: 64, padding: "2px 6px", fontSize: 12, fontWeight: 600, border: `2px solid ${tColor(t)}`, borderRadius: 2, background: "#fff", color: ink, textTransform: "uppercase" }} />
+                              {typeDraft.trim().toUpperCase() !== t && rules[typeDraft.trim().toUpperCase()] && (
+                                <span style={{ fontSize: 11, color: gapRed }}>exists</span>
+                              )}
+                            </span>
+                          ) : (
+                            <span title="Click to rename — every shift using this code follows along"
+                              onClick={() => { setEditingType(t); setTypeDraft(t); }}
+                              style={{ fontSize: 12, padding: "2px 8px", background: tColor(t), color: "#fff", borderRadius: 2, fontWeight: 600, cursor: "pointer" }}>
+                              {t} <span style={{ opacity: 0.65, fontSize: 10 }}>✎</span>
+                            </span>
+                          )}
                         </td>
                         <td style={{ padding: "3px 6px" }}><TimeField value={R.s[0]} onCommit={(v) => upd({ s: [v, R.s[1]] })} /></td>
                         <td style={{ padding: "3px 6px" }}><TimeField value={R.s[1]} onCommit={(v) => upd({ s: [R.s[0], v] })} /></td>
@@ -3432,6 +3497,7 @@ export default function App() {
                   onClick={() => {
                     if (!newType || rules[newType]) return;
                     setRules((old) => ({ ...old, [newType]: { s: [300, 660], e: [840, 1470], spr: [480, 720], work: 480, brk: true } }));
+                    setTypeColors((tc) => (tc[newType] ? tc : { ...tc, [newType]: TYPE_COLOR_EXTRA[Object.keys(tc).length % TYPE_COLOR_EXTRA.length] }));
                     setNewType("");
                   }}>
                   + Add type
