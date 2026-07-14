@@ -822,6 +822,9 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
       PG[d] = pg; PC[d] = pc;
     }
     const evalDay = (c, d) => {
+      // hard constraint: a shift never starts before this day's service span opens or
+      // ends after it closes — classification windows are day-agnostic, spans are not
+      if (c.s < spans[d][0] || c.e > spans[d][1]) return null;
       if (maxPull > 0 && starts[d][c.startSlot] >= maxPull) return null;
       const a = idx(c.s), z = idx(c.e);
       let cap = PC[d][z] - PC[d][a];
@@ -992,6 +995,7 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT, opts 
       evaluated++;
       let total = 0, ok = true;
       for (const d of pkg.days) {
+        if (c.s < spans[d][0] || c.e > spans[d][1]) { ok = false; break; } // outside this day's service span
         if (maxPull > 0 && starts[d][c.startSlot] >= maxPull) { ok = false; break; }
         const a = idx(c.s), z = idx(c.e);
         let cap = PC[d][z] - PC[d][a];
@@ -4309,7 +4313,7 @@ export default function App() {
                   ))}
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
-                  The minimum-vehicles rule applies inside the span; the demand model itself is unaffected.
+                  The minimum-vehicles rule applies inside the span, and Auto-Build, Retime, and the optimizer never place a shift outside it — no starts before the span opens or ends after it closes on any working day. The demand model itself is unaffected; manual edits can still cross the span (flag-never-block).
                 </div>
               </div>
 
