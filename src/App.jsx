@@ -1901,6 +1901,86 @@ export default function App() {
   const selIssues = sel ? validateSeg(sel, rules, glob) : [];
   const ganttSegs = selShift != null ? daySegs.filter((sg) => sg.shift === selShift) : daySegs;
 
+  /* ---- gantt drag ----
+     Direct manipulation on the gantt bars: slide a whole shift, slide its break, or resize
+     either by the edges. Geometry-only clamps here (end after start, break inside the shift)
+     — rule legality stays advisory via validateSeg, shown live in the readout, never blocked.
+     One drag commits exactly one undo entry: the pre-drag board is pushed to history the
+     moment the pointer passes the click threshold, and setBoard is called directly (not via
+     mutate) for every quantized step after that. */
+  const dragRef = useRef(null);
+  const [dragging, setDragging] = useState(null); // { id, mode, startDayScore, days } | null
+  const DRAG_THRESHOLD_PX = 4;
+
+  const clampDragDelta = (o, mode, d) => {
+    switch (mode) {
+      case "move": return d;
+      case "seg-start": return Math.min(d, (o.b ? Math.min(o.b[0], o.e - 5) : o.e - 5) - o.s);
+      case "seg-end": return Math.max(d, (o.b ? Math.max(o.b[1], o.s + 5) : o.s + 5) - o.e);
+      case "break-move": return Math.max(o.s - o.b[0], Math.min(d, o.e - o.b[1]));
+      case "break-start": return Math.max(o.s - o.b[0], Math.min(d, o.b[1] - 5 - o.b[0]));
+      case "break-end": return Math.max(o.b[0] + 5 - o.b[1], Math.min(d, o.e - o.b[1]));
+      default: return 0;
+    }
+  };
+  const dragPatch = (o, mode, d) => {
+    switch (mode) {
+      case "move": return { s: o.s + d, e: o.e + d, b: o.b ? [o.b[0] + d, o.b[1] + d] : null };
+      case "seg-start": return { s: o.s + d };
+      case "seg-end": return { e: o.e + d };
+      case "break-move": return { b: [o.b[0] + d, o.b[1] + d] };
+      case "break-start": return { b: [o.b[0] + d, o.b[1]] };
+      case "break-end": return { b: [o.b[0], o.b[1] + d] };
+      default: return {};
+    }
+  };
+
+  const onGanttPointerDown = (ev, sg) => {
+    if (ev.pointerType === "mouse" && ev.button !== 0) return;
+    // self-heal: if a previous drag's lifted/readout state leaked (pointerup lost to a
+    // tab switch, dialog, or dropped pointer), the next press anywhere clears it
+    setDragging((cur) => (cur ? null : cur));
+    const mode = ev.target && ev.target.dataset ? ev.target.dataset.dragmode || null : null;
+    const track = ev.currentTarget.querySelector(".gtrack");
+    if (!track) return;
+    dragRef.current = {
+      sgId: sg.id, mode, orig: cloneSeg(sg),
+      startX: ev.clientX,
+      pxPerMin: track.getBoundingClientRect().width / (T1 - T0),
+      lastDelta: 0, active: false,
+      boardSnapshot: board, startDayScore: P.dayScore,
+    };
+    try { ev.currentTarget.setPointerCapture(ev.pointerId); } catch { /* pointer capture unsupported */ }
+  };
+  const onGanttPointerMove = (ev) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const dx = ev.clientX - d.startX;
+    if (!d.active) {
+      if (!d.mode || Math.abs(dx) < DRAG_THRESHOLD_PX) return;
+      d.active = true;
+      setHist((h) => [...h.slice(-49), d.boardSnapshot]);
+      setSugsStale(true);
+      setSelId(d.sgId);
+      setDragging({ id: d.sgId, mode: d.mode, startDayScore: d.startDayScore, days: d.orig.days });
+    }
+    // snap to the 5-minute grid DURING the drag — and skip the board update entirely
+    // unless the quantized delta moved to a new slot, so most pointer events are free
+    const dMin = clampDragDelta(d.orig, d.mode, Math.round(dx / d.pxPerMin / 5) * 5);
+    if (dMin === d.lastDelta) return;
+    d.lastDelta = dMin;
+    const patch = dragPatch(d.orig, d.mode, dMin);
+    setBoard((b) => b.map((s) => (s.id === d.sgId ? { ...cloneSeg(s), ...patch } : s)));
+  };
+  const onGanttPointerUp = (ev, sg) => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    setDragging((cur) => (cur ? null : cur)); // unconditional — never leave a lifted bar behind
+    if (!d) return;
+    try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch { /* not captured */ }
+    if (!d.active) setSelId(sg.id); // never crossed the threshold — behaves as the plain click it was
+  };
+
   const patchSel = (patch) => {
     if (!sel) return;
     mutate((b) => b.map((s) => (s.id === sel.id ? { ...cloneSeg(s), ...patch } : s)));
@@ -2055,11 +2135,13 @@ export default function App() {
         table.shares td, table.shares th { padding:5px 8px; font-size:12.5px; border-bottom:1px solid #E7EDEF; text-align:right; }
         table.shares th { text-transform:uppercase; letter-spacing:.06em; font-size:10.5px; color:#5B6B75; }
         table.shares td:first-child, table.shares th:first-child { text-align:left; }
-        .ganttrow { display:flex; align-items:center; gap:6px; height:20px; cursor:pointer; }
+        .ganttrow { display:flex; align-items:center; gap:6px; height:20px; cursor:pointer; user-select:none; }
         .glabel { font-size:10.5px; width:118px; flex:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums; }
         .gtrack { position:relative; flex:1; height:14px; background:#EFF3F4; }
-        .gbar { position:absolute; top:0; height:14px; border-radius:2px; }
-        .gbrk { position:absolute; top:0; height:14px; background:repeating-linear-gradient(45deg,#fff,#fff 3px,#AEBAC0 3px,#AEBAC0 6px); border-left:1px solid rgba(0,0,0,.35); border-right:1px solid rgba(0,0,0,.35); }
+        .gbar { position:absolute; top:0; height:14px; border-radius:2px; cursor:grab; touch-action:none; }
+        .gbrk { position:absolute; top:0; height:14px; background:repeating-linear-gradient(45deg,#fff,#fff 3px,#AEBAC0 3px,#AEBAC0 6px); border-left:1px solid rgba(0,0,0,.35); border-right:1px solid rgba(0,0,0,.35); cursor:grab; touch-action:none; z-index:1; }
+        .gbar.lifted, .gbrk.lifted { transform:scaleY(1.35); box-shadow:0 2px 6px rgba(0,0,0,.35); z-index:2; cursor:grabbing; }
+        .ghandle { position:absolute; top:-2px; height:18px; width:7px; cursor:col-resize; touch-action:none; z-index:3; }
         .daychip { cursor:pointer; padding:5px 8px; border:1px solid #B9C6CC; font-size:11.5px; border-radius:2px; user-select:none; }
         .daychip.on { background:${supplyTeal}; color:#fff; border-color:${supplyTeal}; }
         .kpistrip { position:sticky; top:0; z-index:5; display:flex; gap:14px; align-items:center; flex-wrap:wrap; background:${ink}; color:#fff; padding:8px 14px; margin-bottom:12px; }
@@ -2933,19 +3015,26 @@ export default function App() {
               </div>
               <div style={{ maxHeight: 430, overflowY: "auto" }}>
                 {ganttSegs.map((sg) => {
-                  const bad = validateSeg(sg, rules, glob).length > 0;
+                  const issues = validateSeg(sg, rules, glob);
+                  const bad = issues.length > 0;
                   const isSel = selShift != null && sg.shift === selShift;
                   const brkMin = sg.b ? sg.b[1] - sg.b[0] : 0;
                   const workHrs = ((sg.e - sg.s - brkMin) / 60).toFixed(2);
                   const barTitle = `${fmt(sg.s)}–${fmt(sg.e)} · ${workHrs}h working${sg.b ? ` · ${brkMin}m break (${fmt(sg.b[0])}–${fmt(sg.b[1])})` : ""}`;
                   const orig = isSel ? originalMap.get(sg.id) : null;
                   const ghost = orig && (orig.s !== sg.s || orig.e !== sg.e || JSON.stringify(orig.b) !== JSON.stringify(sg.b)) ? orig : null;
+                  const isDrag = dragging != null && dragging.id === sg.id;
+                  const barL = pctPos(sg.s), barR = pctPos(Math.min(sg.e, T1));
                   return (
-                    <div key={sg.id} className="ganttrow" onClick={() => setSelId(sg.id)}>
+                    <div key={sg.id} className="ganttrow"
+                      onPointerDown={(ev) => onGanttPointerDown(ev, sg)}
+                      onPointerMove={onGanttPointerMove}
+                      onPointerUp={(ev) => onGanttPointerUp(ev, sg)}
+                      onPointerCancel={(ev) => onGanttPointerUp(ev, sg)}>
                       <div className="glabel" style={{ fontWeight: isSel ? 700 : 400, color: bad ? gapRed : undefined }}>
                         {sg.shift}·{sg.run} {sg.type}
                       </div>
-                      <div className="gtrack" title={barTitle}>
+                      <div className="gtrack" title={isDrag ? undefined : barTitle}>
                         {[360, 600, 840, 1080, 1320].map((m) => (
                           <div key={m} style={{ position: "absolute", left: `${pctPos(m)}%`, top: 0, bottom: 0, width: 1, background: "#E2E8EA" }} />
                         ))}
@@ -2964,16 +3053,47 @@ export default function App() {
                             boxSizing: "border-box", opacity: 0.7, pointerEvents: "none",
                           }} />
                         )}
-                        <div className="gbar" style={{
-                          left: `${pctPos(sg.s)}%`, width: `${pctPos(Math.min(sg.e, T1)) - pctPos(sg.s)}%`,
+                        <div className={"gbar" + (isDrag ? " lifted" : "")} data-dragmode="move" style={{
+                          left: `${barL}%`, width: `${barR - barL}%`,
                           background: TYPE_COLOR[sg.type] || ink,
                           outline: isSel ? `2px solid ${ink}` : (bad ? `2px solid ${gapRed}` : "none"),
                         }} />
+                        <div className="ghandle" data-dragmode="seg-start" style={{ left: `calc(${barL}% - 3px)` }} />
+                        <div className="ghandle" data-dragmode="seg-end" style={{ left: `calc(${barR}% - 4px)` }} />
                         {sg.b && (
-                          <div className="gbrk" style={{
-                            left: `${pctPos(sg.b[0])}%`, width: `${pctPos(sg.b[1]) - pctPos(sg.b[0])}%`,
-                          }} />
+                          <>
+                            <div className={"gbrk" + (isDrag ? " lifted" : "")} data-dragmode="break-move" style={{
+                              left: `${pctPos(sg.b[0])}%`, width: `${pctPos(sg.b[1]) - pctPos(sg.b[0])}%`,
+                            }} />
+                            <div className="ghandle" data-dragmode="break-start" style={{ left: `calc(${pctPos(sg.b[0])}% - 3px)` }} />
+                            <div className="ghandle" data-dragmode="break-end" style={{ left: `calc(${pctPos(sg.b[1])}% - 4px)` }} />
+                          </>
                         )}
+                        {isDrag && (() => {
+                          const dScore = (P.dayScore - dragging.startDayScore) * 100;
+                          const flipLeft = barR > 65;
+                          return (
+                            <div style={{
+                              position: "absolute", top: 17, zIndex: 30, pointerEvents: "none",
+                              ...(flipLeft ? { right: `${100 - barL}%`, marginRight: 6 } : { left: `${barR}%`, marginLeft: 6 }),
+                              background: ink, color: "#fff", padding: "6px 9px", borderRadius: 3,
+                              fontSize: 11, lineHeight: 1.5, whiteSpace: "nowrap", boxShadow: "0 2px 8px rgba(0,0,0,.3)",
+                            }}>
+                              <div style={{ fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+                                {fmt(sg.s)} – {fmt(sg.e)} · {workHrs}h{sg.b ? ` · break ${fmt(sg.b[0])}–${fmt(sg.b[1])} (${brkMin}m)` : ""}
+                              </div>
+                              <div style={{ color: dScore >= 0 ? "#7FD1C0" : "#F09E93" }}>
+                                Δ {day} cov {dScore >= 0 ? "+" : ""}{dScore.toFixed(2)}
+                              </div>
+                              {issues.length > 0
+                                ? <div style={{ color: "#F09E93" }}>⚠ {issues[0]}{issues.length > 1 ? ` (+${issues.length - 1} more)` : ""}</div>
+                                : <div style={{ color: "#7FD1C0" }}>✓ legal</div>}
+                              {dragging.days.length > 1 && (
+                                <div style={{ opacity: 0.75 }}>applies {dragging.days.map((d) => d.slice(0, 2).toUpperCase()).join(" ")}</div>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                   );
