@@ -1578,7 +1578,7 @@ function ActualCurve({ ev, label }) {
 }
 
 /* ---------- coverage chart ---------- */
-function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity, height = 320, selBand }) {
+function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity, avgCycleTime = 0, demandShare = 100, height = 320, selBand }) {
   const data = useMemo(() => {
     const bk = RAW.bookout[day];
     const bkMap = {};
@@ -1610,11 +1610,18 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         gap: tgt - P.sup[i] > 0.05 ? Math.round(tgt * 10) / 10 : null,
         bookout: bkMap[t] ?? null,
         sugVeh: dayEv > 0 && daySup > 0 ? Math.round((smoothedEv(i) / dayEv) * daySup * 10) / 10 : null,
+        // "Vehicles demand implies" — absolute concurrent-vehicle need from demand, NOT the board's
+        // own hours. By Little's Law, concurrent vehicles = trip arrival rate × cycle time. With
+        // ev = pickups+dropoffs (trips = ev/2), this fleet's share = demandShare/100, and cycle
+        // time = avgCycleTime min = avgCycleTime/5 slots, it reduces to ev × share × cycle / 10.
+        // Same SHAPE as sugVeh but scaled to required (not scheduled) hours: the vertical gap
+        // between the two lines is how over-/under-fleeted you are. Scale-sensitive by design.
+        impliedVeh: avgCycleTime > 0 ? Math.round(smoothedEv(i) * (demandShare > 0 ? demandShare / 100 : 1) * avgCycleTime / 10 * 10) / 10 : null,
         events: P.ev[i],
       });
     }
     return rows;
-  }, [P, day]);
+  }, [P, day, avgCycleTime, demandShare]);
   return (
     <ResponsiveContainer width="100%" height={height}>
       <ComposedChart data={data} margin={{ top: 5, right: 14, left: -8, bottom: 0 }}>
@@ -1622,13 +1629,14 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         <XAxis dataKey="time" tick={{ fontSize: 10.5 }} interval={23} tickLine={false} />
         <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
         <Tooltip
-          formatter={(v, name) => [v, { target: "Demand-aligned target", sup: "Supply", covered: "Aligned", bookout: "Observed (sample)", gap: "Target (underweighted)", sugVeh: "Suggested vehicles (day share)" }[name] || name]}
+          formatter={(v, name) => [v, { target: "Demand-aligned target", sup: "Supply", covered: "Aligned", bookout: "Observed (sample)", gap: "Target (underweighted)", sugVeh: "Suggested vehicles (day share)", impliedVeh: "Vehicles demand implies" }[name] || name]}
           labelFormatter={(l, pl) => {
             const r = pl && pl[0] && pl[0].payload;
             if (!r) return l;
             const evTxt = r.events >= 10 ? Math.round(r.events).toString() : r.events.toFixed(1);
             const sugTxt = r.sugVeh != null ? ` · ${r.sugVeh.toFixed(1)} suggested vehicles` : "";
-            return `${l} · ${evTxt} events${sugTxt}`;
+            const impTxt = r.impliedVeh != null ? ` · demand implies ${r.impliedVeh.toFixed(1)}` : "";
+            return `${l} · ${evTxt} events${sugTxt}${impTxt}`;
           }}
           contentStyle={{ fontSize: 12, border: "1px solid #D7DFE2" }} />
         <Legend wrapperStyle={{ fontSize: 12 }} />
@@ -1644,6 +1652,8 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
           <Line type="monotone" dataKey="bookout" name="Observed (sample)" stroke={bookoutViolet} strokeWidth={1.6} strokeDasharray="5 4" dot={false} connectNulls />}
         {showProductivity &&
           <Line type="stepAfter" dataKey="sugVeh" name="Suggested vehicles (day share)" stroke={sampleGray} strokeWidth={1.6} strokeDasharray="2 3" dot={false} connectNulls />}
+        {showProductivity &&
+          <Line type="stepAfter" dataKey="impliedVeh" name="Vehicles demand implies" stroke="#B0455E" strokeWidth={1.8} dot={false} connectNulls />}
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -3364,7 +3374,7 @@ export default function App({ onHome }) {
               </label>
               <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 7 }}>
                 <input type="checkbox" checked={showProductivity} onChange={(e) => setShowProductivity(e.target.checked)} />
-                Suggested vehicles (day share)
+                Vehicle reference lines (day share + demand-implied)
               </label>
             </div>
 
@@ -3375,7 +3385,9 @@ export default function App({ onHome }) {
               <div style={{ marginTop: 8, lineHeight: 1.55, color: "#33434D" }}>
                 <b>Coverage score</b> answers one question: of all the trip demand in the period, what share happens while your service hours are proportionally in place to serve it? 100% would mean your hours perfectly trace the demand pattern — impossible in practice, since shifts come in fixed lengths with rules. Use the score to compare boards: higher means hours better matched to demand.<br /><br />
                 On each day tile, <b>demand</b> is that day's share of the week's trips, and <b>cov</b> is that day's coverage score. In the chart, the dark line is the <b>demand-aligned target</b> — your own hours redrawn to follow demand exactly (or weighted demand, when an off-peak weighting is set in Rules — light periods then claim proportionally more). <b>Red</b> = you're lighter than demand suggests at that time. <b>Teal above the line</b> = heavier than demand suggests (those hours earn no score). <b>Misplaced hours</b> totals the hours sitting in the heavy zones.<br /><br />
-                <b>Suggested vehicles</b> (optional overlay) takes the vehicle-hours already on today's board and redistributes them along the day's trip-share curve: at each moment it shows how many of your own vehicles would be in service if the day's fleet were allocated purely by that moment's percentage of the day's trips. No assumed constants — it always adds back up to exactly the hours you've scheduled, so where it sits above the supply line you're proportionally light, and below it you're proportionally heavy. It differs from the demand-aligned target only in scope: the target spreads the whole week's hours by the week's demand, this line spreads today's hours by today's. Visual reference only — never affects the coverage score or generation.
+                The overlay adds two vehicle reference lines (both visual only — neither affects the coverage score or generation):<br /><br />
+                <b>Suggested vehicles (day share)</b> takes the vehicle-hours already on today's board and redistributes them along the day's trip-share curve: at each moment, how many of your own vehicles would be in service if the day's fleet were allocated purely by that moment's percentage of the day's trips. No assumed constants — it always adds back up to exactly the hours you've scheduled, so above the supply line you're proportionally light, below it proportionally heavy.<br /><br />
+                <b>Vehicles demand implies</b> is the absolute count demand calls for, independent of what you scheduled. By Little's Law, concurrent vehicles = trip arrival rate × cycle time, so it scales each moment's trips by your <b>average trip cycle time</b> and your fleet's <b>demand share</b> (both set in Rules → Deadhead &amp; productivity). It has the same shape as the day-share line but sits at the height demand <em>requires</em> — the vertical gap between the two is how over- or under-fleeted you are. Because it's an absolute count, it's sensitive to the scale of your demand data: if the two lines diverge wildly, check that cycle time and demand share are right (the calibration in Rules estimates your real cycle time) before trusting the height.
               </div>
             </details>
 
@@ -3430,7 +3442,7 @@ export default function App({ onHome }) {
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
                 {day} — service hours vs demand-aligned target
               </div>
-              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} showProductivity={showProductivity} height={340} />
+              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} showProductivity={showProductivity} avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={340} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
                 The dark line shows where {day}'s {P.supVH.toFixed(0)} service hours would sit if they exactly followed the demand pattern. Red = times you're lighter than demand suggests; teal above the line = heavier.
               </div>
@@ -3873,7 +3885,7 @@ export default function App({ onHome }) {
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
                 Live {day} coverage
               </div>
-              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} showProductivity={showProductivity} height={280}
+              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} showProductivity={showProductivity} avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={280}
                 selBand={sel ? [sel.s, sel.e] : null} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
                 Dashed lines mark the selected shift. On desktop, the KPI strip and shift editor stay pinned while you scroll; on phones everything scrolls freely so the board and this chart get the full screen.
