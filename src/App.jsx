@@ -1600,7 +1600,6 @@ export default function App({ onHome }) {
   const [showProductivity, setShowProductivity] = useState(false);
   const [includePT, setIncludePT] = useState(false);
   const [totalSigned, setTotalSigned] = useState(125);
-  const [blockSize, setBlockSize] = useState(25);
   const [board, setBoard] = useState(() => RAW.segments.map(cloneSeg));
   const [baselineBoard, setBaselineBoard] = useState(() => RAW.segments.map(cloneSeg));
   const [signupSource, setSignupSource] = useState("imported"); // "imported" | "uploaded"
@@ -1660,7 +1659,7 @@ export default function App({ onHome }) {
       st.restarts++;
       const o = { rng, noise: st.iter === 0 ? 0 : 3 }; // first pass deterministic = the single-shot result
       if (cfg.mode === "generate") {
-        const g = generateBoard(cfg.glob.max10, cfg.buildN, cfg.rules, cfg.glob, cfg.DEM, cfg.spans, cfg.glob.minVeh, cfg.includePT, cfg.typeSequence, cfg.startShiftNumber, o);
+        const g = generateBoard(cfg.glob.min10 || 0, cfg.buildN, cfg.rules, cfg.glob, cfg.DEM, cfg.spans, cfg.glob.minVeh, cfg.includePT, cfg.typeSequence, cfg.startShiftNumber, o);
         segs = g.segs; ev = g.evaluated;
       } else {
         const r = retimeBoard(cfg.baseline, cfg.rules, cfg.glob, cfg.DEM, cfg.spans, cfg.glob.minVeh, cfg.includePT, o);
@@ -1771,7 +1770,7 @@ export default function App({ onHome }) {
   const [selId, setSelId] = useState(null);
   const [editAllDays, setEditAllDays] = useState(true); // time edits hit every day the segment works vs. split out just the viewed day
   const nextId = useRef(RAW.segments.length + 1000);
-  const designed = totalSigned - blockSize;
+  const designed = totalSigned;
 
 
   const [signupPeriod, setSignupPeriod] = useState({ start: "", end: "", country: "CA", region: "" });
@@ -1876,7 +1875,7 @@ export default function App({ onHome }) {
     const payload = {
       v: 1, savedAt: new Date().toISOString(),
       demSource, sketch, trips, sketchMode, uploadedDem, board, rules, glob, spans,
-      totalSigned, blockSize, includePT, signupPeriod, holidays,
+      totalSigned, includePT, signupPeriod, holidays,
       baselineBoard, signupSource, typeColors,
     };
     const blob = new Blob([JSON.stringify(payload, null, 1)], { type: "application/json" });
@@ -1925,7 +1924,6 @@ export default function App({ onHome }) {
     const sum = [["Signup export"], [],
       ["Designed runs", distinctShifts],
       ["Total signed (envelope)", totalSigned],
-      ["Extra board", blockSize],
       ["10-hour shifts", `${tenCount} of ${glob.max10}`],
       ["Rule flags", flagCount],
       ["Weekly coverage score", `${(eng.weekScore * 100).toFixed(1)}%`],
@@ -2029,6 +2027,7 @@ export default function App({ onHome }) {
           }
           if (g.demandShare == null) g.demandShare = DEFAULT_DEMAND_SHARE;
           if (g.offPeakBias == null) g.offPeakBias = 30; // matches the shipped default; note scores are only comparable at the same weighting
+          if (g.min10 == null) g.min10 = 0;
           setGlob(g);
         }
         if (p.spans) setSpans(p.spans);
@@ -2052,7 +2051,6 @@ export default function App({ onHome }) {
         if (p.demSource === "uploaded" && !p.uploadedDem) setDemSource("imported");
         else if (p.demSource) setDemSource(p.demSource);
         if (p.totalSigned != null) setTotalSigned(p.totalSigned);
-        if (p.blockSize != null) setBlockSize(p.blockSize);
         if (p.includePT != null) setIncludePT(p.includePT);
         if (p.signupPeriod) setSignupPeriod(p.signupPeriod);
         if (Array.isArray(p.holidays)) setHolidays(p.holidays);
@@ -2839,19 +2837,16 @@ export default function App({ onHome }) {
               <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 600 }}>SIGNUP PACKAGE</div>
                 <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 8 }}>
-                  Total signed
+                  Total signed runs
                   <NumField value={totalSigned} onCommit={(v) => setTotalSigned(Math.round(v))} style={numInput} />
                 </label>
-                <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 8 }}>
-                  Extra board
-                  <NumField value={blockSize} onCommit={(v) => setBlockSize(Math.round(v))} style={numInput} />
-                </label>
-                <div style={{ fontSize: 13 }}>
-                  → <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 21, fontWeight: 700 }}>{designed}</span> designed runs
-                  {designed !== distinctShifts && <span style={{ color: "#F5C16C" }}> (board has {distinctShifts})</span>}
-                </div>
+                {totalSigned !== distinctShifts && (
+                  <div style={{ fontSize: 13, color: "#F5C16C" }}>
+                    {signupSource === "uploaded" ? "loaded signup" : "sample signup"} has {distinctShifts}
+                  </div>
+                )}
                 <div style={{ fontSize: 11.5, opacity: 0.8, marginLeft: "auto" }}>
-                  Loaded board: {distinctShifts} runs · sample data — Load project to work on your own board{changedCount > 0 ? ` · ${changedCount} local change${changedCount > 1 ? "s" : ""}` : ""}
+                  {signupSource === "uploaded" ? "Loaded signup" : "Sample signup"}: {distinctShifts} runs{signupSource === "uploaded" ? "" : " — Load project to work on your own signup"}{changedCount > 0 ? ` · ${changedCount} local change${changedCount > 1 ? "s" : ""}` : ""}
                 </div>
               </div>
             </div>
@@ -3133,7 +3128,7 @@ export default function App({ onHome }) {
                         typeSequence = buildTypeSequence(blocks, buildN);
                         startShiftNumber = Math.max(glob.shiftSeriesBase || 6000, 1 + Math.max(0, ...board.map((s) => s.shift), ...baselineBoard.map((s) => s.shift)));
                       }
-                      const g = generateBoard(glob.max10, buildN, rules, glob, DEM, spans, glob.minVeh, includePT, typeSequence, startShiftNumber);
+                      const g = generateBoard(glob.min10 || 0, buildN, rules, glob, DEM, spans, glob.minVeh, includePT, typeSequence, startShiftNumber);
                       const score = computeEngine(DEM, buildSupply(g.segs), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias).weekScore;
                       setBuildResult({ ...g, score });
                       setBuildBusy(false);
@@ -3147,7 +3142,7 @@ export default function App({ onHome }) {
                 Follow existing shift-type pattern (recommended when working from an uploaded signup)
               </label>
               <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 6 }}>
-                Builds whole weekly packages: each placement chooses a shift type, a start time on the 5-minute grid, and a consecutive days-off pattern together, so every generated shift is signable by construction — consistent report times all week, legal rest, no orphan runs. Uses the full 10-hour allowance from Rules before any 8-hour work. Break-taking types are explored at every legal length (30 min to 4 h) and position, so long midday breaks that stretch a shift across both peaks are found automatically. The fleet cap, minimum-vehicle floor, sign-in stagger, and pull-out/pull-in lead time (Rules → Deadhead & productivity) steer every placement — a shift may start before the first trip it serves and end after the last, to allow for that lead time. Set the count to your designed-run envelope ({designed} currently). Loading a build replaces the current board — save your project first. With "Follow existing shift-type pattern" checked, new shifts fill one baseline shift-type block completely before moving to the next, in the same order as your uploaded signup, numbered to continue past its highest shift number.
+                Builds whole weekly packages: each placement chooses a shift type, a start time on the 5-minute grid, and a consecutive days-off pattern together, so every generated shift is signable by construction — consistent report times all week, legal rest, no orphan runs. Fills at least the minimum 10-hour shifts set in Rules and never exceeds the maximum, choosing 8-hour work for the rest. Break-taking types are explored at every legal length (30 min to 4 h) and position, so long midday breaks that stretch a shift across both peaks are found automatically. The fleet cap, minimum-vehicle floor, sign-in stagger, and pull-out/pull-in lead time (Rules → Deadhead & productivity) steer every placement — a shift may start before the first trip it serves and end after the last, to allow for that lead time. Set the count to your designed-run envelope ({designed} currently). Loading a build replaces the current board — save your project first. With "Follow existing shift-type pattern" checked, new shifts fill one baseline shift-type block completely before moving to the next, in the same order as your uploaded signup, numbered to continue past its highest shift number.
               </div>
             </div>
 
@@ -3560,7 +3555,7 @@ export default function App({ onHome }) {
               <div className="kpi"><span className="l">misplaced</span><span className="v">{P.misallocVH.toFixed(0)} vh</span></div>
               <div className="kpi"><span className="l">peak / fleet</span><span className="v" style={{ color: P.peakSup > glob.maxFleet ? "#F09E93" : "#fff" }}>{P.peakSup}/{glob.maxFleet}</span></div>
               <div className="kpi"><span className="l">rule flags</span><span className="v" style={{ color: flagCount ? "#F09E93" : "#7FD1C0" }}>{flagCount}</span></div>
-              <div className="kpi"><span className="l">10-hour</span><span className="v" style={{ color: tenCount > glob.max10 ? "#F09E93" : "#fff" }}>{tenCount}/{glob.max10}</span></div>
+              <div className="kpi"><span className="l">10-hour{glob.min10 > 0 ? ` (min ${glob.min10})` : ""}</span><span className="v" style={{ color: (tenCount > glob.max10 || (glob.min10 > 0 && tenCount < glob.min10)) ? "#F09E93" : "#fff" }}>{tenCount}/{glob.max10}</span></div>
               <div className="kpi"><span className="l">8-hour</span><span className="v">{eightCount}</span></div>
               <div className="kpi"><span className="l">runs</span><span className="v">{distinctShifts}</span></div>
               <div className="kpi"><span className="l">changes</span><span className="v">{changedCount}</span></div>
@@ -4307,8 +4302,10 @@ export default function App({ onHome }) {
                   Board limits
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "10px 12px", alignItems: "center", fontSize: 13 }}>
-                  <span>Max 10-hour shifts on board</span>
-                  <NumField value={glob.max10} onCommit={(v) => setGlob((g) => ({ ...g, max10: v }))} />
+                  <span>Minimum 10-hour shifts on board</span>
+                  <NumField value={glob.min10 ?? 0} onCommit={(v) => setGlob((g) => ({ ...g, min10: Math.max(0, Math.round(v)) }))} />
+                  <span>Maximum 10-hour shifts on board</span>
+                  <NumField value={glob.max10} onCommit={(v) => setGlob((g) => ({ ...g, max10: Math.max(0, Math.round(v)) }))} />
                   <span>Minimum vehicles in service (span)</span>
                   <NumField value={glob.minVeh} onCommit={(v) => setGlob((g) => ({ ...g, minVeh: v }))} />
                   <span>Max vehicles in service (fleet cap)</span>
@@ -4321,7 +4318,7 @@ export default function App({ onHome }) {
                   <NumField value={glob.offPeakBias ?? 0} step={5} onCommit={(v) => setGlob((g) => ({ ...g, offPeakBias: Math.min(60, Math.max(0, Math.round(v))) }))} />
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
-                  Currently {tenCount} ten-hour shifts on the board{tenCount > glob.max10 ? " — over the cap" : ""}. Auto-Build and Auto-package number their generated shifts starting from the series above, continuing past it if the board already has higher numbers. Off-peak weighting: 0 means resources follow demand exactly (proportional); higher values flatten the target so lightly-loaded early and late periods claim proportionally more vehicles per trip and the peaks fewer — reflecting that off-peak trips share rides less. It applies to scoring, the target line, generation, retime, suggestions, and the optimizer, so scores are only comparable between boards evaluated at the same weighting.
+                  Currently {tenCount} ten-hour shifts on the board{tenCount > glob.max10 ? " — over the maximum" : (glob.min10 > 0 && tenCount < glob.min10) ? " — under the minimum" : ""}. Auto-Build fills at least the minimum with 10-hour packages and never exceeds the maximum; the board flags if either bound is crossed. Generated shifts number from the series above, continuing past it if the board already has higher numbers. Off-peak weighting: 0 means resources follow demand exactly (proportional); higher values flatten the target so lightly-loaded early and late periods claim proportionally more vehicles per trip and the peaks fewer — reflecting that off-peak trips share rides less. It applies to scoring, the target line, generation, retime, suggestions, and the optimizer, so scores are only comparable between boards evaluated at the same weighting.
                 </div>
               </div>
 
