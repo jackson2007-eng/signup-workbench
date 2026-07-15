@@ -1224,8 +1224,12 @@ function deepOptimize(board0, engineArgs, rules, glob) {
 // dayStarts: [{day, s}]; checks weekday-internal, weekend-internal (Sat vs Sun),
 // and weekday-vs-weekend spread independently against their own thresholds.
 function startVarianceIssues(dayStarts, glob) {
-  const wd = dayStarts.filter((x) => !WEEKEND_DAYS.has(x.day)).map((x) => x.s);
-  const we = dayStarts.filter((x) => WEEKEND_DAYS.has(x.day)).map((x) => x.s);
+  // which days form the "later-service"/weekend group is configurable (glob.weekendGroup);
+  // their internal spread uses the weekend cap, the rest use the weekday cap, and the cross
+  // cap bounds the two groups. Defaults to Sat+Sun. Only affects report-time variation.
+  const wk = new Set(Array.isArray(glob.weekendGroup) && glob.weekendGroup.length ? glob.weekendGroup : ["Saturday", "Sunday"]);
+  const wd = dayStarts.filter((x) => !wk.has(x.day)).map((x) => x.s);
+  const we = dayStarts.filter((x) => wk.has(x.day)).map((x) => x.s);
   const out = [];
   if (wd.length > 1 && glob.maxStartVarWeekday) {
     const v = Math.max(...wd) - Math.min(...wd);
@@ -1880,6 +1884,7 @@ export default function App({ onHome }) {
       spans: JSON.parse(JSON.stringify(spans)),
       includePT,
       buildN,
+      fitEachDay,
       typeSequence: mode === "generate" && followBaselinePattern ? buildTypeSequence(deriveTypeBlocks(baselineBoard), buildN) : null,
       startShiftNumber: mode === "generate" && followBaselinePattern
         ? Math.max(glob.shiftSeriesBase || 6000, 1 + Math.max(0, ...board.map((s) => s.shift), ...baselineBoard.map((s) => s.shift)))
@@ -1913,10 +1918,12 @@ export default function App({ onHome }) {
     if (!st || st.abort) return;
     st.abort = true;
     if (st.best) {
-      // one polish pass on the final best: whole-segment slides preserve package identity in
-      // both modes; per-day refinement (which splits day-variants) only for generated boards
+      // one polish pass on the final best. "Fit each day" runs the per-day refinement
+      // (deepOptimize → refinePerDay splits day-variants so a run can sit later on days with
+      // later service, within the report-time-variation limits); off keeps runs uniform across
+      // their days (bid-recognizable) via whole-segment slides only. Applies in both modes.
       const engineArgs = [st.cfg.DEM, st.cfg.includePT, st.cfg.glob.minVeh, st.cfg.spans, st.cfg.glob.maxFleet];
-      const polished = st.cfg.mode === "generate"
+      const polished = st.cfg.fitEachDay
         ? deepOptimize(st.best, engineArgs, st.cfg.allRules, st.cfg.glob).board
         : optimizeToConvergence(st.best, engineArgs, st.cfg.allRules, st.cfg.glob).board;
       const pScore = st.scoreFn(polished); // { obj, cov }
@@ -1931,6 +1938,7 @@ export default function App({ onHome }) {
   };
   const optRunning = !!(optRun && optRun.running);
   const [followBaselinePattern, setFollowBaselinePattern] = useState(false);
+  const [fitEachDay, setFitEachDay] = useState(true); // optimizer stop-polish splits per-day time variants
   const [showDiff, setShowDiff] = useState(false);
   const [compareChangedOnly, setCompareChangedOnly] = useState(false);
   const [refineBusy, setRefineBusy] = useState(false);
@@ -2207,6 +2215,7 @@ export default function App({ onHome }) {
           if (g.demandShare == null) g.demandShare = DEFAULT_DEMAND_SHARE;
           if (g.offPeakBias == null) g.offPeakBias = 0; // neutralized default; superseded by coveragePriority
           if (g.coveragePriority == null) g.coveragePriority = 0;
+          if (!Array.isArray(g.weekendGroup)) g.weekendGroup = ["Saturday", "Sunday"];
           if (g.min10 == null) g.min10 = 0;
           setGlob(g);
         }
@@ -3415,6 +3424,10 @@ export default function App({ onHome }) {
                   <input type="radio" checked={optMode === "generate"} disabled={optRunning} onChange={() => setOptMode("generate")} />
                   New signup from rules &amp; demand ({buildN} packages{ptEnabled && ptCount > 0 ? ` + ${ptCount} part-time` : ""}{followBaselinePattern ? ", following type pattern" : ""})
                 </label>
+                <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }} title="On stop, split runs into per-day report times (within the variation limits) so a run can sit later on days with later service. Off keeps each run uniform across its days.">
+                  <input type="checkbox" checked={fitEachDay} disabled={optRunning} onChange={(e) => setFitEachDay(e.target.checked)} />
+                  Fit report times to each day's demand
+                </label>
                 {!optRunning ? (
                   <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink, marginLeft: "auto" }}
                     disabled={optMode === "retime" && !baselineBoard.length}
@@ -3429,7 +3442,7 @@ export default function App({ onHome }) {
                 )}
               </div>
               <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 6 }}>
-                Runs until you stop it: randomized full rebuilds explore different constructions, then the search digs around the best board found by re-placing a few runs at a time with everything else locked — millions of placements deep. Every move stays within each day's service span and the report-time-variation limits, so runs never drift to times a day has no service. The best score only ever goes up. Inputs (rules, demand, signup) are snapshotted when you press Start; keep this page open while it runs. Stopping finishes with a polish pass before the result is final.
+                Runs until you stop it: randomized full rebuilds explore different constructions, then the search digs around the best board found by re-placing a few runs at a time with everything else locked — millions of placements deep. Every move stays within each day's service span and the report-time-variation limits, so runs never drift to times a day has no service. The best score only ever goes up. Inputs (rules, demand, signup) are snapshotted when you press Start; keep this page open while it runs. Stopping finishes with a polish pass before the result is final — with "Fit report times to each day's demand" on (default), that polish splits runs into per-day report times within the variation limits, so a run can sit later on days with later service; off keeps every run uniform across its days.
               </div>
 
               {optRun && (
@@ -4622,9 +4635,27 @@ export default function App({ onHome }) {
                   <NumField value={glob.maxStartVarWeekend / 60} step={0.25} onCommit={(v) => setGlob((g) => ({ ...g, maxStartVarWeekend: Math.round(v * 60) }))} />
                   <span>Max report-time variation — weekday vs weekend (h)</span>
                   <NumField value={glob.maxStartVarCross / 60} step={0.25} onCommit={(v) => setGlob((g) => ({ ...g, maxStartVarCross: Math.round(v * 60) }))} />
+                  <span>Later-service day group</span>
+                  <div style={{ display: "flex", gap: 3 }}>
+                    {DAYS.map((d) => {
+                      const grp = Array.isArray(glob.weekendGroup) ? glob.weekendGroup : ["Saturday", "Sunday"];
+                      const on = grp.includes(d);
+                      return (
+                        <button key={d} title={d}
+                          onClick={() => setGlob((g) => {
+                            const cur = Array.isArray(g.weekendGroup) ? g.weekendGroup : ["Saturday", "Sunday"];
+                            return { ...g, weekendGroup: on ? cur.filter((x) => x !== d) : [...cur, d] };
+                          })}
+                          style={{ padding: "2px 5px", fontSize: 10.5, fontWeight: 600, borderRadius: 2, cursor: "pointer",
+                            border: `1px solid ${on ? supplyTeal : "#C7D2D6"}`, background: on ? supplyTeal : "#fff", color: on ? "#fff" : "#8899A3" }}>
+                          {d.slice(0, 2)}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
-                  Weekdays and weekend days are checked separately, plus a third cap on how far weekend report times may drift from the weekday report time. Checked on every weekly package in the Packaging tab; the auto-builder satisfies rest, consecutive-day, and variance rules by construction.
+                  The <b>later-service day group</b> (default Sat + Sun) is the set of days whose report times are checked against the <i>weekend</i> cap; every other day uses the <i>weekday</i> cap, and the third cap bounds how far the two groups may drift apart. Add a day here (e.g. Friday) when it has later service and its runs should be allowed to report later than the tight weekday group. Checked on every weekly package in the Packaging tab; the auto-builder and optimizer satisfy these variance rules by construction.
                 </div>
               </div>
 
