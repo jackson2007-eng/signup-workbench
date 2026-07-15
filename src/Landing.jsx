@@ -83,7 +83,7 @@ export default function Landing({ navigate }) {
         </div>
 
         <div style={{ borderTop: "1px solid #E2E8EA", padding: "16px 0 40px", fontSize: 12, color: sampleGray, lineHeight: 1.55 }}>
-          Currently in use as an internal operations tool for the City of Edmonton. Each module keeps its own data templates and uploads while sharing one coverage-scoring and optimization engine underneath.
+          Each module keeps its own data templates and uploads while sharing one coverage-scoring and optimization engine underneath.
         </div>
       </div>
     </div>
