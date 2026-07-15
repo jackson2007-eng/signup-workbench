@@ -23,7 +23,6 @@ const hTitle = { fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fon
 const DOW = { Sunday: "SU", Monday: "MO", Tuesday: "TU", Wednesday: "WE", Thursday: "TH", Friday: "FR", Saturday: "SA" };
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
-const emptyCalls = () => { const c = {}; for (const d of DAYS) c[d] = new Array(N).fill(0); return c; };
 
 // 42 control points (05:00→25:30, every 30 min) → per-slot curve, scaled so the peak = `peak`.
 function sketchToCalls(raw, peak) {
@@ -40,6 +39,81 @@ function sketchToCalls(raw, peak) {
 }
 const DEFAULT_SKETCH = [6, 8, 10, 16, 26, 40, 55, 70, 82, 90, 92, 88, 80, 74, 72, 76, 84, 92, 96, 92, 82, 70, 58, 46, 36, 28, 22, 17, 13, 10, 8, 6, 5, 4, 3, 2, 2, 1, 1, 1, 0, 0];
 
+const hdrIndex = (H, ...names) => {
+  const low = H.map((h) => String(h == null ? "" : h).trim().toLowerCase());
+  for (const n of names) { const i = low.indexOf(n.toLowerCase()); if (i >= 0) return i; }
+  return -1;
+};
+const EXCEL_EPOCH = 25569; // days from Excel's 1899-12-30 serial epoch to the Unix epoch
+const serialToWeekday = (serial) => new Date(Math.round((Math.floor(serial) - EXCEL_EPOCH) * 86400000)).getUTCDay();
+
+// Derive an Active-calls concurrency curve from a raw ACD call-record export (one row per handled
+// call, with Excel-serial Call Start Time / Call End Time). For each interval we count calls in
+// progress (start ≤ t < end), then average each weekday across the distinct dates it appears, so
+// the result is a typical week — not a total. Inbound calls only (customer demand); outbound is the
+// agents' own activity, not workload. Returns { calls, info } or null if the rows aren't ACD records.
+function deriveActiveCalls(rows) {
+  if (!rows || !rows.length) return null;
+  const H = rows[0];
+  const cs = hdrIndex(H, "Call Start Time", "Start Time");
+  const ce = hdrIndex(H, "Call End Time", "End Time");
+  if (cs < 0 || ce < 0) return null;
+  const ct = hdrIndex(H, "Call Type");
+  const acc = {}, dates = {};
+  for (const d of DAYS) { acc[d] = new Array(N).fill(0); dates[d] = new Set(); }
+  let used = 0, outbound = 0;
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r]; if (!row) continue;
+    const s = row[cs], e = row[ce];
+    if (typeof s !== "number" || typeof e !== "number") continue;
+    if (ct >= 0 && !/inbound/i.test(String(row[ct] || ""))) { outbound++; continue; }
+    const dateSerial = Math.floor(s);
+    const d = DAYS[serialToWeekday(s)];
+    const startMin = Math.round((s - dateSerial) * 1440);
+    let endMin = Math.round((e - dateSerial) * 1440);
+    if (endMin <= startMin) endMin = startMin + 1;
+    const a = Math.floor((startMin - T0) / 5), z = Math.ceil((endMin - T0) / 5);
+    if (z <= 0 || a >= N) continue;
+    for (let i = Math.max(0, a); i < Math.min(N, z); i++) acc[d][i]++;
+    dates[d].add(dateSerial);
+    used++;
+  }
+  if (used === 0) return null;
+  const calls = {};
+  let minDates = Infinity, maxDates = 0;
+  for (const d of DAYS) {
+    const nd = dates[d].size || 1;
+    if (dates[d].size) { minDates = Math.min(minDates, nd); maxDates = Math.max(maxDates, nd); }
+    calls[d] = acc[d].map((v) => Math.round((v / nd) * 100) / 100);
+  }
+  const span = minDates === maxDates ? `${maxDates}` : `${minDates}–${maxDates}`;
+  return { calls, info: `Derived active-call curve from ${used.toLocaleString()} inbound calls (${outbound.toLocaleString()} outbound excluded), averaged over ${span} day(s) per weekday.` };
+}
+
+// Simple Day / Time / Active-calls template → per-slot curve (one value per interval).
+function parseSimpleCalls(rows) {
+  if (!rows || !rows.length) return null;
+  const H = rows[0];
+  const di = hdrIndex(H, "Day", "Weekday");
+  const ti = H.map((h) => String(h || "").toLowerCase()).findIndex((h) => h.startsWith("time") || h.startsWith("interval"));
+  const ai = H.map((h) => String(h || "").toLowerCase()).findIndex((h) => h.includes("active") || h.includes("call"));
+  if (di < 0 || ti < 0 || ai < 0) return null;
+  const dayKey = {}; for (const d of DAYS) { dayKey[d.toLowerCase()] = d; dayKey[d.slice(0, 3).toLowerCase()] = d; }
+  const calls = {}; for (const d of DAYS) calls[d] = new Array(N).fill(0);
+  let used = 0;
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r]; if (!row) continue;
+    const d = dayKey[String(row[di] || "").trim().toLowerCase()];
+    let raw = row[ti];
+    const t = typeof raw === "number" && raw < 1 ? Math.round(raw * 1440) : parseHM(String(raw || "").trim());
+    const v = Number(row[ai]);
+    if (!d || t == null || !Number.isFinite(v)) continue;
+    const i = Math.round((t - T0) / 5);
+    if (i >= 0 && i < N) { calls[d][i] = v; used++; }
+  }
+  return used ? { calls, info: `Loaded ${used.toLocaleString()} interval values from the template.` } : null;
+}
+
 const NAV = [
   { key: "rules", label: "RULES" },
   { key: "demand", label: "DEMAND" },
@@ -55,6 +129,7 @@ export default function CallCentre({ onHome }) {
   const [spans, setSpans] = useState(() => clone(CALL_SAMPLE.spans));
   const [calls, setCalls] = useState(() => clone(CALL_SAMPLE.calls));
   const [demSource, setDemSource] = useState("sample");
+  const [uploadInfo, setUploadInfo] = useState(null);
   const [typeColors, setTypeColors] = useState(() => ({ ...CALL_SAMPLE.typeColors }));
   const [tab, setTab] = useState("coverage");
   const [day, setDay] = useState("Monday");
@@ -117,37 +192,28 @@ export default function CallCentre({ onHome }) {
       const f = d === "Saturday" ? 0.5 : d === "Sunday" ? 0.45 : 1;
       c[d] = wk.map((v) => Math.round(v * f * 100) / 100);
     }
-    setCalls(c); setDemSource("sketched");
+    setCalls(c); setDemSource("sketched"); setUploadInfo(null);
   };
-  const useSample = () => { setCalls(clone(CALL_SAMPLE.calls)); setDemSource("sample"); };
+  const useSample = () => { setCalls(clone(CALL_SAMPLE.calls)); setDemSource("sample"); setUploadInfo(null); };
 
   const uploadCalls = (file) => {
     const rd = new FileReader();
     rd.onload = () => {
       try {
         const wb = XLSX.read(rd.result, { type: file.name.endsWith(".csv") ? "string" : "array" });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false });
-        if (!rows.length) throw new Error("empty");
-        const hdr = rows[0].map((h) => String(h || "").trim().toLowerCase());
-        const di = hdr.findIndex((h) => h.startsWith("day"));
-        const ti = hdr.findIndex((h) => h.startsWith("time") || h.startsWith("interval"));
-        const ai = hdr.findIndex((h) => h.includes("active") || h.includes("call"));
-        if (di < 0 || ti < 0 || ai < 0) throw new Error("headers");
-        const dayKey = {}; for (const d of DAYS) { dayKey[d.toLowerCase()] = d; dayKey[d.slice(0, 3).toLowerCase()] = d; }
-        const c = emptyCalls();
-        for (let r = 1; r < rows.length; r++) {
-          const row = rows[r]; if (!row) continue;
-          const d = dayKey[String(row[di] || "").trim().toLowerCase()];
-          const t = parseHM(String(row[ti] || "").trim());
-          const v = Number(row[ai]);
-          if (!d || t == null || !Number.isFinite(v)) continue;
-          const i = Math.round((t - T0) / 5);
-          if (i >= 0 && i < N) c[d][i] = v;
+        // Scan every sheet for a raw ACD call-record export first (Call Start/End Time), then fall
+        // back to the simple Day/Time/Active-calls template. No names or PII are retained — only the
+        // aggregate active-calls curve.
+        let result = null;
+        for (const sn of wb.SheetNames) {
+          const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, blankrows: false, raw: true });
+          result = deriveActiveCalls(rows) || parseSimpleCalls(rows);
+          if (result) break;
         }
-        setCalls(c); setDemSource("uploaded");
+        if (!result) throw new Error("no usable data");
+        setCalls(result.calls); setDemSource("uploaded"); setUploadInfo(result.info);
       } catch (e) {
-        alert("Could not read that call-data file. Use the template: columns Day, Time, Active calls.");
+        alert("Could not read that call-data file. Upload a raw ACD call export (with Call Start Time / Call End Time), or the simple template (Day, Time, Active calls).");
       }
     };
     if (file.name.endsWith(".csv")) rd.readAsText(file); else rd.readAsArrayBuffer(file);
@@ -290,7 +356,7 @@ export default function CallCentre({ onHome }) {
         )}
 
         {tab === "rules" && <RulesTab {...{ rules, setRule, glob, setGlob, spans, setSpans, tColor }} />}
-        {tab === "demand" && <DemandTab {...{ day, calls, demSource, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }} />}
+        {tab === "demand" && <DemandTab {...{ day, calls, demSource, uploadInfo, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }} />}
         {tab === "build" && <BuildTab {...{ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor }} />}
         {tab === "coverage" && (
           <div>
@@ -399,7 +465,7 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor }) {
 }
 
 /* ================= DEMAND ================= */
-function DemandTab({ day, calls, demSource, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }) {
+function DemandTab({ day, calls, demSource, uploadInfo, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }) {
   const upRef = useRef(null);
   const srcLabel = { sample: "Sample data", sketched: "Sketched", uploaded: "Uploaded call data" }[demSource] || demSource;
   return (
@@ -416,7 +482,13 @@ function DemandTab({ day, calls, demSource, sketchRaw, setSketchRaw, peakCalls, 
               onChange={(e) => { if (e.target.files && e.target.files[0]) uploadCalls(e.target.files[0]); e.target.value = ""; }} />
           </div>
         </div>
+        {uploadInfo && (
+          <div style={{ background: "#EEF4F5", border: "1px solid #CFE0E2", padding: "7px 11px", marginBottom: 8, fontSize: 12, color: "#2C4A4A" }}>{uploadInfo}</div>
+        )}
         <ActualCurve ev={calls[day]} label={`Active calls (queue + talking) — ${day}`} />
+        <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 6 }}>
+          Upload accepts a raw ACD call export (one row per call with Call Start Time / Call End Time) — it derives concurrent active calls per interval, inbound only, averaged into a typical week — or the simple Day / Time / Active calls template.
+        </div>
       </div>
 
       <div style={cardStyle}>
