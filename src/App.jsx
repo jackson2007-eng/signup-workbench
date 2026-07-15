@@ -14,15 +14,12 @@ const N = RAW.nslots;
 const T0 = RAW.slots0;
 const T1 = T0 + N * 5;
 const SLOT = (i) => T0 + i * 5;
-// vehicle recycling: on weekdays (Mon–Fri; weekends are lighter and exempt), inside the recycle
-// window, buses in service + buses still recovering (returned within the turnaround) must stay
-// within the fleet cap. Defined once, reused by the engine flag and every placement veto.
-// Independent of the report-time weekend group — a heavy Friday still recycles.
+// vehicle recycling: on weekdays (Mon–Fri; weekends are lighter and exempt) at least recycleCount
+// morning runs must finish and turn around by the recycle window's end, so their buses are free
+// for afternoon pull-outs. A floor, not a cap — it never blocks afternoon starts, only flags a
+// shortfall and gently steers generation. Independent of the report-time weekend group — a heavy
+// Friday still recycles. Separate from maxFleet (the all-day concurrent-vehicle cap).
 const isRecycleDay = (day, glob) => !!glob.recycleEnabled && !WEEKEND_DAYS.has(day);
-const inRecycleWindow = (t, glob) => {
-  const w = glob.recycleWindow;
-  return Array.isArray(w) && w.length === 2 && t >= w[0] && t < w[1];
-};
 const fmt = (m) => {
   const h = Math.floor(m / 60), mm = m % 60;
   return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
@@ -469,37 +466,30 @@ function buildSupply(board) {
   return cov;
 }
 
-// Vehicle-recycling occupancy = buses in service + buses that pulled in within the turnaround
-// (returned but not yet reusable). Inside the recycle window, on recycle days, this must stay
-// within maxFleet — otherwise more buses are committed than the fleet holds, so not enough
-// recycled in time. Returns per-day arrays of violating slot ranges ({from,to,peak}); {} when off.
+// A run "recycles" on weekday d if it starts before the window (a morning run) and its bus is
+// finished and turned around by the window's end (end + turnaround ≤ windowEnd) — that bus is
+// then free for an afternoon pull-out. The rule is a floor: at least recycleCount such runs per
+// weekday. Returns per-day { recyclers, need } when below the floor; {} otherwise / when off.
+function isRecycler(seg, glob) {
+  const w = glob.recycleWindow;
+  if (!Array.isArray(w) || w.length !== 2) return false;
+  const turn = Math.max(0, glob.recycleTurnaround || 0);
+  return seg.s < w[0] && seg.e + turn <= w[1];
+}
 function recycleViolations(board, glob) {
   const out = {};
-  for (const d of DAYS) out[d] = [];
-  if (!glob.recycleEnabled || !(glob.maxFleet > 0)) return out;
-  const turnSlots = Math.round(Math.max(0, glob.recycleTurnaround || 0) / 5);
-  const cov = buildSupply(board);
-  const endCount = {}; for (const d of DAYS) endCount[d] = new Array(N + 1).fill(0);
+  for (const d of DAYS) out[d] = null;
+  if (!glob.recycleEnabled) return out;
+  const need = Math.max(0, Math.round(glob.recycleCount || 0));
+  if (need <= 0) return out;
+  const count = {}; for (const d of DAYS) count[d] = 0;
   for (const sg of board) {
-    const ei = Math.round((sg.e - T0) / 5);
-    if (ei < 0) continue;
-    const k = Math.min(N, ei);
-    for (const d of sg.days) endCount[d][k]++;
+    if (!isRecycler(sg, glob)) continue;
+    for (const d of sg.days) count[d]++;
   }
   for (const d of DAYS) {
     if (!isRecycleDay(d, glob)) continue;
-    const sup = cov[d]; let cur = null;
-    for (let i = 0; i < N; i++) {
-      if (!inRecycleWindow(SLOT(i), glob)) { if (cur) { out[d].push(cur); cur = null; } continue; }
-      let recovering = 0;
-      for (let j = Math.max(0, i - turnSlots + 1); j <= i; j++) recovering += endCount[d][j];
-      const occ = sup[i] + recovering;
-      if (occ > glob.maxFleet) {
-        if (!cur) cur = { from: i, to: i, peak: occ };
-        else { cur.to = i; cur.peak = Math.max(cur.peak, occ); }
-      } else if (cur) { out[d].push(cur); cur = null; }
-    }
-    if (cur) out[d].push(cur);
+    if (count[d] < need) out[d] = { recyclers: count[d], need };
   }
   return out;
 }
@@ -736,17 +726,6 @@ function findSuggestions(board, eng, DEM, rules, glob, spans = null) {
   const starts = startsPerSlot(board);
   const maxPull = glob.maxPullout || 0;
   const pcov = glob.coveragePriority > 0 ? glob.coveragePriority : 0;
-  const recycleOn = !!glob.recycleEnabled && glob.maxFleet > 0;
-  const turnSlots = Math.round(Math.max(0, glob.recycleTurnaround || 0) / 5);
-  // per-day "recovering" count from the current board (buses in the turnaround tail after pull-in)
-  const recovDay = {};
-  if (recycleOn) {
-    for (const d of DAYS) recovDay[d] = new Array(N).fill(0);
-    for (const sg of board) {
-      const z = Math.round((sg.e - T0) / 5);
-      for (const d of sg.days) for (let i = Math.max(0, z); i < Math.min(N, z + turnSlots); i++) recovDay[d][i]++;
-    }
-  }
   let evaluated = 0;
   // other day-variant segments of the same shift (for report-time-variation checks)
   const shiftStartsOf = (shiftNo, exceptId) => {
@@ -795,22 +774,13 @@ function findSuggestions(board, eng, DEM, rules, glob, spans = null) {
         }
       }
       const newC = segContrib(cand);
-      const oldEidx = recycleOn ? Math.round((seg.e - T0) / 5) : 0;
-      const candEidx = recycleOn ? Math.round((cand.e - T0) / 5) : 0;
       let delta = 0;
       for (const d of cand.days) {
         const p = eng.perDay[d];
-        const rDay = recycleOn && isRecycleDay(d, glob);
         let term = 0, fleetBad = false;
         for (let i = 0; i < N; i++) {
           const ns = p.sup[i] - oldC[i] + newC[i];
           if (glob.maxFleet > 0 && ns > glob.maxFleet && p.sup[i] <= glob.maxFleet) { fleetBad = true; break; }
-          if (rDay && inRecycleWindow(SLOT(i), glob)) {
-            let rec = recovDay[d][i];
-            if (i >= oldEidx && i < oldEidx + turnSlots) rec--;   // this run left its old tail
-            if (i >= candEidx && i < candEidx + turnSlots) rec++; // and added a new one
-            if (ns + rec > glob.maxFleet && p.sup[i] + recovDay[d][i] <= glob.maxFleet) { fleetBad = true; break; } // new recycling shortfall
-          }
           term += slotCredit(p.w[i] / weekEv, ns / weekSup, pcov);
         }
         if (fleetBad) return;
@@ -986,22 +956,23 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
   }
 
   const maxPull = glob.maxPullout || 0;
-  const recycleOn = !!glob.recycleEnabled && glob.maxFleet > 0;
-  const turnSlots = Math.round(Math.max(0, glob.recycleTurnaround || 0) / 5);
+  // recycling floor: nudge generation to leave enough morning runs that finish + turn around by
+  // the window (recyclers), so their buses free up for the afternoon. recyclerCount tracks how
+  // many exist per day; the small bonus stops once the floor (recycleCount) is met.
+  const recNeed = !!glob.recycleEnabled ? Math.max(0, Math.round(glob.recycleCount || 0)) : 0;
+  const isRec = (c) => recNeed > 0 && isRecycler({ s: c.s, e: c.e }, glob);
   const starts = {};
-  const recov = {};
-  for (const d of DAYS) { starts[d] = new Array(N).fill(0); recov[d] = new Array(N).fill(0); }
+  const recyclerCount = {};
+  for (const d of DAYS) { starts[d] = new Array(N).fill(0); recyclerCount[d] = 0; }
   let used10 = 0;
   const packs = [];
 
   for (let p = 0; p < nPackages; p++) {
-    // per-day prefix sums of marginal gain, at-fleet-cap counts, and (recycling) at-occupancy-cap
-    // counts within the window → O(1) per candidate-day
-    const PG = {}, PC = {}, PRC = {};
+    // per-day prefix sums of marginal gain and at-fleet-cap counts → O(1) per candidate-day
+    const PG = {}, PC = {};
     for (const d of DAYS) {
       const [s0, s1] = spans[d];
-      const rDay = recycleOn && isRecycleDay(d, glob);
-      const pg = new Array(N + 1).fill(0), pc = new Array(N + 1).fill(0), prc = new Array(N + 1).fill(0);
+      const pg = new Array(N + 1).fill(0), pc = new Array(N + 1).fill(0);
       for (let i = 0; i < N; i++) {
         const tgt = target[d][i];
         let g = concaveGain(tgt, sup[d][i], pcov);
@@ -1009,9 +980,8 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
         if (t >= s0 && t < s1 && sup[d][i] < minVeh) g += 0.5;
         pg[i + 1] = pg[i] + g;
         pc[i + 1] = pc[i] + (glob.maxFleet > 0 && sup[d][i] >= glob.maxFleet ? 1 : 0);
-        prc[i + 1] = prc[i] + (rDay && inRecycleWindow(t, glob) && sup[d][i] + recov[d][i] >= glob.maxFleet ? 1 : 0);
       }
-      PG[d] = pg; PC[d] = pc; PRC[d] = prc;
+      PG[d] = pg; PC[d] = pc;
     }
     const evalDay = (c, d) => {
       // hard constraint: a shift never starts before this day's service span opens or
@@ -1027,14 +997,9 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
         g -= PG[d][b1] - PG[d][b0];
       }
       if (cap > 0) return null; // would exceed fleet cap somewhere it covers
-      if (recycleOn) {
-        // recycling: occupancy = supply + recovering; extend footprint by the turnaround tail
-        const zExt = Math.min(N, z + turnSlots);
-        let rcap = PRC[d][zExt] - PRC[d][a];
-        if (c.b) rcap -= PRC[d][idx(c.b[1])] - PRC[d][idx(c.b[0])];
-        if (rcap > 0) return null; // not enough buses recycled in time within the window
-      }
-      return g - starts[d][c.startSlot] * 0.15;
+      let val = g - starts[d][c.startSlot] * 0.15;
+      if (recyclerCount[d] < recNeed && isRecycleDay(d, glob) && isRec(c)) val += 0.3; // steer to the recycler floor
+      return val;
     };
     const pick = (only10, forceType) => {
       let best = null, bestVal = -Infinity;
@@ -1069,13 +1034,12 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
     if (!best) break;
     const { c, days } = best;
     const a = idx(c.s), z = idx(c.e);
-    const zEnd = Math.min(N, z + turnSlots);
     for (const d of days) {
       for (let i = a; i < z; i++) sup[d][i]++;
       if (c.b) for (let i = idx(c.b[0]); i < idx(c.b[1]); i++) sup[d][i]--;
-      if (recycleOn) for (let i = z; i < zEnd; i++) recov[d][i]++; // bus recovering after pull-in
       starts[d][c.startSlot]++;
     }
+    if (isRec(c)) for (const d of days) if (isRecycleDay(d, glob)) recyclerCount[d]++;
     if (c.is10) used10++;
     packs.push({ type: c.type, s: c.s, e: c.e, b: c.b ? [...c.b] : null, work: c.work, days: [...days] });
   }
@@ -1085,11 +1049,10 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
   // part-time pick greedily fills the remaining gaps. Same span/fleet/stagger vetoes via evalDay.
   const ptCands = ptCount > 0 ? buildPtCandidates(ptRules, glob) : [];
   for (let p = 0; p < ptCount && ptCands.length; p++) {
-    const PG = {}, PC = {}, PRC = {};
+    const PG = {}, PC = {};
     for (const d of DAYS) {
       const [s0, s1] = spans[d];
-      const rDay = recycleOn && isRecycleDay(d, glob);
-      const pg = new Array(N + 1).fill(0), pc = new Array(N + 1).fill(0), prc = new Array(N + 1).fill(0);
+      const pg = new Array(N + 1).fill(0), pc = new Array(N + 1).fill(0);
       for (let i = 0; i < N; i++) {
         const tgt = target[d][i];
         let g = concaveGain(tgt, sup[d][i], pcov);
@@ -1097,9 +1060,8 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
         if (t >= s0 && t < s1 && sup[d][i] < minVeh) g += 0.5;
         pg[i + 1] = pg[i] + g;
         pc[i + 1] = pc[i] + (glob.maxFleet > 0 && sup[d][i] >= glob.maxFleet ? 1 : 0);
-        prc[i + 1] = prc[i] + (rDay && inRecycleWindow(t, glob) && sup[d][i] + recov[d][i] >= glob.maxFleet ? 1 : 0);
       }
-      PG[d] = pg; PC[d] = pc; PRC[d] = prc;
+      PG[d] = pg; PC[d] = pc;
     }
     const evalDay = (c, d) => {
       if (c.s < spans[d][0] || c.e > spans[d][1]) return null;
@@ -1113,12 +1075,6 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
         g -= PG[d][b1] - PG[d][b0];
       }
       if (cap > 0) return null;
-      if (recycleOn) {
-        const zExt = Math.min(N, z2 + turnSlots);
-        let rcap = PRC[d][zExt] - PRC[d][a2];
-        if (c.b) rcap -= PRC[d][idx(c.b[1])] - PRC[d][idx(c.b[0])];
-        if (rcap > 0) return null;
-      }
       return g - starts[d][c.startSlot] * 0.15;
     };
     let best = null, bestVal = -Infinity;
@@ -1137,13 +1093,12 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
     }
     if (!best) break;
     const a = idx(best.s), z = idx(best.e);
-    const zEnd = Math.min(N, z + turnSlots);
     for (const d of best.days) {
       for (let i = a; i < z; i++) sup[d][i]++;
       if (best.b) for (let i = idx(best.b[0]); i < idx(best.b[1]); i++) sup[d][i]--;
-      if (recycleOn) for (let i = z; i < zEnd; i++) recov[d][i]++;
       starts[d][best.startSlot]++;
     }
+    if (isRec(best)) for (const d of best.days) if (isRecycleDay(d, glob)) recyclerCount[d]++;
     packs.push({ type: best.type, s: best.s, e: best.e, b: best.b ? [...best.b] : null, work: best.work, days: [...best.days], pt: true });
   }
 
@@ -1210,13 +1165,15 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT, opts 
   pkgs.sort((a, b) => (b.work - a.work) || (a.shift - b.shift));
   if (rng) for (let i = pkgs.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [pkgs[i], pkgs[j]] = [pkgs[j], pkgs[i]]; }
 
-  const recycleOn = !!glob.recycleEnabled && glob.maxFleet > 0;
-  const turnSlots = Math.round(Math.max(0, glob.recycleTurnaround || 0) / 5);
-  const sup = {}, starts = {}, recov = {};
+  // recycling floor: nudge re-times to leave enough morning "recyclers" per weekday (runs that
+  // finish + turn around by the window). Small self-limiting bonus, like generateBoard's.
+  const recNeed = !!glob.recycleEnabled ? Math.max(0, Math.round(glob.recycleCount || 0)) : 0;
+  const isRec = (c) => recNeed > 0 && isRecycler({ s: c.s, e: c.e }, glob);
+  const sup = {}, starts = {}, recyclerCount = {};
   for (const d of DAYS) {
     sup[d] = includePT ? RAW.pt[d].slice() : new Array(N).fill(0);
     starts[d] = new Array(N).fill(0);
-    recov[d] = new Array(N).fill(0);
+    recyclerCount[d] = 0;
   }
   const ptSlots = includePT ? DAYS.reduce((a, d) => a + RAW.pt[d].reduce((x, y) => x + y, 0), 0) : 0;
   const idx = slotIdx;
@@ -1225,9 +1182,9 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT, opts 
       const a = idx(sg.s), z = idx(sg.e);
       for (let i = a; i < z; i++) sup[d][i]++;
       if (sg.b) for (let i = idx(sg.b[0]); i < idx(sg.b[1]); i++) sup[d][i]--;
-      if (recycleOn) for (let i = z; i < Math.min(N, z + turnSlots); i++) recov[d][i]++;
       starts[d][idx(sg.s)]++;
     }
+    if (isRec(sg)) for (const d of sg.days) if (isRecycleDay(d, glob)) recyclerCount[d]++;
   };
   for (const sg of passthrough) addSeg(sg);
 
@@ -1245,11 +1202,10 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT, opts 
   const placed = [];
   let retimed = 0, kept = 0;
   for (const pkg of pkgs) {
-    const PG = {}, PC = {}, PRC = {};
+    const PG = {}, PC = {};
     for (const d of pkg.days) {
       const [s0, s1] = spans[d];
-      const rDay = recycleOn && isRecycleDay(d, glob);
-      const pg = new Array(N + 1).fill(0), pc = new Array(N + 1).fill(0), prc = new Array(N + 1).fill(0);
+      const pg = new Array(N + 1).fill(0), pc = new Array(N + 1).fill(0);
       for (let i = 0; i < N; i++) {
         const tgt = target[d][i];
         let g = concaveGain(tgt, sup[d][i], pcov);
@@ -1257,9 +1213,8 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT, opts 
         if (t >= s0 && t < s1 && sup[d][i] < minVeh) g += 0.5;
         pg[i + 1] = pg[i] + g;
         pc[i + 1] = pc[i] + (glob.maxFleet > 0 && sup[d][i] >= glob.maxFleet ? 1 : 0);
-        prc[i + 1] = prc[i] + (rDay && inRecycleWindow(t, glob) && sup[d][i] + recov[d][i] >= glob.maxFleet ? 1 : 0);
       }
-      PG[d] = pg; PC[d] = pc; PRC[d] = prc;
+      PG[d] = pg; PC[d] = pc;
     }
     let best = null, bestVal = -Infinity;
     for (const c of cands) {
@@ -1278,13 +1233,8 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT, opts 
           g -= PG[d][b1] - PG[d][b0];
         }
         if (cap > 0) { ok = false; break; } // would exceed the fleet cap somewhere it covers
-        if (recycleOn) {
-          const zExt = Math.min(N, z + turnSlots);
-          let rcap = PRC[d][zExt] - PRC[d][a];
-          if (c.b) rcap -= PRC[d][idx(c.b[1])] - PRC[d][idx(c.b[0])];
-          if (rcap > 0) { ok = false; break; } // not enough buses recycled in time in the window
-        }
         total += g - starts[d][c.startSlot] * 0.15;
+        if (recyclerCount[d] < recNeed && isRecycleDay(d, glob) && isRec(c)) total += 0.3; // steer to the recycler floor
       }
       if (!ok) continue;
       if (noise) total += (rng() - 0.5) * noise;
@@ -1536,15 +1486,6 @@ function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans) {
     const c = segContrib(sg);
     for (const d of sg.days) for (let i = 0; i < N; i++) sup[d][i] += c[i];
   }
-  // live recycling "recovering" count per day (buses in the turnaround tail after pull-in)
-  const recycleOn = !!glob.recycleEnabled && glob.maxFleet > 0;
-  const turnSlots = Math.round(Math.max(0, glob.recycleTurnaround || 0) / 5);
-  const recov = {};
-  for (const d of DAYS) recov[d] = new Array(N).fill(0);
-  if (recycleOn) for (const sg of board) {
-    const z = Math.round((sg.e - T0) / 5);
-    for (const d of sg.days) for (let i = Math.max(0, z); i < Math.min(N, z + turnSlots); i++) recov[d][i]++;
-  }
   let weekEv = 0, weekSup = 0;
   const gammaR = demandGamma(glob);
   const pcov = glob.coveragePriority > 0 ? glob.coveragePriority : 0;
@@ -1584,8 +1525,6 @@ function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans) {
       if (!R) continue;
       const oldC = segContrib(seg);
       const oldStartSlot = Math.floor((seg.s - T0) / 5);
-      const rDay = recycleOn && isRecycleDay(d, glob);
-      const oldEidx = Math.round((seg.e - T0) / 5);
       let bestM = 0, bestDelta = 1e-6, bestTerm = 0;
       for (let m = -maxVar; m <= maxVar; m += 5) {
         if (m === 0) continue;
@@ -1602,17 +1541,10 @@ function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans) {
         const b2 = seg.b ? [seg.b[0] + m, seg.b[1] + m] : null;
         const cand = { ...seg, s: s2, e: e2, b: b2 };
         const newC = segContrib(cand);
-        const candEidx = rDay ? Math.round((e2 - T0) / 5) : 0;
         let t = 0, fleetBad = false;
         for (let i = 0; i < N; i++) {
           const ns = sup[d][i] - oldC[i] + newC[i];
           if (glob.maxFleet > 0 && ns > glob.maxFleet && sup[d][i] <= glob.maxFleet) { fleetBad = true; break; }
-          if (rDay && inRecycleWindow(SLOT(i), glob)) {
-            let rec = recov[d][i];
-            if (i >= oldEidx && i < oldEidx + turnSlots) rec--;
-            if (i >= candEidx && i < candEidx + turnSlots) rec++;
-            if (ns + rec > glob.maxFleet && sup[d][i] + recov[d][i] <= glob.maxFleet) { fleetBad = true; break; }
-          }
           t += slotCredit(ev[d][i] / weekEv, ns / weekSup, pcov);
         }
         if (fleetBad) continue;
@@ -1626,11 +1558,6 @@ function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans) {
       const newSeg = { ...cloneSeg(seg), s: seg.s + m, e: seg.e + m, b: b2 };
       const newC = segContrib(newSeg);
       for (let i = 0; i < N; i++) sup[d][i] += newC[i] - oldC[i];
-      if (recycleOn) { // shift the recovering tail from the old end to the new end on this day
-        const newEidx = Math.round((newSeg.e - T0) / 5);
-        for (let i = Math.max(0, oldEidx); i < Math.min(N, oldEidx + turnSlots); i++) recov[d][i]--;
-        for (let i = Math.max(0, newEidx); i < Math.min(N, newEidx + turnSlots); i++) recov[d][i]++;
-      }
       term[d] = bestTerm;
       const k2 = Math.floor((newSeg.s - T0) / 5);
       if (oldStartSlot >= 0 && oldStartSlot < N) starts[d][oldStartSlot]--;
@@ -2376,6 +2303,7 @@ export default function App({ onHome }) {
           if (g.recycleEnabled == null) g.recycleEnabled = false;
           if (g.recycleTurnaround == null) g.recycleTurnaround = 15;
           if (!Array.isArray(g.recycleWindow)) g.recycleWindow = [795, 900];
+          if (g.recycleCount == null) g.recycleCount = 15;
           if (g.occupancyTarget == null) g.occupancyTarget = false;
           if (g.min10 == null) g.min10 = 0;
           setGlob(g);
@@ -2539,7 +2467,7 @@ export default function App({ onHome }) {
   const ftCov = useMemo(() => buildSupply(board), [board]);
   const eng = useMemo(() => computeEngine(DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime]);
   const base = useMemo(() => computeEngine(DEM, buildSupply(baselineBoard), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, baselineBoard, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime]);
-  const recycleViol = useMemo(() => recycleViolations(board, glob), [board, glob.recycleEnabled, glob.recycleTurnaround, glob.recycleWindow, glob.weekendGroup, glob.maxFleet]);
+  const recycleViol = useMemo(() => recycleViolations(board, glob), [board, glob.recycleEnabled, glob.recycleTurnaround, glob.recycleWindow, glob.recycleCount]);
   const P = eng.perDay[day];
 
   const originalMap = useMemo(() => new Map(baselineBoard.map((s) => [s.id, s])), [baselineBoard]);
@@ -3714,13 +3642,10 @@ export default function App({ onHome }) {
                 <span> — more buses booked out than operationally available.</span>
               </div>
             )}
-            {glob.recycleEnabled && recycleViol[day] && recycleViol[day].length > 0 && (
+            {glob.recycleEnabled && recycleViol[day] && (
               <div style={{ background: "#FBEDEB", border: `1px solid ${gapRed}`, padding: "8px 12px", marginBottom: 12, fontSize: 12.5 }}>
                 <b>Vehicle recycling ({day}):</b>{" "}
-                {recycleViol[day].map((v, i) => (
-                  <span key={i}>{fmt(SLOT(v.from))}–{fmt(SLOT(v.to) + 5)} needs {v.peak} buses (fleet {glob.maxFleet}){i < recycleViol[day].length - 1 ? "; " : ""}</span>
-                ))}
-                <span> — not enough buses have pulled in and turned around ({glob.recycleTurnaround} min) to recycle for the pull-outs here.</span>
+                <span>only {recycleViol[day].recyclers} of {recycleViol[day].need} morning runs finish and turn around ({glob.recycleTurnaround} min) by {fmt((glob.recycleWindow || [795, 900])[1])} to recycle for the afternoon.</span>
               </div>
             )}
 
@@ -4833,11 +4758,13 @@ export default function App({ onHome }) {
               <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: 10 }}>
                   <input type="checkbox" checked={!!glob.recycleEnabled} onChange={(e) => setGlob((g) => ({ ...g, recycleEnabled: e.target.checked }))} />
-                  <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>Recycle vehicles (turn buses around between shifts)</span>
+                  <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>Recycle vehicles (turn morning buses around for the afternoon)</span>
                 </label>
                 {glob.recycleEnabled && (
                   <>
                     <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "10px 12px", alignItems: "center", fontSize: 13 }}>
+                      <span>Minimum morning runs recycling</span>
+                      <NumField value={glob.recycleCount ?? 15} step={1} onCommit={(v) => setGlob((g) => ({ ...g, recycleCount: Math.max(0, Math.round(v)) }))} />
                       <span>Turnaround time (min)</span>
                       <NumField value={glob.recycleTurnaround ?? 15} step={5} onCommit={(v) => setGlob((g) => ({ ...g, recycleTurnaround: Math.max(0, Math.round(v)) }))} />
                       <span>Recycle window — from</span>
@@ -4846,7 +4773,7 @@ export default function App({ onHome }) {
                       <TimeField value={(glob.recycleWindow || [795, 900])[1]} onCommit={(v) => setGlob((g) => ({ ...g, recycleWindow: [(g.recycleWindow || [795, 900])[0], v] }))} />
                     </div>
                     <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
-                      Works <b>with</b> the fleet cap (Max vehicles in service): inside the window, buses in service <i>plus</i> buses that pulled in within the turnaround (returned but not yet reusable) must stay within the fleet. So the builder and optimizer won't pull out more afternoon buses than have recycled in time, and a loaded board is flagged where they can't. Checked on <b>weekdays (Mon–Fri)</b> only — Saturday and Sunday are lighter and exempt. Driven by pull-in times — accurate end times / service spans matter.
+                      A <b>floor</b>, not a cap: at least this many <b>morning runs</b> (starting before the window opens) must finish and turn around by the window's <i>to</i> time, so their buses are free to pull out for afternoon shifts. The auto-builder and optimizer are gently nudged to leave enough early-finishing morning runs, and a loaded board is flagged when fewer than the minimum recycle. It never blocks or delays afternoon starts. Checked on <b>weekdays (Mon–Fri)</b> only — Saturday and Sunday are lighter and exempt. Separate from <i>Max vehicles in service</i>, which stays your all-day fleet cap. Driven by pull-in times — accurate end times / service spans matter.
                     </div>
                   </>
                 )}
