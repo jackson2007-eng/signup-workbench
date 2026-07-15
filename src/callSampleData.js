@@ -68,4 +68,19 @@ const board = [
   { id: 12, shift: 7012, run: "7012", type: "FTAM", daysOff: "SU-SA", splitType: "Straight", days: WD, s: 480, e: 990, b: [720, 750] },
 ];
 
-export const CALL_SAMPLE = { calls, rules, global, spans, board, typeColors };
+// Volume / handle-time summary derived from the same DATS export (aggregate only): average inbound
+// calls per weekday and average handle time (minutes). Used for the "Call data at a glance" panel.
+const summary = {
+  perDay: {
+    Sunday: { calls: 371, aht: 1.71 },
+    Monday: { calls: 710, aht: 1.94 },
+    Tuesday: { calls: 630, aht: 1.81 },
+    Wednesday: { calls: 422, aht: 1.8 },
+    Thursday: { calls: 562, aht: 1.56 },
+    Friday: { calls: 665, aht: 1.75 },
+    Saturday: { calls: 290, aht: 1.74 },
+  },
+  aht: 1.77,
+};
+
+export const CALL_SAMPLE = { calls, rules, global, spans, board, typeColors, summary };

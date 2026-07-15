@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import {
   T0, T1, N, SLOT, DAYS, WEEKEND_DAYS, fmt, parseHM, cloneSeg,
   buildSupply, computeEngine, generateBoard, validateSeg, autofixSeg,
-  TimeField, NumField, Nudge, Stat, CoverageChart, Sketcher, ActualCurve,
+  TimeField, NumField, Nudge, Stat, CoverageChart, Sketcher,
 } from "./App.jsx";
 import { CALL_SAMPLE } from "./callSampleData.js";
 
@@ -59,9 +59,10 @@ function deriveActiveCalls(rows) {
   const ce = hdrIndex(H, "Call End Time", "End Time");
   if (cs < 0 || ce < 0) return null;
   const ct = hdrIndex(H, "Call Type");
-  const acc = {}, dates = {};
-  for (const d of DAYS) { acc[d] = new Array(N).fill(0); dates[d] = new Set(); }
-  let used = 0, outbound = 0;
+  const cdur = hdrIndex(H, "Duration");
+  const acc = {}, dates = {}, cnt = {}, durSum = {};
+  for (const d of DAYS) { acc[d] = new Array(N).fill(0); dates[d] = new Set(); cnt[d] = 0; durSum[d] = 0; }
+  let used = 0, outbound = 0, allDur = 0;
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r]; if (!row) continue;
     const s = row[cs], e = row[ce];
@@ -76,18 +77,26 @@ function deriveActiveCalls(rows) {
     if (z <= 0 || a >= N) continue;
     for (let i = Math.max(0, a); i < Math.min(N, z); i++) acc[d][i]++;
     dates[d].add(dateSerial);
+    cnt[d]++;
+    const durMin = (typeof row[cdur] === "number" ? row[cdur] : (e - s)) * 1440; // Duration is a fraction of a day
+    durSum[d] += durMin; allDur += durMin;
     used++;
   }
   if (used === 0) return null;
-  const calls = {};
+  const calls = {}, perDay = {};
   let minDates = Infinity, maxDates = 0;
   for (const d of DAYS) {
     const nd = dates[d].size || 1;
     if (dates[d].size) { minDates = Math.min(minDates, nd); maxDates = Math.max(maxDates, nd); }
     calls[d] = acc[d].map((v) => Math.round((v / nd) * 100) / 100);
+    perDay[d] = { calls: Math.round(cnt[d] / nd), aht: cnt[d] ? Math.round((durSum[d] / cnt[d]) * 100) / 100 : 0 };
   }
   const span = minDates === maxDates ? `${maxDates}` : `${minDates}–${maxDates}`;
-  return { calls, info: `Derived active-call curve from ${used.toLocaleString()} inbound calls (${outbound.toLocaleString()} outbound excluded), averaged over ${span} day(s) per weekday.` };
+  return {
+    calls,
+    summary: { perDay, aht: Math.round((allDur / used) * 100) / 100 },
+    info: `Derived active-call curve from ${used.toLocaleString()} inbound calls (${outbound.toLocaleString()} outbound excluded), averaged over ${span} day(s) per weekday.`,
+  };
 }
 
 // Simple Day / Time / Active-calls template → per-slot curve (one value per interval).
@@ -130,6 +139,7 @@ export default function CallCentre({ onHome }) {
   const [calls, setCalls] = useState(() => clone(CALL_SAMPLE.calls));
   const [demSource, setDemSource] = useState("sample");
   const [uploadInfo, setUploadInfo] = useState(null);
+  const [callSummary, setCallSummary] = useState(() => CALL_SAMPLE.summary || null);
   const [typeColors, setTypeColors] = useState(() => ({ ...CALL_SAMPLE.typeColors }));
   const [tab, setTab] = useState("coverage");
   const [day, setDay] = useState("Monday");
@@ -192,9 +202,9 @@ export default function CallCentre({ onHome }) {
       const f = d === "Saturday" ? 0.5 : d === "Sunday" ? 0.45 : 1;
       c[d] = wk.map((v) => Math.round(v * f * 100) / 100);
     }
-    setCalls(c); setDemSource("sketched"); setUploadInfo(null);
+    setCalls(c); setDemSource("sketched"); setUploadInfo(null); setCallSummary(null);
   };
-  const useSample = () => { setCalls(clone(CALL_SAMPLE.calls)); setDemSource("sample"); setUploadInfo(null); };
+  const useSample = () => { setCalls(clone(CALL_SAMPLE.calls)); setDemSource("sample"); setUploadInfo(null); setCallSummary(CALL_SAMPLE.summary || null); };
 
   const uploadCalls = (file) => {
     const rd = new FileReader();
@@ -211,7 +221,7 @@ export default function CallCentre({ onHome }) {
           if (result) break;
         }
         if (!result) throw new Error("no usable data");
-        setCalls(result.calls); setDemSource("uploaded"); setUploadInfo(result.info);
+        setCalls(result.calls); setDemSource("uploaded"); setUploadInfo(result.info); setCallSummary(result.summary || null);
       } catch (e) {
         alert("Could not read that call-data file. Upload a raw ACD call export (with Call Start Time / Call End Time), or the simple template (Day, Time, Active calls).");
       }
@@ -248,7 +258,7 @@ export default function CallCentre({ onHome }) {
     XLSX.writeFile(wb, "agent-schedule.xlsx");
   };
   const saveProject = () => {
-    const blob = new Blob([JSON.stringify({ kind: "callcentre", board, rules, glob, spans, calls, demSource, typeColors }, null, 0)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ kind: "callcentre", board, rules, glob, spans, calls, demSource, typeColors, callSummary }, null, 0)], { type: "application/json" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "callcentre-project.json"; a.click();
   };
   const loadProject = (file) => {
@@ -262,6 +272,7 @@ export default function CallCentre({ onHome }) {
         if (p.glob) setGlob(p.glob);
         if (p.spans) setSpans(p.spans);
         if (p.calls) { setCalls(p.calls); setDemSource(p.demSource || "uploaded"); }
+        setCallSummary(p.callSummary || null);
         if (p.typeColors) setTypeColors(p.typeColors);
         setHist([]); setFuture([]); setSelId(null); setBuildResult(null);
       } catch (e) { alert("Could not read that Call Centre project file."); }
@@ -356,7 +367,7 @@ export default function CallCentre({ onHome }) {
         )}
 
         {tab === "rules" && <RulesTab {...{ rules, setRule, glob, setGlob, spans, setSpans, tColor }} />}
-        {tab === "demand" && <DemandTab {...{ day, calls, demSource, uploadInfo, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }} />}
+        {tab === "demand" && <DemandTab {...{ day, calls, demSource, uploadInfo, callSummary, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }} />}
         {tab === "build" && <BuildTab {...{ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor }} />}
         {tab === "coverage" && (
           <div>
@@ -378,7 +389,8 @@ export default function CallCentre({ onHome }) {
             </div>
             <div style={cardStyle}>
               <div style={hTitle}>Agents vs active calls — {day}</div>
-              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={0} showBookout={false} showProductivity={false} demandShare={100} />
+              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={0} showBookout={false} showProductivity={false} demandShare={100}
+                supplyName="Agents on shift" targetName="Demand-aligned staffing" unitLabel="active calls" minName="floor" sugTooltip={false} />
               <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 6 }}>
                 Teal = agents on shift; shaded target = the demand-aligned agent shape (scale-free coverage of active calls). Amber floor line = minimum agents.
               </div>
@@ -465,7 +477,7 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor }) {
 }
 
 /* ================= DEMAND ================= */
-function DemandTab({ day, calls, demSource, uploadInfo, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }) {
+function DemandTab({ day, calls, demSource, uploadInfo, callSummary, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }) {
   const upRef = useRef(null);
   const srcLabel = { sample: "Sample call data (DATS Jul–Aug 2025)", sketched: "Sketched", uploaded: "Uploaded call data" }[demSource] || demSource;
   return (
@@ -485,11 +497,13 @@ function DemandTab({ day, calls, demSource, uploadInfo, sketchRaw, setSketchRaw,
         {uploadInfo && (
           <div style={{ background: "#EEF4F5", border: "1px solid #CFE0E2", padding: "7px 11px", marginBottom: 8, fontSize: 12, color: "#2C4A4A" }}>{uploadInfo}</div>
         )}
-        <ActualCurve ev={calls[day]} label={`Active calls (queue + talking) — ${day}`} />
+        <CallCurveChart ev={calls[day]} day={day} />
         <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 6 }}>
           Upload accepts a raw ACD call export (one row per call with Call Start Time / Call End Time) — it derives concurrent active calls per interval, inbound only, averaged into a typical week — or the simple Day / Time / Active calls template.
         </div>
       </div>
+
+      <CallDataSummary summary={callSummary} day={day} calls={calls} />
 
       <div style={cardStyle}>
         <div style={hTitle}>Sketch a call shape</div>
@@ -613,6 +627,82 @@ function ScheduleTab({ board, day, setDay, selSeg, selId, setSelId, selIssues, p
             );
           })}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* Active-calls curve — concurrency per 5-min slot, no trip/vehicle framing. */
+function CallCurveChart({ ev, day }) {
+  const W = 940, H = 240, PADL = 34, PADB = 22;
+  const maxV = Math.max(1, Math.max(...ev) * 1.15);
+  const x = (i) => PADL + (i / (N - 1)) * (W - PADL - 8);
+  const y = (v) => (H - PADB) - (Math.min(v, maxV) / maxV) * (H - PADB - 8);
+  const path = ev.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const area = `${path} L${x(N - 1).toFixed(1)},${y(0)} L${x(0).toFixed(1)},${y(0)} Z`;
+  const peakI = ev.indexOf(Math.max(...ev));
+  const peakLeft = peakI > N * 0.75;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: "#FBFCFC", border: "1px solid #E2E8EA", borderRadius: 2 }}>
+      {[6, 9, 12, 15, 18, 21, 24].map((h) => {
+        const i = Math.round((h * 60 - T0) / 5);
+        if (i < 0 || i >= N) return null;
+        return (
+          <g key={h}>
+            <line x1={x(i)} y1={8} x2={x(i)} y2={H - PADB} stroke="#EBF0F2" />
+            <text x={x(i)} y={H - 7} fontSize={11} fill="#8899A3" textAnchor="middle">{h}:00</text>
+          </g>
+        );
+      })}
+      {[25, 50, 75, 100].map((p) => {
+        const v = maxV * p / 100;
+        return (
+          <g key={p}>
+            <line x1={PADL} y1={y(v)} x2={W - 8} y2={y(v)} stroke="#F0F4F5" />
+            <text x={PADL - 4} y={y(v) + 3.5} fontSize={10} fill="#8899A3" textAnchor="end">{v >= 20 ? Math.round(v) : v.toFixed(1)}</text>
+          </g>
+        );
+      })}
+      <path d={area} fill={demandAmber} fillOpacity={0.14} />
+      <path d={path} fill="none" stroke={demandAmber} strokeWidth={2.5} strokeLinejoin="round" />
+      <circle cx={x(peakI)} cy={y(ev[peakI])} r={5} fill="#C0392B" stroke="#fff" strokeWidth={1.2} />
+      <text x={x(peakI) + (peakLeft ? -9 : 9)} y={y(ev[peakI]) - 6} fontSize={11} fontWeight={700} fill="#C0392B" textAnchor={peakLeft ? "end" : "start"}>
+        {ev[peakI].toFixed(1)} concurrent
+      </text>
+      <text x={PADL} y={16} fontSize={11} fill="#5B6B75">Active calls (queue + talking) — {day} · axis in concurrent calls per 5-minute slot</text>
+    </svg>
+  );
+}
+
+/* Call-data-at-a-glance: per-weekday inbound volume bars + average handle time, from the sheet. */
+function CallDataSummary({ summary, day, calls }) {
+  if (!summary || !summary.perDay) return null;
+  const maxCalls = Math.max(1, ...DAYS.map((d) => summary.perDay[d]?.calls || 0));
+  const selPeak = Math.max(...calls[day]);
+  const selAht = summary.perDay[day]?.aht;
+  return (
+    <div style={cardStyle}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+        <div style={hTitle}>Call data at a glance</div>
+        <span style={{ fontSize: 12, color: sampleGray }}>
+          avg handle time {summary.aht?.toFixed(1)} min · {day}: peak {selPeak.toFixed(1)} concurrent{selAht ? `, ${selAht.toFixed(1)} min handle` : ""}
+        </span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 8, alignItems: "end", height: 116 }}>
+        {DAYS.map((d) => {
+          const c = summary.perDay[d]?.calls || 0;
+          const on = d === day;
+          return (
+            <div key={d} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: on ? ink : sampleGray, fontVariantNumeric: "tabular-nums" }}>{c}</div>
+              <div style={{ width: "66%", background: on ? supplyTeal : "#CBD8DA", height: `${Math.max(3, (c / maxCalls) * 82)}px`, borderRadius: "2px 2px 0 0" }} />
+              <div style={{ fontSize: 10, color: on ? ink : sampleGray, marginTop: 3 }}>{d.slice(0, 3)}</div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>
+        Average inbound calls per day (bars) and average handle time, from the loaded call data. Longer handle time ties each agent up longer, so more agents are needed for the same call volume.
       </div>
     </div>
   );

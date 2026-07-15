@@ -1756,7 +1756,8 @@ function ActualCurve({ ev, label }) {
 }
 
 /* ---------- coverage chart ---------- */
-function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity, avgCycleTime = 0, demandShare = 100, height = 320, selBand }) {
+function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity, avgCycleTime = 0, demandShare = 100, height = 320, selBand,
+  supplyName = "Supply", targetName = "Demand-aligned target", unitLabel = "events", minName = "min", sugTooltip = true }) {
   const data = useMemo(() => {
     const bk = RAW.bookout[day];
     const bkMap = {};
@@ -1807,22 +1808,22 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         <XAxis dataKey="time" tick={{ fontSize: 10.5 }} interval={23} tickLine={false} />
         <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
         <Tooltip
-          formatter={(v, name) => [v, { target: "Demand-aligned target", sup: "Supply", covered: "Aligned", bookout: "Observed (sample)", gap: "Target (underweighted)", sugVeh: "Suggested vehicles (day share)", impliedVeh: "Vehicles demand implies" }[name] || name]}
+          formatter={(v, name) => [v, { target: targetName, sup: supplyName, covered: "Aligned", bookout: "Observed (sample)", gap: "Target (underweighted)", sugVeh: "Suggested vehicles (day share)", impliedVeh: "Vehicles demand implies" }[name] || name]}
           labelFormatter={(l, pl) => {
             const r = pl && pl[0] && pl[0].payload;
             if (!r) return l;
             const evTxt = r.events >= 10 ? Math.round(r.events).toString() : r.events.toFixed(1);
-            const sugTxt = r.sugVeh != null ? ` · ${r.sugVeh.toFixed(1)} suggested vehicles` : "";
-            const impTxt = r.impliedVeh != null ? ` · demand implies ${r.impliedVeh.toFixed(1)}` : "";
-            return `${l} · ${evTxt} events${sugTxt}${impTxt}`;
+            const sugTxt = sugTooltip && r.sugVeh != null ? ` · ${r.sugVeh.toFixed(1)} suggested vehicles` : "";
+            const impTxt = sugTooltip && r.impliedVeh != null ? ` · demand implies ${r.impliedVeh.toFixed(1)}` : "";
+            return `${l} · ${evTxt} ${unitLabel}${sugTxt}${impTxt}`;
           }}
           contentStyle={{ fontSize: 12, border: "1px solid #D7DFE2" }} />
         <Legend wrapperStyle={{ fontSize: 12 }} />
-        <Area type="stepAfter" dataKey="target" name="Demand-aligned target" stroke={targetInk} strokeWidth={1.5} fill="#233746" fillOpacity={0.07} />
+        <Area type="stepAfter" dataKey="target" name={targetName} stroke={targetInk} strokeWidth={1.5} fill="#233746" fillOpacity={0.07} />
         <Area type="stepAfter" dataKey="gap" name="Gap" stroke="none" fill={gapRed} fillOpacity={0.22} legendType="none" />
         <Area type="stepAfter" dataKey="covered" name="Aligned" stroke="none" fill={supplyTeal} fillOpacity={0.16} legendType="none" />
-        <Line type="stepAfter" dataKey="sup" name="Supply" stroke={supplyTeal} strokeWidth={2.2} dot={false} />
-        <ReferenceLine y={minVeh} stroke={demandAmber} strokeDasharray="4 4" label={{ value: `min ${minVeh}`, position: "right", fontSize: 10, fill: demandAmber }} />
+        <Line type="stepAfter" dataKey="sup" name={supplyName} stroke={supplyTeal} strokeWidth={2.2} dot={false} />
+        <ReferenceLine y={minVeh} stroke={demandAmber} strokeDasharray="4 4" label={{ value: `${minName} ${minVeh}`, position: "right", fontSize: 10, fill: demandAmber }} />
         {fleetCap > 0 && <ReferenceLine y={fleetCap} stroke={gapRed} strokeDasharray="6 3" label={{ value: `fleet ${fleetCap}`, position: "right", fontSize: 10, fill: gapRed }} />}
         {selBand && <ReferenceLine x={fmt(selBand[0])} stroke={ink} strokeDasharray="3 3" />}
         {selBand && <ReferenceLine x={fmt(Math.min(selBand[1], T1 - 5))} stroke={ink} strokeDasharray="3 3" />}
