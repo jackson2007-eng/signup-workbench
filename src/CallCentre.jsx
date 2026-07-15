@@ -137,7 +137,7 @@ export default function CallCentre({ onHome }) {
   const [nAgents, setNAgents] = useState(24);
   const [buildResult, setBuildResult] = useState(null);
   const [sketchRaw, setSketchRaw] = useState(() => [...DEFAULT_SKETCH]);
-  const [peakCalls, setPeakCalls] = useState(34);
+  const [peakCalls, setPeakCalls] = useState(13);
   const [hist, setHist] = useState([]);
   const [future, setFuture] = useState([]);
   const fileRef = useRef(null);
@@ -467,7 +467,7 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor }) {
 /* ================= DEMAND ================= */
 function DemandTab({ day, calls, demSource, uploadInfo, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }) {
   const upRef = useRef(null);
-  const srcLabel = { sample: "Sample data", sketched: "Sketched", uploaded: "Uploaded call data" }[demSource] || demSource;
+  const srcLabel = { sample: "Sample call data (DATS Jul–Aug 2025)", sketched: "Sketched", uploaded: "Uploaded call data" }[demSource] || demSource;
   return (
     <div>
       <div style={cardStyle}>
