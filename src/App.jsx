@@ -688,11 +688,18 @@ function startsPerSlot(board) {
   return starts;
 }
 
-function findSuggestions(board, eng, DEM, rules, glob) {
+function findSuggestions(board, eng, DEM, rules, glob, spans = null) {
   const starts = startsPerSlot(board);
   const maxPull = glob.maxPullout || 0;
   const pcov = glob.coveragePriority > 0 ? glob.coveragePriority : 0;
   let evaluated = 0;
+  // other day-variant segments of the same shift (for report-time-variation checks)
+  const shiftStartsOf = (shiftNo, exceptId) => {
+    const arr = [];
+    for (const sg of board) if (sg.shift === shiftNo && sg.id !== exceptId)
+      for (const dd of sg.days) arr.push({ day: dd, s: sg.s });
+    return arr;
+  };
   // weighted shares (p.w / dayW) so suggestions chase the same objective the engine scores
   let weekEv = 0, weekSup = 0;
   for (const d of DAYS) {
@@ -719,6 +726,17 @@ function findSuggestions(board, eng, DEM, rules, glob) {
           for (const d of cand.days) {
             if (starts[d][k] >= maxPull) return; // would crowd sign-in slot
           }
+        }
+      }
+      if (spans && cand.s !== seg.s) {
+        for (const d of cand.days) {
+          if (spans[d] && (cand.s < spans[d][0] || cand.e > spans[d][1])) return; // outside this day's service span
+        }
+        // don't break a shift's weekday/weekend/cross report-time-variation limits
+        const sibs = shiftStartsOf(seg.shift, seg.id);
+        if (sibs.length) {
+          const dayStarts = [...sibs, ...cand.days.map((d) => ({ day: d, s: cand.s }))];
+          if (startVarianceIssues(dayStarts, glob).length) return;
         }
       }
       const newC = segContrib(cand);
@@ -1173,7 +1191,7 @@ function optimizeToConvergence(board0, engine0Args, rules, glob, maxIter = 25) {
   while (iter < maxIter) {
     iter++;
     const eng = computeEngine(DEM, buildSupply(board), includePT, minVeh, spans, maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin);
-    const sugs = findSuggestions(board, eng, DEM, rules, glob);
+    const sugs = findSuggestions(board, eng, DEM, rules, glob, spans);
     evaluated += sugs.evaluated || 0;
     if (!sugs.length) break;
     const byId = new Map(board.map((s) => [s.id, s]));
@@ -1425,6 +1443,7 @@ function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans) {
         evaluated++;
         const s2 = seg.s + m, e2 = seg.e + m;
         if (s2 < R.s[0] || s2 > R.s[1] || e2 < R.e[0] || e2 > R.e[1]) continue;
+        if (spans[d] && (s2 < spans[d][0] || e2 > spans[d][1])) continue; // keep within this day's service span
         const k = Math.floor((s2 - T0) / 5);
         if (maxPull > 0 && k >= 0 && k < N && starts[d][k] >= maxPull) continue;
         const sibs = shiftStartsOf(seg.shift, seg.id, d);
@@ -3410,7 +3429,7 @@ export default function App({ onHome }) {
                 )}
               </div>
               <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 6 }}>
-                Runs until you stop it: randomized full rebuilds explore different constructions, then the search digs around the best board found by re-placing a few runs at a time with everything else locked — millions of placements deep. The best score only ever goes up. Inputs (rules, demand, signup) are snapshotted when you press Start; keep this page open while it runs. Stopping finishes with a polish pass before the result is final.
+                Runs until you stop it: randomized full rebuilds explore different constructions, then the search digs around the best board found by re-placing a few runs at a time with everything else locked — millions of placements deep. Every move stays within each day's service span and the report-time-variation limits, so runs never drift to times a day has no service. The best score only ever goes up. Inputs (rules, demand, signup) are snapshotted when you press Start; keep this page open while it runs. Stopping finishes with a polish pass before the result is final.
               </div>
 
               {optRun && (
@@ -4217,7 +4236,7 @@ export default function App({ onHome }) {
                   Top ranked moves — whole-week impact
                 </div>
                 <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }}
-                  onClick={() => { setSugs(findSuggestions(board, eng, DEM, allRules, glob)); setSugsStale(false); }}>
+                  onClick={() => { setSugs(findSuggestions(board, eng, DEM, allRules, glob, spans)); setSugsStale(false); }}>
                   {sugs ? "Recompute" : "Find suggestions"}
                 </button>
                 <button style={{ ...nudgeBtn, borderColor: supplyTeal, color: supplyTeal, opacity: optBusy ? 0.5 : 1 }} disabled={optBusy}
@@ -4242,7 +4261,7 @@ export default function App({ onHome }) {
                 {sugsStale && sugs && <span style={{ fontSize: 12.5, color: demandAmber, fontWeight: 600 }}>Board changed — results are stale, recompute.</span>}
               </div>
               <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 4 }}>
-                Searches every legal slide and break move on the current board. Only moves that keep the shift rule-clean, respect the fleet cap, and improve the weekly coverage score are shown — hours are never added, only repositioned.
+                Searches every legal slide and break move on the current board. Only moves that keep the shift rule-clean, stay within each day's service span, respect the fleet cap and the report-time-variation limits, and improve the weekly coverage score are shown — hours are never added, only repositioned. So a run is never nudged to a time a given day has no service (e.g. a weekday won't inherit later weekend hours).
               </div>
               {sugs && sugs.length === 0 && (
                 <div style={{ fontSize: 13, color: "#5B6B75", marginTop: 10 }}>
