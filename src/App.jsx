@@ -2157,20 +2157,46 @@ export default function App({ onHome }) {
     const DOW = { Sunday: "SU", Monday: "MO", Tuesday: "TU", Wednesday: "WE", Thursday: "TH", Friday: "FR", Saturday: "SA" };
     const hm = (m) => `${Math.floor(m / 60) % 24}:${String(m % 60).padStart(2, "0")}`;
     const mil = (m) => `${String(Math.floor(m / 60) % 24).padStart(2, "0")}${String(m % 60).padStart(2, "0")}`;
-    const header = ["Shift No", "Run", "Days Off", "Shift Type", "Operator Name", "Badge #", "Split Shift Type", "Break", "Days Worked", "Report Time", "On", "Off"];
+    // Header matches the agency's completed-signup layout (Operator Name / Badge are filled in by
+    // the agency at bid time; the tool leaves them blank).
+    const header = ["Shift No.", "Run", "Days Off", "Type", "Operator Name", "Badge", "Split Type", "Split", "Days Worked", "Report Time", "On", "Off"];
+    const REPORT_TO_ON = 13; // minutes added to Report Time to get the On (pull-out) time
+    const longDate = (iso) => new Date(iso + "T00:00:00").toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+    const weekdayName = (iso) => DAYS[new Date(iso + "T00:00:00").getDay()];
     const rows = [header];
     const byShift = new Map();
     for (const sg of board) {
       if (!byShift.has(sg.shift)) byShift.set(sg.shift, []);
       byShift.get(sg.shift).push(sg);
     }
+    // Stat (exception-day) runs group under their source shift so they fall beneath that shift's
+    // regular runs, just like the agency sheet. Any stat that can't be matched to a board shift is
+    // emitted at the end so nothing is dropped.
+    const statsByShift = new Map();
+    const orphanStats = [];
+    for (const h of holidays) {
+      for (const sg of (h.segs || [])) {
+        const rec = { ...sg, date: h.date };
+        if (sg.sourceShift != null && byShift.has(sg.sourceShift)) {
+          if (!statsByShift.has(sg.sourceShift)) statsByShift.set(sg.sourceShift, []);
+          statsByShift.get(sg.sourceShift).push(rec);
+        } else orphanStats.push(rec);
+      }
+    }
+    const statRow = (sh, st) => [
+      sh, st.sourceRun || sh, "", "", "", "",
+      st.b ? "Split Break" : "Straight",
+      weekdayName(st.date),          // Split column lists the stat's day of week
+      longDate(st.date),             // Days Worked shows the specific stat date
+      hm(st.s), hm(st.s + REPORT_TO_ON), hm(st.e),
+    ];
     const shifts = [...byShift.keys()].sort((a, b) => a - b);
     for (const sh of shifts) {
       const segs = byShift.get(sh);
       segs.sort((a, b) => DAYS.indexOf(a.days[0]) - DAYS.indexOf(b.days[0]));
       segs.forEach((sg, idx) => {
         rows.push([
-          idx === 0 ? sg.shift : sg.shift,
+          sg.shift,
           sg.run,
           idx === 0 ? sg.daysOff : "",
           idx === 0 ? sg.type : "",
@@ -2179,15 +2205,19 @@ export default function App({ onHome }) {
           sg.b ? `${mil(sg.b[0])}-${mil(sg.b[1])}` : "",
           " " + sg.days.map((d) => DOW[d]).join(" ") + " ",
           hm(sg.s),
-          hm(sg.s + 13),
+          hm(sg.s + REPORT_TO_ON),
           hm(sg.e),
         ]);
       });
+      // stat days for this shift, oldest first, immediately under its runs
+      (statsByShift.get(sh) || []).sort((a, b) => (a.date < b.date ? -1 : 1)).forEach((st) => rows.push(statRow(sh, st)));
     }
+    orphanStats.sort((a, b) => (a.sourceShift ?? 0) - (b.sourceShift ?? 0) || (a.date < b.date ? -1 : 1))
+      .forEach((st) => rows.push(statRow(st.sourceShift ?? "", st)));
     const ws = XLSX.utils.aoa_to_sheet(rows);
-    ws["!cols"] = [{ wch: 8 }, { wch: 7 }, { wch: 14 }, { wch: 9 }, { wch: 18 }, { wch: 8 }, { wch: 14 }, { wch: 11 }, { wch: 24 }, { wch: 11 }, { wch: 7 }, { wch: 7 }];
+    ws["!cols"] = [{ wch: 8 }, { wch: 7 }, { wch: 9 }, { wch: 8 }, { wch: 18 }, { wch: 8 }, { wch: 12 }, { wch: 16 }, { wch: 22 }, { wch: 11 }, { wch: 7 }, { wch: 7 }];
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Signup Board");
+    XLSX.utils.book_append_sheet(wb, ws, "Completed Signup");
     // summary sheet
     const sum = [["Signup export"], [],
       ["Designed runs", distinctShifts],
@@ -2224,7 +2254,7 @@ export default function App({ onHome }) {
       ws3["!cols"] = [{ wch: 12 }, { wch: 10 }, { wch: 26 }, { wch: 12 }, { wch: 8 }];
       XLSX.utils.book_append_sheet(wb, ws3, "Exceptions");
     }
-    XLSX.writeFile(wb, "signup-board.xlsx");
+    XLSX.writeFile(wb, "completed-signup.xlsx");
   };
 
   const downloadDemandTemplate = () => {
@@ -2953,7 +2983,7 @@ export default function App({ onHome }) {
 
         {/* utility toolbar */}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, margin: "10px 0" }}>
-          <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={exportBoard}>Export board</button>
+          <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={exportBoard}>Export Completed Signup</button>
           <button style={nudgeBtn} onClick={saveProject}>Save project</button>
           <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Load project</button>
           <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }}
