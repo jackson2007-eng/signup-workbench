@@ -1593,7 +1593,7 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
 }
 
 /* ---------- main ---------- */
-export default function App() {
+export default function App({ onHome }) {
   const [tab, setTab] = useState("rules");
   const [day, setDay] = useState("Wednesday");
   const [showBookout, setShowBookout] = useState(false);
@@ -2649,8 +2649,14 @@ export default function App() {
       <div style={{ maxWidth: 1240, margin: "0 auto", padding: "16px 12px 40px" }}>
         {/* header */}
         <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap", borderBottom: `3px solid ${ink}`, paddingBottom: 10 }}>
-          <div className="hdr-title" style={{ fontFamily: "'Barlow Condensed', 'Arial Narrow', sans-serif", fontWeight: 700, fontSize: 30 }}>
-            SIGNUP WORKBENCH
+          <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            {onHome && (
+              <span onClick={onHome} style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".06em", textTransform: "uppercase", color: sampleGray, cursor: "pointer" }}
+                title="Back to the toolkit home">‹ Transit Operations Toolkit</span>
+            )}
+            <div className="hdr-title" style={{ fontFamily: "'Barlow Condensed', 'Arial Narrow', sans-serif", fontWeight: 700, fontSize: 30 }}>
+              SIGNUP WORKBENCH
+            </div>
           </div>
           <div style={{ marginLeft: "auto", fontFamily: "'Barlow Condensed', sans-serif", fontSize: 22, fontWeight: 600 }}>
             <span style={{ fontSize: 11, verticalAlign: "middle", padding: "2px 7px", marginRight: 8, borderRadius: 2, background: demSource === "sketched" ? demandAmber : demSource === "uploaded" ? supplyTeal : sampleGray, color: "#fff", letterSpacing: ".06em" }}>
