@@ -826,10 +826,20 @@ function buildCandidates(rules, glob) {
   return cands;
 }
 
+// Part-time candidates reuse the same placement shapes as full-time (buildCandidates is generic
+// over any rules object), but each part-time type carries a fixed set of available working days
+// and never counts as a 10-hour package. A part-time shift works ALL of its available days at one
+// chosen time — there is no days-off pattern choice.
+function buildPtCandidates(ptRules, glob) {
+  return buildCandidates(ptRules, glob).map((c) => ({
+    ...c, is10: false, days: (ptRules[c.type] && ptRules[c.type].days) || [],
+  }));
+}
+
 // opts.rng + opts.noise let the optimization monitor perturb tie-breaks so repeated calls
 // explore different constructions; with opts omitted the build is deterministic, exactly
 // as the single-shot Generate button has always been.
-function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, includePT, typeSequence = null, startShiftNumber = null, opts = {}) {
+function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, includePT, typeSequence = null, startShiftNumber = null, opts = {}, ptRules = {}, ptCount = 0) {
   const rng = opts.rng || null;
   const noise = rng && opts.noise > 0 ? opts.noise : 0;
   let evaluated = 0;
@@ -940,13 +950,70 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
     packs.push({ type: c.type, s: c.s, e: c.e, b: c.b ? [...c.b] : null, work: c.work, days: [...days] });
   }
 
+  // Part-time shifts: each works ALL of its type's available days at one chosen time (no days-off
+  // pattern choice). Placed after the full-time packages, so supply already reflects them and each
+  // part-time pick greedily fills the remaining gaps. Same span/fleet/stagger vetoes via evalDay.
+  const ptCands = ptCount > 0 ? buildPtCandidates(ptRules, glob) : [];
+  for (let p = 0; p < ptCount && ptCands.length; p++) {
+    const PG = {}, PC = {};
+    for (const d of DAYS) {
+      const [s0, s1] = spans[d];
+      const pg = new Array(N + 1).fill(0), pc = new Array(N + 1).fill(0);
+      for (let i = 0; i < N; i++) {
+        const tgt = target[d][i];
+        let g = concaveGain(tgt, sup[d][i], pcov);
+        const t = SLOT(i);
+        if (t >= s0 && t < s1 && sup[d][i] < minVeh) g += 0.5;
+        pg[i + 1] = pg[i] + g;
+        pc[i + 1] = pc[i] + (glob.maxFleet > 0 && sup[d][i] >= glob.maxFleet ? 1 : 0);
+      }
+      PG[d] = pg; PC[d] = pc;
+    }
+    const evalDay = (c, d) => {
+      if (c.s < spans[d][0] || c.e > spans[d][1]) return null;
+      if (maxPull > 0 && starts[d][c.startSlot] >= maxPull) return null;
+      const a2 = idx(c.s), z2 = idx(c.e);
+      let cap = PC[d][z2] - PC[d][a2];
+      let g = PG[d][z2] - PG[d][a2];
+      if (c.b) {
+        const b0 = idx(c.b[0]), b1 = idx(c.b[1]);
+        cap -= PC[d][b1] - PC[d][b0];
+        g -= PG[d][b1] - PG[d][b0];
+      }
+      if (cap > 0) return null;
+      return g - starts[d][c.startSlot] * 0.15;
+    };
+    let best = null, bestVal = -Infinity;
+    for (const c of ptCands) {
+      if (!c.days.length) continue;
+      let total = 0, ok = true;
+      for (const d of c.days) {
+        const v = evalDay(c, d);
+        if (v === null) { ok = false; break; }
+        total += v;
+      }
+      evaluated++;
+      if (!ok) continue;
+      if (noise) total += (rng() - 0.5) * noise;
+      if (total > bestVal) { bestVal = total; best = c; }
+    }
+    if (!best) break;
+    const a = idx(best.s), z = idx(best.e);
+    for (const d of best.days) {
+      for (let i = a; i < z; i++) sup[d][i]++;
+      if (best.b) for (let i = idx(best.b[0]); i < idx(best.b[1]); i++) sup[d][i]--;
+      starts[d][best.startSlot]++;
+    }
+    packs.push({ type: best.type, s: best.s, e: best.e, b: best.b ? [...best.b] : null, work: best.work, days: [...best.days], pt: true });
+  }
+
   const shiftBase = startShiftNumber != null ? startShiftNumber : (glob.shiftSeriesBase || 6000);
   const segs = packs.map((o, i) => ({
     id: 100000 + i, shift: shiftBase + i, run: "G" + (i + 1), type: o.type,
     daysOff: DAYS.filter((d) => !o.days.includes(d)).map((d) => d.slice(0, 2).toUpperCase()).join("-"),
     splitType: o.b ? "Split Break" : "Straight",
     days: o.days.sort((x, y) => DAYS.indexOf(x) - DAYS.indexOf(y)),
-    s: o.s, e: o.e, b: o.b,
+    s: o.s, e: o.e, b: o.b, ...(o.pt ? { pt: true } : {}),
   }));
   const paidHours = packs.reduce((a, o) => a + o.work * o.days.length, 0) / 60;
   const runDays = packs.reduce((a, o) => a + o.days.length, 0);
@@ -1166,12 +1233,16 @@ function packageInfo(segs, rules, glob) {
   const issues = [];
   const type = segs[0].type;
   const R = rules[type];
-  const expDays = R ? (R.work >= 600 ? 4 : 5) : null;
+  // Part-time packages work a fixed set of available days at one time — they are exempt from the
+  // full-time weekly-package rules (the 5/4-day expectation and consecutive days-off), but still
+  // respect maxConsec, report-time variance, and min rest below.
+  const isPT = !!segs[0].pt;
+  const expDays = (R && !isPT) ? (R.work >= 600 ? 4 : 5) : null;
   if (expDays && daysWorked.size !== expDays)
     issues.push(`${type} package: works ${daysWorked.size} day${daysWorked.size === 1 ? "" : "s"}, expected ${expDays}`);
-  // days off contiguity (circular week)
+  // days off contiguity (circular week) — full-time only
   const offIdx = DAYS.map((d, i) => (daysWorked.has(d) ? null : i)).filter((x) => x !== null);
-  if (offIdx.length > 0 && offIdx.length < 7) {
+  if (!isPT && offIdx.length > 0 && offIdx.length < 7) {
     const offSet = new Set(offIdx);
     let blocks = 0;
     for (const i of offIdx) if (!offSet.has((i + 6) % 7)) blocks++;
@@ -1679,6 +1750,14 @@ export default function App({ onHome }) {
   const tColor = (t) => typeColors[t] || TYPE_COLOR[t] || ink;
   const [editingType, setEditingType] = useState(null); // type code whose chip is in rename mode
   const [typeDraft, setTypeDraft] = useState("");
+  // part-time classifications: same shape as `rules` plus `days` (available working days).
+  // Separate object + enable flag so full-time is untouched; merged into `allRules` only where a
+  // segment's type window is validated/scored. Default empty/off ⇒ zero behavior change.
+  const [ptRules, setPtRules] = useState({});
+  const [ptEnabled, setPtEnabled] = useState(false);
+  const [ptCount, setPtCount] = useState(10);
+  const [newPtType, setNewPtType] = useState("");
+  const allRules = useMemo(() => ({ ...rules, ...ptRules }), [rules, ptRules]);
   const [glob, setGlob] = useState(() => ({ ...JSON.parse(JSON.stringify(DEFAULT_GLOBAL)), avgCycleTime: DEFAULT_AVG_CYCLE_TIME, demandShare: DEFAULT_DEMAND_SHARE }));
   const [spans, setSpans] = useState(() => JSON.parse(JSON.stringify(DEFAULT_SPANS)));
   const [newType, setNewType] = useState("");
@@ -1726,7 +1805,7 @@ export default function App({ onHome }) {
       st.restarts++;
       const o = { rng, noise: st.iter === 0 ? 0 : 3 }; // first pass deterministic = the single-shot result
       if (cfg.mode === "generate") {
-        const g = generateBoard(cfg.glob.min10 || 0, cfg.buildN, cfg.rules, cfg.glob, cfg.DEM, cfg.spans, cfg.glob.minVeh, cfg.includePT, cfg.typeSequence, cfg.startShiftNumber, o);
+        const g = generateBoard(cfg.glob.min10 || 0, cfg.buildN, cfg.rules, cfg.glob, cfg.DEM, cfg.spans, cfg.glob.minVeh, cfg.includePT, cfg.typeSequence, cfg.startShiftNumber, o, cfg.ptRules, cfg.ptCount);
         segs = g.segs; ev = g.evaluated;
       } else {
         const r = retimeBoard(cfg.baseline, cfg.rules, cfg.glob, cfg.DEM, cfg.spans, cfg.glob.minVeh, cfg.includePT, o);
@@ -1773,7 +1852,10 @@ export default function App({ onHome }) {
     const cfg = {
       mode,
       baseline: baselineBoard.map(cloneSeg),
-      rules: JSON.parse(JSON.stringify(rules)),
+      rules: JSON.parse(JSON.stringify(rules)),            // full-time only, for construction
+      ptRules: ptEnabled ? JSON.parse(JSON.stringify(ptRules)) : {},
+      ptCount: ptEnabled ? ptCount : 0,
+      allRules: JSON.parse(JSON.stringify(allRules)),      // FT+PT, for validation/polish
       glob: { ...glob },
       DEM,
       spans: JSON.parse(JSON.stringify(spans)),
@@ -1816,8 +1898,8 @@ export default function App({ onHome }) {
       // both modes; per-day refinement (which splits day-variants) only for generated boards
       const engineArgs = [st.cfg.DEM, st.cfg.includePT, st.cfg.glob.minVeh, st.cfg.spans, st.cfg.glob.maxFleet];
       const polished = st.cfg.mode === "generate"
-        ? deepOptimize(st.best, engineArgs, st.cfg.rules, st.cfg.glob).board
-        : optimizeToConvergence(st.best, engineArgs, st.cfg.rules, st.cfg.glob).board;
+        ? deepOptimize(st.best, engineArgs, st.cfg.allRules, st.cfg.glob).board
+        : optimizeToConvergence(st.best, engineArgs, st.cfg.allRules, st.cfg.glob).board;
       const pScore = st.scoreFn(polished); // { obj, cov }
       if (pScore.obj >= st.bestObj) { st.best = polished; st.bestObj = pScore.obj; st.bestScore = pScore.cov; }
       const tSec = (performance.now() - st.startedAt) / 1000;
@@ -1951,6 +2033,7 @@ export default function App({ onHome }) {
       demSource, sketch, trips, sketchMode, uploadedDem, board, rules, glob, spans,
       totalSigned, includePT, signupPeriod, holidays,
       baselineBoard, signupSource, typeColors,
+      ptRules, ptEnabled, ptCount,
     };
     const blob = new Blob([JSON.stringify(payload, null, 1)], { type: "application/json" });
     const a = document.createElement("a");
@@ -2089,6 +2172,9 @@ export default function App({ onHome }) {
         if (!p || !Array.isArray(p.board)) throw new Error("bad file");
         setBoard(p.board.map(cloneSeg));
         if (p.rules) setRules(p.rules);
+        setPtRules(p.ptRules && typeof p.ptRules === "object" ? p.ptRules : {});
+        setPtEnabled(!!p.ptEnabled);
+        if (p.ptCount != null) setPtCount(Math.max(0, Math.round(p.ptCount)));
         if (p.glob) {
           const g = { minVeh: p.floorVal ?? DEFAULT_GLOBAL.minVeh, ...p.glob };
           if (g.maxStartVar != null && g.maxStartVarWeekday == null) {
@@ -2341,7 +2427,7 @@ export default function App({ onHome }) {
     }
     return s.size;
   }, [board, rules]);
-  const flagCount = useMemo(() => board.filter((sg) => validateSeg(sg, rules, glob).length > 0).length, [board, rules, glob]);
+  const flagCount = useMemo(() => board.filter((sg) => validateSeg(sg, allRules, glob).length > 0).length, [board, rules, glob]);
 
   // Derives an empirical trips/vehicle-hour figure from the user's own real demand + real
   // signup, instead of trusting one assumed universal constant — only available once both
@@ -2382,7 +2468,7 @@ export default function App({ onHome }) {
   const sel = selShift != null ? board.find((s) => s.shift === selShift && s.days.includes(day)) : null;
   const selDistinctTimes = new Set(selShiftSegs.map((sg) => `${sg.s}|${sg.e}|${JSON.stringify(sg.b)}`));
   const selIsDayVariant = selDistinctTimes.size > 1;
-  const selIssues = sel ? validateSeg(sel, rules, glob) : [];
+  const selIssues = sel ? validateSeg(sel, allRules, glob) : [];
   const ganttSegs = selShift != null ? daySegs.filter((sg) => sg.shift === selShift) : daySegs;
 
   /* ---- gantt drag ----
@@ -2583,7 +2669,7 @@ export default function App({ onHome }) {
   };
   const fixSel = () => {
     if (!sel) return;
-    const f = autofixSeg(sel, rules, glob);
+    const f = autofixSeg(sel, allRules, glob);
     if (!f) { setFixResult({ fixed: 0, stuck: 1, single: true }); return; }
     mutate((b) => b.map((s) => (s.id === sel.id ? f : s)));
     setFixResult(null);
@@ -2591,8 +2677,8 @@ export default function App({ onHome }) {
   const fixAll = () => {
     let fixed = 0, stuck = 0;
     mutate((b) => b.map((s) => {
-      if (validateSeg(s, rules, glob).length === 0) return s;
-      const f = autofixSeg(s, rules, glob);
+      if (validateSeg(s, allRules, glob).length === 0) return s;
+      const f = autofixSeg(s, allRules, glob);
       if (f) { fixed++; return f; }
       stuck++; return s;
     }));
@@ -2627,7 +2713,7 @@ export default function App({ onHome }) {
   const selHoliday = customHolidays.find((h) => h.id === selectedHolidayId) || null;
   const holSegs = selHoliday ? (selHoliday.segs || []) : [];
   const selHolSeg = selHolSegId != null ? holSegs.find((s) => s.id === selHolSegId) : null;
-  const selHolSegIssues = selHolSeg ? validateSeg(selHolSeg, rules, glob) : [];
+  const selHolSegIssues = selHolSeg ? validateSeg(selHolSeg, allRules, glob) : [];
 
   const patchHolidaySegs = (holId, fn) => {
     setHolidays((hs) => hs.map((h) => (h.id === holId ? { ...h, segs: fn(h.segs || []) } : h)));
@@ -2673,7 +2759,7 @@ export default function App({ onHome }) {
   };
   const fixHolSeg = () => {
     if (!selHoliday || !selHolSeg) return;
-    const f = autofixSeg(selHolSeg, rules, glob);
+    const f = autofixSeg(selHolSeg, allRules, glob);
     if (!f) { setHolFixResult({ stuck: true }); return; }
     patchHolidaySegs(selHoliday.id, (segs) => segs.map((s) => (s.id === selHolSeg.id ? f : s)));
     setHolFixResult(null);
@@ -3193,6 +3279,12 @@ export default function App({ onHome }) {
                   Weekly packages to build
                   <NumField value={buildN} onCommit={(v) => setBuildN(Math.round(v))} style={numInput} />
                 </label>
+                {ptEnabled && (
+                  <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+                    Part-time shifts
+                    <NumField value={ptCount} onCommit={(v) => setPtCount(Math.max(0, Math.round(v)))} style={numInput} />
+                  </label>
+                )}
                 <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink, opacity: buildBusy || optRunning ? 0.5 : 1 }} disabled={buildBusy || optRunning}
                   onClick={() => {
                     setBuildBusy(true);
@@ -3203,7 +3295,7 @@ export default function App({ onHome }) {
                         typeSequence = buildTypeSequence(blocks, buildN);
                         startShiftNumber = Math.max(glob.shiftSeriesBase || 6000, 1 + Math.max(0, ...board.map((s) => s.shift), ...baselineBoard.map((s) => s.shift)));
                       }
-                      const g = generateBoard(glob.min10 || 0, buildN, rules, glob, DEM, spans, glob.minVeh, includePT, typeSequence, startShiftNumber);
+                      const g = generateBoard(glob.min10 || 0, buildN, rules, glob, DEM, spans, glob.minVeh, includePT, typeSequence, startShiftNumber, {}, ptEnabled ? ptRules : {}, ptEnabled ? ptCount : 0);
                       const score = computeEngine(DEM, buildSupply(g.segs), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin).weekScore;
                       setBuildResult({ ...g, score });
                       setBuildBusy(false);
@@ -3302,7 +3394,7 @@ export default function App({ onHome }) {
                 </label>
                 <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
                   <input type="radio" checked={optMode === "generate"} disabled={optRunning} onChange={() => setOptMode("generate")} />
-                  New signup from rules &amp; demand ({buildN} packages{followBaselinePattern ? ", following type pattern" : ""})
+                  New signup from rules &amp; demand ({buildN} packages{ptEnabled && ptCount > 0 ? ` + ${ptCount} part-time` : ""}{followBaselinePattern ? ", following type pattern" : ""})
                 </label>
                 {!optRunning ? (
                   <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink, marginLeft: "auto" }}
@@ -3492,7 +3584,7 @@ export default function App({ onHome }) {
             {customHolidays.length > 0 && (() => {
               const segs = holSegs;
               const weekday = selHoliday ? DAYS[new Date(selHoliday.date + "T00:00:00").getDay()] : null;
-              const flagCountHol = segs.reduce((n, s) => n + (validateSeg(s, rules, glob).length > 0 ? 1 : 0), 0);
+              const flagCountHol = segs.reduce((n, s) => n + (validateSeg(s, allRules, glob).length > 0 ? 1 : 0), 0);
               return (
                 <div style={{ marginTop: 14 }}>
                   <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, marginBottom: 8 }}>
@@ -3584,7 +3676,7 @@ export default function App({ onHome }) {
                             <div style={{ fontSize: 13, color: "#5B6B75", padding: "8px 4px" }}>No shifts yet — "+ Add shift" above to start laying out this date's board.</div>
                           )}
                           {segs.map((sg) => {
-                            const bad = validateSeg(sg, rules, glob).length > 0;
+                            const bad = validateSeg(sg, allRules, glob).length > 0;
                             const isSel = sg.id === selHolSegId;
                             const brkMin = sg.b ? sg.b[1] - sg.b[0] : 0;
                             const workHrs = ((sg.e - sg.s - brkMin) / 60).toFixed(2);
@@ -3783,7 +3875,7 @@ export default function App({ onHome }) {
               </div>
               <div style={{ maxHeight: 430, overflowY: "auto" }}>
                 {ganttSegs.map((sg) => {
-                  const issues = validateSeg(sg, rules, glob);
+                  const issues = validateSeg(sg, allRules, glob);
                   const bad = issues.length > 0;
                   const isSel = selShift != null && sg.shift === selShift;
                   const brkMin = sg.b ? sg.b[1] - sg.b[0] : 0;
@@ -4022,7 +4114,7 @@ export default function App({ onHome }) {
             byShift.get(sg.shift).push(sg);
           }
           const shifts = [...byShift.keys()].sort((a, b) => a - b);
-          const infos = shifts.map((sh) => ({ sh, segs: byShift.get(sh), info: packageInfo(byShift.get(sh), rules, glob) }));
+          const infos = shifts.map((sh) => ({ sh, segs: byShift.get(sh), info: packageInfo(byShift.get(sh), allRules, glob) }));
           const flagged = infos.filter((x) => x.info.issues.length > 0);
           const singleDay = infos.filter((x) => x.info.daysWorked.size === 1).length;
           return (
@@ -4050,7 +4142,7 @@ export default function App({ onHome }) {
                       setRefineBusy(true);
                       setTimeout(() => {
                         const before = eng.weekScore;
-                        const r = refinePerDay(board, rules, glob, DEM, includePT, glob.minVeh, spans);
+                        const r = refinePerDay(board, allRules, glob, DEM, includePT, glob.minVeh, spans);
                         const after = computeEngine(DEM, buildSupply(r.board), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin).weekScore;
                         mutate(() => r.board);
                         setRefineResult({ moves: r.moves, created: r.created, evaluated: r.evaluated, gained: (after - before) * 100 });
@@ -4125,7 +4217,7 @@ export default function App({ onHome }) {
                   Top ranked moves — whole-week impact
                 </div>
                 <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }}
-                  onClick={() => { setSugs(findSuggestions(board, eng, DEM, rules, glob)); setSugsStale(false); }}>
+                  onClick={() => { setSugs(findSuggestions(board, eng, DEM, allRules, glob)); setSugsStale(false); }}>
                   {sugs ? "Recompute" : "Find suggestions"}
                 </button>
                 <button style={{ ...nudgeBtn, borderColor: supplyTeal, color: supplyTeal, opacity: optBusy ? 0.5 : 1 }} disabled={optBusy}
@@ -4133,7 +4225,7 @@ export default function App({ onHome }) {
                     setOptBusy(true);
                     setTimeout(() => {
                       const before = eng.weekScore;
-                      const r = deepOptimize(board, [DEM, includePT, glob.minVeh, spans, glob.maxFleet], rules, glob);
+                      const r = deepOptimize(board, [DEM, includePT, glob.minVeh, spans, glob.maxFleet], allRules, glob);
                       const after = computeEngine(DEM, buildSupply(r.board), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin).weekScore;
                       mutate(() => r.board);
                       setOptResult({ applied: r.moves, evaluated: r.evaluated, created: r.created, passes: r.passes, gained: (after - before) * 100 });
@@ -4252,6 +4344,7 @@ export default function App({ onHome }) {
                   setGlob({ ...JSON.parse(JSON.stringify(DEFAULT_GLOBAL)), avgCycleTime: DEFAULT_AVG_CYCLE_TIME, demandShare: DEFAULT_DEMAND_SHARE });
                   setSpans(JSON.parse(JSON.stringify(DEFAULT_SPANS)));
                   setTypeColors({ ...TYPE_COLOR });
+                  setPtRules({}); setPtEnabled(false);
                 }}>
                 Reset to defaults
               </button>
@@ -4354,6 +4447,100 @@ export default function App({ onHome }) {
                 </button>
                 {newType && rules[newType] && <span style={{ fontSize: 12, color: gapRed }}>Type already exists</span>}
               </div>
+            </div>
+
+            {/* part-time shift classifications */}
+            <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14, overflowX: "auto" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input type="checkbox" checked={ptEnabled} onChange={(e) => setPtEnabled(e.target.checked)} />
+                <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>Offer part-time shifts</span>
+              </label>
+              {ptEnabled && (
+                <>
+                  <div style={{ fontSize: 11.5, color: "#5B6B75", margin: "6px 0 10px" }}>
+                    Part-time classifications use the same start/end/spread/work/break parameters as full-time, plus the days each is available to work. A part-time shift works <b>all</b> of its available days at one time — no 40-hour week, no consecutive days-off rule. Set how many to build in the Signup Builder.
+                  </div>
+                  <table style={{ borderCollapse: "collapse", minWidth: 820 }}>
+                    <thead>
+                      <tr>
+                        {["Type", "Earliest start", "Latest start", "Earliest end", "Latest end", "Min spread (h)", "Max spread (h)", "Work (h)", "Break", "Available days", "In use", ""].map((h) => (
+                          <th key={h} style={{ padding: "4px 8px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".06em", color: "#5B6B75", textAlign: "left", borderBottom: "1px solid #E7EDEF" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.keys(ptRules).map((t) => {
+                        const R = ptRules[t];
+                        const inUse = board.filter((s) => s.type === t).length;
+                        const upd = (patch) => setPtRules((old) => ({ ...old, [t]: { ...old[t], ...patch } }));
+                        const days = R.days || [];
+                        return (
+                          <tr key={t}>
+                            <td style={{ padding: "4px 8px" }}>
+                              <span style={{ fontSize: 12, padding: "2px 8px", background: tColor(t), color: "#fff", borderRadius: 2, fontWeight: 600 }}>{t}</span>
+                            </td>
+                            <td style={{ padding: "3px 6px" }}><TimeField value={R.s[0]} onCommit={(v) => upd({ s: [v, R.s[1]] })} /></td>
+                            <td style={{ padding: "3px 6px" }}><TimeField value={R.s[1]} onCommit={(v) => upd({ s: [R.s[0], v] })} /></td>
+                            <td style={{ padding: "3px 6px" }}><TimeField value={R.e[0]} onCommit={(v) => upd({ e: [v, R.e[1]] })} /></td>
+                            <td style={{ padding: "3px 6px" }}><TimeField value={R.e[1]} onCommit={(v) => upd({ e: [R.e[0], v] })} /></td>
+                            <td style={{ padding: "3px 6px" }}><NumField value={R.spr[0] / 60} step={0.25} onCommit={(v) => upd({ spr: [Math.round(v * 60), R.spr[1]] })} /></td>
+                            <td style={{ padding: "3px 6px" }}><NumField value={R.spr[1] / 60} step={0.25} onCommit={(v) => upd({ spr: [R.spr[0], Math.round(v * 60)] })} /></td>
+                            <td style={{ padding: "3px 6px" }}><NumField value={R.work / 60} step={0.25} onCommit={(v) => upd({ work: Math.round(v * 60) })} /></td>
+                            <td style={{ padding: "3px 6px", textAlign: "center" }}>
+                              <input type="checkbox" checked={!!R.brk} onChange={(e) => upd({ brk: e.target.checked })} />
+                            </td>
+                            <td style={{ padding: "3px 6px" }}>
+                              <div style={{ display: "flex", gap: 3 }}>
+                                {DAYS.map((d) => {
+                                  const on = days.includes(d);
+                                  return (
+                                    <button key={d} title={d}
+                                      onClick={() => upd({ days: on ? days.filter((x) => x !== d) : [...days, d] })}
+                                      style={{ padding: "2px 5px", fontSize: 10.5, fontWeight: 600, borderRadius: 2, cursor: "pointer",
+                                        border: `1px solid ${on ? supplyTeal : "#C7D2D6"}`, background: on ? supplyTeal : "#fff", color: on ? "#fff" : "#8899A3" }}>
+                                      {d.slice(0, 2)}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </td>
+                            <td style={{ padding: "3px 8px", fontSize: 12, color: inUse ? "#182430" : "#8899A3" }}>{inUse}</td>
+                            <td style={{ padding: "3px 6px" }}>
+                              <button style={{ ...nudgeBtn, padding: "3px 8px", fontSize: 12, color: gapRed, borderColor: gapRed }}
+                                title={inUse > 0 ? `${inUse} shift${inUse === 1 ? "" : "s"} use this type — they'll be flagged until retyped` : "Remove this type"}
+                                onClick={() => {
+                                  if (inUse > 0 && !window.confirm(
+                                    `${inUse} shift${inUse === 1 ? "" : "s"} on the board still use ${t}. They won't be deleted — they'll be flagged until you retype them or re-add ${t}. Remove the type?`)) return;
+                                  setPtRules((old) => { const n = { ...old }; delete n[t]; return n; });
+                                }}>
+                                remove
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {Object.keys(ptRules).length === 0 && (
+                        <tr><td colSpan={12} style={{ padding: "8px", fontSize: 12, color: "#8899A3" }}>No part-time classifications yet — add one below.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
+                    <input placeholder="New part-time code (e.g. PT-AM)" value={newPtType}
+                      onChange={(e) => setNewPtType(e.target.value.toUpperCase().slice(0, 8))}
+                      style={{ padding: "6px 8px", border: "1px solid #B9C6CC", borderRadius: 2, fontSize: 13, width: 210, background: "#fff", color: ink }} />
+                    <button style={nudgeBtn} disabled={!newPtType || !!allRules[newPtType]}
+                      onClick={() => {
+                        if (!newPtType || allRules[newPtType]) return;
+                        setPtRules((old) => ({ ...old, [newPtType]: { s: [300, 660], e: [840, 1470], spr: [240, 480], work: 240, brk: false, days: [...DAYS] } }));
+                        setTypeColors((tc) => (tc[newPtType] ? tc : { ...tc, [newPtType]: TYPE_COLOR_EXTRA[Object.keys(tc).length % TYPE_COLOR_EXTRA.length] }));
+                        setNewPtType("");
+                      }}>
+                      + Add part-time type
+                    </button>
+                    {newPtType && allRules[newPtType] && <span style={{ fontSize: 12, color: gapRed }}>Code already exists</span>}
+                  </div>
+                </>
+              )}
             </div>
 
             {/* breaks + limits + spans */}
@@ -4555,7 +4742,7 @@ export default function App({ onHome }) {
                             </td>
                             <td style={{ padding: "5px 8px" }}>
                               <span style={{ fontSize: 10.5, padding: "1px 6px", background: h.source === "custom" ? demandAmber : ink, color: "#fff", borderRadius: 2 }}>{h.source}</span>
-                              {h.runsAs === "custom" && (h.segs || []).some((s) => validateSeg(s, rules, glob).length > 0) && (
+                              {h.runsAs === "custom" && (h.segs || []).some((s) => validateSeg(s, allRules, glob).length > 0) && (
                                 <span style={{ fontSize: 10.5, padding: "1px 6px", background: gapRed, color: "#fff", borderRadius: 2, marginLeft: 4 }}>flagged</span>
                               )}
                             </td>
