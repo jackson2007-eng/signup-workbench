@@ -546,16 +546,34 @@ function autofixSeg(seg, rules, glob) {
 const demandGamma = (glob) => 1 - Math.min(60, Math.max(0, glob.offPeakBias || 0)) / 100;
 const weightEv = (v, gamma) => (gamma === 1 ? v : Math.pow(v, gamma));
 
-function computeEngine(DEM, ftCov, includePT, minVeh, SPANS, maxFleet, offPeakBias = 0) {
+// concave coverage utility: reward for covering a slot has diminishing returns, so the FIRST
+// vehicle at a slot is worth more than the fifth and priority shifts to the least-covered
+// slots regardless of their size. p (coveragePriority) 0 → min(demand,supply) exactly, the
+// original "fill the gap" objective; higher p spreads coverage before deepening any one peak.
+const slotCredit = (d, s, p) => {
+  if (d <= 0) return 0;
+  if (!(p > 0)) return Math.min(d, s);          // identity path
+  const c = Math.min(1, s / d);
+  return d * (1 - Math.pow(1 - c, 1 + p));
+};
+// value the +1th vehicle earns at a slot whose target=T absolute vehicles, current supply=s.
+// p=0 → clamp(T−s,0,1), matching the original greedy marginal exactly.
+const covU = (T, s, p) => (T <= 0 ? 0 : T * (1 - Math.pow(1 - Math.min(1, s / T), 1 + p)));
+const concaveGain = (T, s, p) =>
+  (!(p > 0) ? Math.max(0, Math.min(1, T - s)) : covU(T, s + 1, p) - covU(T, s, p));
+
+function computeEngine(DEM, ftCov, includePT, minVeh, SPANS, maxFleet, offPeakBias = 0, coveragePriority = 0, deadheadOutMin = 0, deadheadInMin = 0) {
   const gamma = demandGamma({ offPeakBias });
+  const pcov = coveragePriority > 0 ? coveragePriority : 0;
+  const SD = schedulingDemand(DEM, deadheadOutMin, deadheadInMin);
   const perDay = {};
   let weekW = 0, weekSupSlots = 0;
   for (const d of DAYS) {
     const ev = [], w = [], sup = [];
     for (let i = 0; i < N; i++) {
       const e = DEM[d][i];
-      ev.push(e);
-      const we = weightEv(e, gamma);
+      ev.push(e);                       // raw trips → displays, day paddles, demandShare
+      const we = weightEv(SD[d][i], gamma); // phantom-augmented + weighted → all scoring/target
       w.push(we);
       const s = ftCov[d][i] + (includePT ? RAW.pt[d][i] : 0);
       sup.push(s);
@@ -563,26 +581,36 @@ function computeEngine(DEM, ftCov, includePT, minVeh, SPANS, maxFleet, offPeakBi
     }
     perDay[d] = { ev, w, sup };
   }
-  // demandShare (day paddles) stays TRUE trip share; all scoring below uses w-shares
+  // TWO metrics are computed per slot and kept separate:
+  //  • COVERAGE (weekScore/dayScore) — honest min(rawDemandShare, supplyShare) on TRUE ridership,
+  //    independent of coveragePriority, off-peak weighting, and phantoms. This is the number shown
+  //    everywhere in the UI: a stable, comparable scorecard of how well the board serves riders.
+  //  • OBJECTIVE (weekObjective/dayObjective) — the concave, phantom-/weight-aware score the
+  //    optimizer and generator climb. It encodes the coveragePriority preference (spread coverage);
+  //    it is NOT a ridership fraction and moves when you tune the knobs, so it never fronts the UI.
   let weekEvents = 0;
   for (const d of DAYS) weekEvents += perDay[d].ev.reduce((a, b) => a + b, 0);
-  let weekScore = 0;
+  let weekScore = 0, weekObjective = 0;
   for (const d of DAYS) {
     const p = perDay[d];
     const dayEv = p.ev.reduce((a, b) => a + b, 0);
     const dayW = p.w.reduce((a, b) => a + b, 0);
     const daySupSlots = p.sup.reduce((a, b) => a + b, 0);
     const [s0, s1] = SPANS[d];
-    let dayScore = 0;
+    let dayScore = 0, dayObjective = 0;
     const target = [];
     for (let i = 0; i < N; i++) {
-      const dSh = dayW > 0 ? p.w[i] / dayW : 0;
+      const dSh = dayW > 0 ? p.w[i] / dayW : 0;                    // weighted+phantom (objective/target)
       const sSh = daySupSlots > 0 ? p.sup[i] / daySupSlots : 0;
-      dayScore += Math.min(dSh, sSh);
+      const dCov = dayEv > 0 ? p.ev[i] / dayEv : 0;                // raw ridership share (honest coverage)
+      dayObjective += slotCredit(dSh, sSh, pcov);
+      dayScore += Math.min(dCov, sSh);
       target.push(dSh * daySupSlots);
     }
-    for (let i = 0; i < N; i++)
-      weekScore += Math.min(weekW > 0 ? p.w[i] / weekW : 0, weekSupSlots > 0 ? p.sup[i] / weekSupSlots : 0);
+    for (let i = 0; i < N; i++) {
+      weekObjective += slotCredit(weekW > 0 ? p.w[i] / weekW : 0, weekSupSlots > 0 ? p.sup[i] / weekSupSlots : 0, pcov);
+      weekScore += Math.min(weekEvents > 0 ? p.ev[i] / weekEvents : 0, weekSupSlots > 0 ? p.sup[i] / weekSupSlots : 0);
+    }
     const gaps = [];
     let cur = null;
     for (let i = 0; i < N; i++) {
@@ -616,7 +644,7 @@ function computeEngine(DEM, ftCov, includePT, minVeh, SPANS, maxFleet, offPeakBi
     }
     if (fv) fleetViol.push(fv);
     Object.assign(perDay[d], {
-      dayEv, dayW, daySupSlots, dayScore, target, gaps, floorViol, fleetViol,
+      dayEv, dayW, daySupSlots, dayScore, dayObjective, target, gaps, floorViol, fleetViol,
       supVH: daySupSlots / 12,
       misallocVH: (1 - dayScore) * daySupSlots / 12,
       peakSup: Math.max(...p.sup),
@@ -628,7 +656,7 @@ function computeEngine(DEM, ftCov, includePT, minVeh, SPANS, maxFleet, offPeakBi
     perDay[d].demandShare = weekEvents > 0 ? perDay[d].dayEv / weekEvents : 0;
     perDay[d].resourceShare = weekSupVH > 0 ? perDay[d].supVH / weekSupVH : 0;
   }
-  return { perDay, weekScore, weekSupVH, weekW };
+  return { perDay, weekScore, weekObjective, weekSupVH, weekW };
 }
 
 /* ---------- suggestions ---------- */
@@ -663,6 +691,7 @@ function startsPerSlot(board) {
 function findSuggestions(board, eng, DEM, rules, glob) {
   const starts = startsPerSlot(board);
   const maxPull = glob.maxPullout || 0;
+  const pcov = glob.coveragePriority > 0 ? glob.coveragePriority : 0;
   let evaluated = 0;
   // weighted shares (p.w / dayW) so suggestions chase the same objective the engine scores
   let weekEv = 0, weekSup = 0;
@@ -674,7 +703,7 @@ function findSuggestions(board, eng, DEM, rules, glob) {
   for (const d of DAYS) {
     let t = 0;
     const p = eng.perDay[d];
-    for (let i = 0; i < N; i++) t += Math.min(p.w[i] / weekEv, p.sup[i] / weekSup);
+    for (let i = 0; i < N; i++) t += slotCredit(p.w[i] / weekEv, p.sup[i] / weekSup, pcov);
     termBase[d] = t;
   }
   const out = [];
@@ -700,7 +729,7 @@ function findSuggestions(board, eng, DEM, rules, glob) {
         for (let i = 0; i < N; i++) {
           const ns = p.sup[i] - oldC[i] + newC[i];
           if (glob.maxFleet > 0 && ns > glob.maxFleet && p.sup[i] <= glob.maxFleet) { fleetBad = true; break; }
-          term += Math.min(p.w[i] / weekEv, ns / weekSup);
+          term += slotCredit(p.w[i] / weekEv, ns / weekSup, pcov);
         }
         if (fleetBad) return;
         delta += term - termBase[d];
@@ -734,6 +763,36 @@ function findSuggestions(board, eng, DEM, rules, glob) {
 // shared by generateBoard and retimeBoard: every legal placement shape, one entry per
 // type × grid start × (break length × break position, where the type takes one)
 const slotIdx = (t) => Math.max(0, Math.min(N, Math.round((t - T0) / 5)));
+
+// Edge staging phantom demand: to serve the first trips of the day, vehicles must pull out
+// deadheadOutMin earlier; after the last drop-off they pull in for deadheadInMin. Neither
+// window carries real ridership, so the demand model shows nothing there and the engine has
+// no reason to stage vehicles at the edges. This injects the first/last non-zero slot's trip
+// count across those shoulder slots so scoring, target, generation, and optimization all
+// account for the staging need. max() so any real demand there is never reduced. Returns DEM
+// unchanged when both deadheads are 0 (identity). Real ridership displays keep using raw DEM.
+function schedulingDemand(DEM, deadheadOutMin, deadheadInMin) {
+  const outSlots = Math.round((deadheadOutMin || 0) / 5);
+  const inSlots = Math.round((deadheadInMin || 0) / 5);
+  if (outSlots <= 0 && inSlots <= 0) return DEM;
+  const out = {};
+  for (const d of DAYS) {
+    const arr = DEM[d].slice();
+    let f = -1; for (let i = 0; i < N; i++) if (DEM[d][i] > 0) { f = i; break; }
+    if (f > 0 && outSlots > 0) {
+      const c = DEM[d][f];
+      for (let i = Math.max(0, f - outSlots); i < f; i++) arr[i] = Math.max(arr[i], c);
+    }
+    let L = -1; for (let i = N - 1; i >= 0; i--) if (DEM[d][i] > 0) { L = i; break; }
+    if (L >= 0 && L < N - 1 && inSlots > 0) {
+      const c = DEM[d][L];
+      for (let i = L + 1; i <= Math.min(N - 1, L + inSlots); i++) arr[i] = Math.max(arr[i], c);
+    }
+    out[d] = arr;
+  }
+  return out;
+}
+
 function buildCandidates(rules, glob) {
   const cands = [];
   for (const [t, R] of Object.entries(rules)) {
@@ -775,8 +834,10 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
   const noise = rng && opts.noise > 0 ? opts.noise : 0;
   let evaluated = 0;
   const gammaG = demandGamma(glob);
+  const pcov = glob.coveragePriority > 0 ? glob.coveragePriority : 0;
+  const SD = schedulingDemand(DEM, glob.deadheadOutMin, glob.deadheadInMin); // edge staging phantoms
   const WD = {};
-  for (const d of DAYS) WD[d] = gammaG === 1 ? DEM[d] : DEM[d].map((v) => weightEv(v, gammaG));
+  for (const d of DAYS) WD[d] = gammaG === 1 ? SD[d] : SD[d].map((v) => weightEv(v, gammaG));
   let weekEv = 0;
   for (const d of DAYS) weekEv += WD[d].reduce((a, b) => a + b, 0);
 
@@ -800,8 +861,6 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
   }
 
   const maxPull = glob.maxPullout || 0;
-  const outSlots = Math.round((glob.deadheadOutMin || 0) / 5);
-  const inSlots = Math.round((glob.deadheadInMin || 0) / 5);
   const starts = {};
   for (const d of DAYS) starts[d] = new Array(N).fill(0);
   let used10 = 0;
@@ -814,10 +873,8 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
       const [s0, s1] = spans[d];
       const pg = new Array(N + 1).fill(0), pc = new Array(N + 1).fill(0);
       for (let i = 0; i < N; i++) {
-        let tgt = target[d][i];
-        if (outSlots > 0) tgt = Math.max(tgt, target[d][Math.min(N - 1, i + outSlots)]);
-        if (inSlots > 0) tgt = Math.max(tgt, target[d][Math.max(0, i - inSlots)]);
-        let g = Math.max(0, Math.min(1, tgt - sup[d][i]));
+        const tgt = target[d][i];
+        let g = concaveGain(tgt, sup[d][i], pcov);
         const t = SLOT(i);
         if (t >= s0 && t < s1 && sup[d][i] < minVeh) g += 0.5;
         pg[i + 1] = pg[i] + g;
@@ -919,8 +976,10 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT, opts 
   const stability = opts.stability != null ? opts.stability : 3;
   let evaluated = 0;
   const gammaT = demandGamma(glob);
+  const pcov = glob.coveragePriority > 0 ? glob.coveragePriority : 0;
+  const SD = schedulingDemand(DEM, glob.deadheadOutMin, glob.deadheadInMin); // edge staging phantoms
   const WD = {};
-  for (const d of DAYS) WD[d] = gammaT === 1 ? DEM[d] : DEM[d].map((v) => weightEv(v, gammaT));
+  for (const d of DAYS) WD[d] = gammaT === 1 ? SD[d] : SD[d].map((v) => weightEv(v, gammaT));
   let weekEv = 0;
   for (const d of DAYS) weekEv += WD[d].reduce((a, b) => a + b, 0);
 
@@ -971,8 +1030,6 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT, opts 
 
   const cands = buildCandidates(rules, glob);
   const maxPull = glob.maxPullout || 0;
-  const outSlots = Math.round((glob.deadheadOutMin || 0) / 5);
-  const inSlots = Math.round((glob.deadheadInMin || 0) / 5);
 
   const placed = [];
   let retimed = 0, kept = 0;
@@ -982,10 +1039,8 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT, opts 
       const [s0, s1] = spans[d];
       const pg = new Array(N + 1).fill(0), pc = new Array(N + 1).fill(0);
       for (let i = 0; i < N; i++) {
-        let tgt = target[d][i];
-        if (outSlots > 0) tgt = Math.max(tgt, target[d][Math.min(N - 1, i + outSlots)]);
-        if (inSlots > 0) tgt = Math.max(tgt, target[d][Math.max(0, i - inSlots)]);
-        let g = Math.max(0, Math.min(1, tgt - sup[d][i]));
+        const tgt = target[d][i];
+        let g = concaveGain(tgt, sup[d][i], pcov);
         const t = SLOT(i);
         if (t >= s0 && t < s1 && sup[d][i] < minVeh) g += 0.5;
         pg[i + 1] = pg[i] + g;
@@ -1050,7 +1105,7 @@ function optimizeToConvergence(board0, engine0Args, rules, glob, maxIter = 25) {
   let applied = 0, iter = 0, evaluated = 0;
   while (iter < maxIter) {
     iter++;
-    const eng = computeEngine(DEM, buildSupply(board), includePT, minVeh, spans, maxFleet, glob.offPeakBias);
+    const eng = computeEngine(DEM, buildSupply(board), includePT, minVeh, spans, maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin);
     const sugs = findSuggestions(board, eng, DEM, rules, glob);
     evaluated += sugs.evaluated || 0;
     if (!sugs.length) break;
@@ -1256,15 +1311,17 @@ function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans) {
   }
   let weekEv = 0, weekSup = 0;
   const gammaR = demandGamma(glob);
+  const pcov = glob.coveragePriority > 0 ? glob.coveragePriority : 0;
+  const SD = schedulingDemand(DEM, glob.deadheadOutMin, glob.deadheadInMin); // edge staging phantoms
   const ev = {};
   for (const d of DAYS) {
-    ev[d] = gammaR === 1 ? DEM[d] : DEM[d].map((v) => weightEv(v, gammaR));
+    ev[d] = gammaR === 1 ? SD[d] : SD[d].map((v) => weightEv(v, gammaR));
     weekEv += ev[d].reduce((a, b) => a + b, 0);
     weekSup += sup[d].reduce((a, b) => a + b, 0);
   }
   const dayTerm = (d) => {
     let t = 0;
-    for (let i = 0; i < N; i++) t += Math.min(ev[d][i] / weekEv, sup[d][i] / weekSup);
+    for (let i = 0; i < N; i++) t += slotCredit(ev[d][i] / weekEv, sup[d][i] / weekSup, pcov);
     return t;
   };
   const term = {};
@@ -1310,7 +1367,7 @@ function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans) {
         for (let i = 0; i < N; i++) {
           const ns = sup[d][i] - oldC[i] + newC[i];
           if (glob.maxFleet > 0 && ns > glob.maxFleet && sup[d][i] <= glob.maxFleet) { fleetBad = true; break; }
-          t += Math.min(ev[d][i] / weekEv, ns / weekSup);
+          t += slotCredit(ev[d][i] / weekEv, ns / weekSup, pcov);
         }
         if (fleetBad) continue;
         const delta = t - term[d];
@@ -1676,15 +1733,16 @@ export default function App({ onHome }) {
     }
     st.iter++;
     st.evaluated += ev;
-    const sc = st.scoreFn(segs);
+    const sc = st.scoreFn(segs); // { obj, cov }
     const tSec = (performance.now() - st.startedAt) / 1000;
-    if (cfg.mode === "generate" && st.baselineScore == null) st.baselineScore = sc; // reference = the plain single-shot Generate
-    if (sc > st.bestScore + 1e-12) {
+    if (cfg.mode === "generate" && st.baselineScore == null) st.baselineScore = sc.cov; // reference = the plain single-shot Generate (coverage)
+    if (sc.obj > st.bestObj + 1e-12) { // accept on objective; display coverage
       st.best = segs;
-      st.bestScore = sc;
+      st.bestObj = sc.obj;
+      st.bestScore = sc.cov;
       st.lastImproveT = tSec;
       if (doRestart) st.restartFails = 0;
-      st.history.push({ t: Math.round(tSec * 10) / 10, score: Math.round(sc * 10000) / 100 });
+      st.history.push({ t: Math.round(tSec * 10) / 10, score: Math.round(sc.cov * 10000) / 100 });
     } else if (doRestart) {
       st.restartFails++;
     }
@@ -1716,18 +1774,24 @@ export default function App({ onHome }) {
         ? Math.max(glob.shiftSeriesBase || 6000, 1 + Math.max(0, ...board.map((s) => s.shift), ...baselineBoard.map((s) => s.shift)))
         : null,
     };
-    const scoreFn = (segs) => computeEngine(cfg.DEM, buildSupply(segs), cfg.includePT, cfg.glob.minVeh, cfg.spans, cfg.glob.maxFleet, cfg.glob.offPeakBias).weekScore;
-    const baselineScore = mode === "retime" ? scoreFn(cfg.baseline) : null;
+    // returns { obj, cov }: the search accepts/rejects on obj (concave objective the optimizer
+    // climbs), but tracks & displays cov (honest coverage %) so the monitor matches the headline
+    const scoreFn = (segs) => {
+      const e = computeEngine(cfg.DEM, buildSupply(segs), cfg.includePT, cfg.glob.minVeh, cfg.spans, cfg.glob.maxFleet, cfg.glob.offPeakBias, cfg.glob.coveragePriority, cfg.glob.deadheadOutMin, cfg.glob.deadheadInMin);
+      return { obj: e.weekObjective, cov: e.weekScore };
+    };
+    const baseline = mode === "retime" ? scoreFn(cfg.baseline) : null;
     optRef.current = {
       abort: false, cfg, scoreFn,
       // retime mode seeds the loaded signup itself as the incumbent — the search can only
       // ever improve on what's already in hand, never hand back something worse
       best: mode === "retime" ? cfg.baseline : null,
-      bestScore: mode === "retime" ? baselineScore : -Infinity,
-      baselineScore,
+      bestObj: mode === "retime" ? baseline.obj : -Infinity,   // accept threshold (objective)
+      bestScore: mode === "retime" ? baseline.cov : -Infinity, // displayed coverage of the best
+      baselineScore: baseline ? baseline.cov : null,           // display reference (coverage)
       iter: 0, restarts: 0, refines: 0, evaluated: 0, restartFails: 0,
       startedAt: performance.now(), lastImproveT: 0, lastBeat: 0,
-      history: mode === "retime" ? [{ t: 0, score: Math.round(baselineScore * 10000) / 100 }] : [],
+      history: mode === "retime" ? [{ t: 0, score: Math.round(baseline.cov * 10000) / 100 }] : [],
     };
     setOptRun({ running: true, mode, iter: 0, restarts: 0, refines: 0, evaluated: 0, bestScore: null, baselineScore: optRef.current.baselineScore, elapsed: 0, lastImproveT: 0, history: [] });
     setTimeout(optTick, 0);
@@ -1744,8 +1808,8 @@ export default function App({ onHome }) {
       const polished = st.cfg.mode === "generate"
         ? deepOptimize(st.best, engineArgs, st.cfg.rules, st.cfg.glob).board
         : optimizeToConvergence(st.best, engineArgs, st.cfg.rules, st.cfg.glob).board;
-      const pScore = st.scoreFn(polished);
-      if (pScore >= st.bestScore) { st.best = polished; st.bestScore = pScore; }
+      const pScore = st.scoreFn(polished); // { obj, cov }
+      if (pScore.obj >= st.bestObj) { st.best = polished; st.bestObj = pScore.obj; st.bestScore = pScore.cov; }
       const tSec = (performance.now() - st.startedAt) / 1000;
       st.history.push({ t: Math.round(tSec * 10) / 10, score: Math.round(st.bestScore * 10000) / 100 });
     }
@@ -2026,7 +2090,8 @@ export default function App({ onHome }) {
             g.avgCycleTime = Math.round((60 / (g.productivity || 1.75)) * 10) / 10;
           }
           if (g.demandShare == null) g.demandShare = DEFAULT_DEMAND_SHARE;
-          if (g.offPeakBias == null) g.offPeakBias = 30; // matches the shipped default; note scores are only comparable at the same weighting
+          if (g.offPeakBias == null) g.offPeakBias = 0; // neutralized default; superseded by coveragePriority
+          if (g.coveragePriority == null) g.coveragePriority = 0;
           if (g.min10 == null) g.min10 = 0;
           setGlob(g);
         }
@@ -2187,8 +2252,8 @@ export default function App({ onHome }) {
 
   const holidayCountForDay = useMemo(() => holidays.filter((h) => h.runsAs === day).length, [holidays, day]);
   const ftCov = useMemo(() => buildSupply(board), [board]);
-  const eng = useMemo(() => computeEngine(DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias), [DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias]);
-  const base = useMemo(() => computeEngine(DEM, buildSupply(baselineBoard), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias), [DEM, baselineBoard, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias]);
+  const eng = useMemo(() => computeEngine(DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin), [DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin]);
+  const base = useMemo(() => computeEngine(DEM, buildSupply(baselineBoard), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin), [DEM, baselineBoard, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin]);
   const P = eng.perDay[day];
 
   const originalMap = useMemo(() => new Map(baselineBoard.map((s) => [s.id, s])), [baselineBoard]);
@@ -2216,7 +2281,7 @@ export default function App({ onHome }) {
   // panel is open (one engine pass per change).
   const changeDeltas = useMemo(() => {
     if (!showDiff || changedCount === 0) return null;
-    const score = (b) => computeEngine(DEM, buildSupply(b), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias).weekScore;
+    const score = (b) => computeEngine(DEM, buildSupply(b), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin).weekScore;
     const cur = score(board);
     const map = new Map();
     for (const { seg, orig } of boardDiff.modified) {
@@ -2229,7 +2294,7 @@ export default function App({ onHome }) {
       map.set("rm" + o.id, (cur - score([...board.map(cloneSeg), cloneSeg(o)])) * 100);
     }
     return map;
-  }, [showDiff, changedCount, boardDiff, board, DEM, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias]);
+  }, [showDiff, changedCount, boardDiff, board, DEM, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin]);
   const deltaPill = (d) => d == null ? null : (
     <span style={{ fontWeight: 700, color: d >= 0 ? supplyTeal : gapRed }}> {d >= 0 ? "+" : ""}{d.toFixed(2)} cov</span>
   );
@@ -3129,7 +3194,7 @@ export default function App({ onHome }) {
                         startShiftNumber = Math.max(glob.shiftSeriesBase || 6000, 1 + Math.max(0, ...board.map((s) => s.shift), ...baselineBoard.map((s) => s.shift)));
                       }
                       const g = generateBoard(glob.min10 || 0, buildN, rules, glob, DEM, spans, glob.minVeh, includePT, typeSequence, startShiftNumber);
-                      const score = computeEngine(DEM, buildSupply(g.segs), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias).weekScore;
+                      const score = computeEngine(DEM, buildSupply(g.segs), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin).weekScore;
                       setBuildResult({ ...g, score });
                       setBuildBusy(false);
                     }, 30);
@@ -3178,8 +3243,8 @@ export default function App({ onHome }) {
                     setRetimeBusy(true);
                     setTimeout(() => {
                       const r = retimeBoard(baselineBoard, rules, glob, DEM, spans, glob.minVeh, includePT);
-                      const score = computeEngine(DEM, buildSupply(r.segs), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias).weekScore;
-                      const baselineScore = computeEngine(DEM, buildSupply(baselineBoard), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias).weekScore;
+                      const score = computeEngine(DEM, buildSupply(r.segs), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin).weekScore;
+                      const baselineScore = computeEngine(DEM, buildSupply(baselineBoard), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin).weekScore;
                       setRetimeResult({ ...r, score, baselineScore });
                       setRetimeBusy(false);
                     }, 30);
@@ -3974,7 +4039,7 @@ export default function App({ onHome }) {
                       setTimeout(() => {
                         const before = eng.weekScore;
                         const r = refinePerDay(board, rules, glob, DEM, includePT, glob.minVeh, spans);
-                        const after = computeEngine(DEM, buildSupply(r.board), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias).weekScore;
+                        const after = computeEngine(DEM, buildSupply(r.board), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin).weekScore;
                         mutate(() => r.board);
                         setRefineResult({ moves: r.moves, created: r.created, evaluated: r.evaluated, gained: (after - before) * 100 });
                         setSelId(null);
@@ -4057,7 +4122,7 @@ export default function App({ onHome }) {
                     setTimeout(() => {
                       const before = eng.weekScore;
                       const r = deepOptimize(board, [DEM, includePT, glob.minVeh, spans, glob.maxFleet], rules, glob);
-                      const after = computeEngine(DEM, buildSupply(r.board), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias).weekScore;
+                      const after = computeEngine(DEM, buildSupply(r.board), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin).weekScore;
                       mutate(() => r.board);
                       setOptResult({ applied: r.moves, evaluated: r.evaluated, created: r.created, passes: r.passes, gained: (after - before) * 100 });
                       setSugs(null); setSugsStale(false); setOptBusy(false);
@@ -4314,11 +4379,13 @@ export default function App({ onHome }) {
                   <NumField value={glob.maxPullout} onCommit={(v) => setGlob((g) => ({ ...g, maxPullout: v }))} />
                   <span>Auto-generated shift series (starting number)</span>
                   <NumField value={glob.shiftSeriesBase} onCommit={(v) => setGlob((g) => ({ ...g, shiftSeriesBase: Math.round(v) }))} />
+                  <span>Coverage priority</span>
+                  <NumField value={glob.coveragePriority ?? 0} step={0.5} onCommit={(v) => setGlob((g) => ({ ...g, coveragePriority: Math.min(4, Math.max(0, Math.round(v * 2) / 2)) }))} />
                   <span>Off-peak weighting (%)</span>
                   <NumField value={glob.offPeakBias ?? 0} step={5} onCommit={(v) => setGlob((g) => ({ ...g, offPeakBias: Math.min(60, Math.max(0, Math.round(v))) }))} />
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
-                  Currently {tenCount} ten-hour shifts on the board{tenCount > glob.max10 ? " — over the maximum" : (glob.min10 > 0 && tenCount < glob.min10) ? " — under the minimum" : ""}. Auto-Build fills at least the minimum with 10-hour packages and never exceeds the maximum; the board flags if either bound is crossed. Generated shifts number from the series above, continuing past it if the board already has higher numbers. Off-peak weighting: 0 means resources follow demand exactly (proportional); higher values flatten the target so lightly-loaded early and late periods claim proportionally more vehicles per trip and the peaks fewer — reflecting that off-peak trips share rides less. It applies to scoring, the target line, generation, retime, suggestions, and the optimizer, so scores are only comparable between boards evaluated at the same weighting.
+                  Currently {tenCount} ten-hour shifts on the board{tenCount > glob.max10 ? " — over the maximum" : (glob.min10 > 0 && tenCount < glob.min10) ? " — under the minimum" : ""}. Auto-Build fills at least the minimum with 10-hour packages and never exceeds the maximum; the board flags if either bound is crossed. Generated shifts number from the series above, continuing past it if the board already has higher numbers. Coverage priority: 0 fills the gap — resources chase the biggest unmet demand, so tall peaks attract the most; higher values add diminishing returns so the first coverage at a slot is worth more than the last, spreading resources to the least-served slots before deepening any one peak (0.5 gentle · 1 moderate · 2 aggressive). Off-peak weighting: 0 means resources follow demand exactly (proportional); higher values flatten the target so lightly-loaded early and late periods claim proportionally more vehicles per trip and the peaks fewer — reflecting that off-peak trips share rides less. It applies to scoring, the target line, generation, retime, suggestions, and the optimizer, so scores are only comparable between boards evaluated at the same weighting.
                 </div>
               </div>
 
