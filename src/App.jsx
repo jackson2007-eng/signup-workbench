@@ -1757,7 +1757,7 @@ function ActualCurve({ ev, label }) {
 
 /* ---------- coverage chart ---------- */
 function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity, avgCycleTime = 0, demandShare = 100, height = 320, selBand,
-  supplyName = "Supply", targetName = "Demand-aligned target", unitLabel = "events", minName = "min", sugTooltip = true }) {
+  supplyName = "Supply", targetName = "Demand-aligned target", unitLabel = "events", minName = "min", sugTooltip = true, extraSeries = null }) {
   const data = useMemo(() => {
     const bk = RAW.bookout[day];
     const bkMap = {};
@@ -1797,10 +1797,11 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         // between the two lines is how over-/under-fleeted you are. Scale-sensitive by design.
         impliedVeh: avgCycleTime > 0 ? Math.round(smoothedEv(i) * (demandShare > 0 ? demandShare / 100 : 1) * avgCycleTime / 10 * 10) / 10 : null,
         events: P.ev[i],
+        ...(extraSeries ? Object.fromEntries(extraSeries.map((s) => [s.key, s.values && s.values[i] != null ? s.values[i] : null])) : {}),
       });
     }
     return rows;
-  }, [P, day, avgCycleTime, demandShare]);
+  }, [P, day, avgCycleTime, demandShare, extraSeries]);
   return (
     <ResponsiveContainer width="100%" height={height}>
       <ComposedChart data={data} margin={{ top: 5, right: 14, left: -8, bottom: 0 }}>
@@ -1833,6 +1834,9 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
           <Line type="stepAfter" dataKey="sugVeh" name="Suggested vehicles (day share)" stroke={sampleGray} strokeWidth={1.6} strokeDasharray="2 3" dot={false} connectNulls />}
         {showProductivity &&
           <Line type="stepAfter" dataKey="impliedVeh" name="Vehicles demand implies" stroke="#B0455E" strokeWidth={1.8} dot={false} connectNulls />}
+        {extraSeries && extraSeries.map((s) => (
+          <Line key={s.key} type="stepAfter" dataKey={s.key} name={s.name} stroke={s.color} strokeWidth={1.8} strokeDasharray={s.dash || undefined} dot={false} connectNulls />
+        ))}
       </ComposedChart>
     </ResponsiveContainer>
   );

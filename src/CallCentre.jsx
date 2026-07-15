@@ -60,14 +60,17 @@ function deriveActiveCalls(rows) {
   if (cs < 0 || ce < 0) return null;
   const ct = hdrIndex(H, "Call Type");
   const cdur = hdrIndex(H, "Duration");
-  const acc = {}, dates = {}, cnt = {}, durSum = {};
-  for (const d of DAYS) { acc[d] = new Array(N).fill(0); dates[d] = new Set(); cnt[d] = 0; durSum[d] = 0; }
-  let used = 0, outbound = 0, allDur = 0;
+  const cq = hdrIndex(H, "Call Routed CSQ");
+  const acc = {}, arr = {}, dates = {}, cnt = {}, durSum = {};
+  for (const d of DAYS) { acc[d] = new Array(N).fill(0); arr[d] = new Array(N).fill(0); dates[d] = new Set(); cnt[d] = 0; durSum[d] = 0; }
+  let used = 0, outbound = 0, allDur = 0, acd = 0, nonAcd = 0;
+  const qCount = {};
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r]; if (!row) continue;
     const s = row[cs], e = row[ce];
     if (typeof s !== "number" || typeof e !== "number") continue;
-    if (ct >= 0 && !/inbound/i.test(String(row[ct] || ""))) { outbound++; continue; }
+    const type = ct >= 0 ? String(row[ct] || "") : "inbound";
+    if (!/inbound/i.test(type)) { outbound++; continue; }
     const dateSerial = Math.floor(s);
     const d = DAYS[serialToWeekday(s)];
     const startMin = Math.round((s - dateSerial) * 1440);
@@ -76,25 +79,30 @@ function deriveActiveCalls(rows) {
     const a = Math.floor((startMin - T0) / 5), z = Math.ceil((endMin - T0) / 5);
     if (z <= 0 || a >= N) continue;
     for (let i = Math.max(0, a); i < Math.min(N, z); i++) acc[d][i]++;
+    if (a >= 0 && a < N) arr[d][a]++; // the interval the call STARTED in
     dates[d].add(dateSerial);
     cnt[d]++;
     const durMin = (typeof row[cdur] === "number" ? row[cdur] : (e - s)) * 1440; // Duration is a fraction of a day
     durSum[d] += durMin; allDur += durMin;
+    if (/non-acd/i.test(type)) nonAcd++; else acd++;
+    if (cq >= 0) { const q = String(row[cq] || "").replace(/^csq\s+/i, "").trim(); if (q) qCount[q] = (qCount[q] || 0) + 1; }
     used++;
   }
   if (used === 0) return null;
-  const calls = {}, perDay = {};
+  const calls = {}, arrivals = {}, perDay = {};
   let minDates = Infinity, maxDates = 0;
   for (const d of DAYS) {
     const nd = dates[d].size || 1;
     if (dates[d].size) { minDates = Math.min(minDates, nd); maxDates = Math.max(maxDates, nd); }
     calls[d] = acc[d].map((v) => Math.round((v / nd) * 100) / 100);
+    arrivals[d] = arr[d].map((v) => Math.round((v / nd) * 100) / 100);
     perDay[d] = { calls: Math.round(cnt[d] / nd), aht: cnt[d] ? Math.round((durSum[d] / cnt[d]) * 100) / 100 : 0 };
   }
+  const queues = Object.entries(qCount).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([name, calls]) => ({ name, calls }));
   const span = minDates === maxDates ? `${maxDates}` : `${minDates}–${maxDates}`;
   return {
-    calls,
-    summary: { perDay, aht: Math.round((allDur / used) * 100) / 100 },
+    calls, arrivals,
+    summary: { perDay, aht: Math.round((allDur / used) * 100) / 100, composition: { acd, nonAcd }, queues },
     info: `Derived active-call curve from ${used.toLocaleString()} inbound calls (${outbound.toLocaleString()} outbound excluded), averaged over ${span} day(s) per weekday.`,
   };
 }
@@ -123,6 +131,26 @@ function parseSimpleCalls(rows) {
   return used ? { calls, info: `Loaded ${used.toLocaleString()} interval values from the template.` } : null;
 }
 
+// Erlang C: probability an arriving call waits, given offered load A (Erlangs) and N agents.
+function erlangC(A, N) {
+  if (N <= A) return 1;
+  let B = 1; // Erlang B recursion, then convert to C
+  for (let k = 1; k <= N; k++) B = (A * B) / (k + A * B);
+  return (N * B) / (N - A * (1 - B));
+}
+// Fewest agents so that at least targetPct of calls are answered within targetSec, at offered load
+// A (≈ concurrent active calls, by Little's law). AHT and the target time share the same unit.
+function requiredAgents(A, ahtMin, targetSec, targetPct) {
+  if (!(A > 0) || !(ahtMin > 0)) return 0;
+  const t = targetSec / 60;
+  let N = Math.max(1, Math.ceil(A));
+  for (let guard = 0; guard < 500; guard++, N++) {
+    const sl = 1 - erlangC(A, N) * Math.exp(-(N - A) * (t / ahtMin));
+    if (sl >= targetPct) return N;
+  }
+  return N;
+}
+
 const NAV = [
   { key: "rules", label: "RULES" },
   { key: "demand", label: "DEMAND" },
@@ -140,6 +168,8 @@ export default function CallCentre({ onHome }) {
   const [demSource, setDemSource] = useState("sample");
   const [uploadInfo, setUploadInfo] = useState(null);
   const [callSummary, setCallSummary] = useState(() => CALL_SAMPLE.summary || null);
+  const [arrivals, setArrivals] = useState(() => CALL_SAMPLE.arrivals || null);
+  const [showArrivals, setShowArrivals] = useState(false);
   const [typeColors, setTypeColors] = useState(() => ({ ...CALL_SAMPLE.typeColors }));
   const [tab, setTab] = useState("coverage");
   const [day, setDay] = useState("Monday");
@@ -162,6 +192,13 @@ export default function CallCentre({ onHome }) {
     [DEM, ftCov, glob, spans]
   );
   const P = eng.perDay[day];
+
+  // Erlang C agents required for the selected day, from the active-calls (offered-load) curve.
+  const reqCurve = useMemo(
+    () => (calls[day] || []).map((A) => requiredAgents(A, glob.ahtMin, glob.slTargetSec, (glob.slTargetPct > 1 ? glob.slTargetPct / 100 : glob.slTargetPct))),
+    [calls, day, glob.ahtMin, glob.slTargetSec, glob.slTargetPct]
+  );
+  const peakReq = reqCurve.length ? Math.max(...reqCurve) : 0;
 
   const distinctShifts = new Set(board.map((s) => s.shift)).size;
   const flagCount = board.reduce((n, s) => n + (validateSeg(s, rules, glob).length ? 1 : 0), 0);
@@ -202,9 +239,9 @@ export default function CallCentre({ onHome }) {
       const f = d === "Saturday" ? 0.5 : d === "Sunday" ? 0.45 : 1;
       c[d] = wk.map((v) => Math.round(v * f * 100) / 100);
     }
-    setCalls(c); setDemSource("sketched"); setUploadInfo(null); setCallSummary(null);
+    setCalls(c); setDemSource("sketched"); setUploadInfo(null); setCallSummary(null); setArrivals(null);
   };
-  const useSample = () => { setCalls(clone(CALL_SAMPLE.calls)); setDemSource("sample"); setUploadInfo(null); setCallSummary(CALL_SAMPLE.summary || null); };
+  const useSample = () => { setCalls(clone(CALL_SAMPLE.calls)); setDemSource("sample"); setUploadInfo(null); setCallSummary(CALL_SAMPLE.summary || null); setArrivals(CALL_SAMPLE.arrivals || null); };
 
   const uploadCalls = (file) => {
     const rd = new FileReader();
@@ -221,7 +258,8 @@ export default function CallCentre({ onHome }) {
           if (result) break;
         }
         if (!result) throw new Error("no usable data");
-        setCalls(result.calls); setDemSource("uploaded"); setUploadInfo(result.info); setCallSummary(result.summary || null);
+        setCalls(result.calls); setDemSource("uploaded"); setUploadInfo(result.info); setCallSummary(result.summary || null); setArrivals(result.arrivals || null);
+        if (result.summary && result.summary.aht > 0) setGlob((g) => ({ ...g, ahtMin: result.summary.aht })); // auto-fill handle time for Erlang sizing
       } catch (e) {
         alert("Could not read that call-data file. Upload a raw ACD call export (with Call Start Time / Call End Time), or the simple template (Day, Time, Active calls).");
       }
@@ -258,7 +296,7 @@ export default function CallCentre({ onHome }) {
     XLSX.writeFile(wb, "agent-schedule.xlsx");
   };
   const saveProject = () => {
-    const blob = new Blob([JSON.stringify({ kind: "callcentre", board, rules, glob, spans, calls, demSource, typeColors, callSummary }, null, 0)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ kind: "callcentre", board, rules, glob, spans, calls, arrivals, demSource, typeColors, callSummary }, null, 0)], { type: "application/json" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "callcentre-project.json"; a.click();
   };
   const loadProject = (file) => {
@@ -269,10 +307,11 @@ export default function CallCentre({ onHome }) {
         if (!p || !Array.isArray(p.board)) throw new Error("bad");
         setBoard(p.board.map(cloneSeg));
         if (p.rules) setRules(p.rules);
-        if (p.glob) setGlob(p.glob);
+        if (p.glob) setGlob({ ...CALL_SAMPLE.global, ...p.glob });
         if (p.spans) setSpans(p.spans);
         if (p.calls) { setCalls(p.calls); setDemSource(p.demSource || "uploaded"); }
         setCallSummary(p.callSummary || null);
+        setArrivals(p.arrivals || null);
         if (p.typeColors) setTypeColors(p.typeColors);
         setHist([]); setFuture([]); setSelId(null); setBuildResult(null);
       } catch (e) { alert("Could not read that Call Centre project file."); }
@@ -367,7 +406,7 @@ export default function CallCentre({ onHome }) {
         )}
 
         {tab === "rules" && <RulesTab {...{ rules, setRule, glob, setGlob, spans, setSpans, tColor }} />}
-        {tab === "demand" && <DemandTab {...{ day, calls, demSource, uploadInfo, callSummary, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }} />}
+        {tab === "demand" && <DemandTab {...{ day, calls, arrivals, showArrivals, setShowArrivals, demSource, uploadInfo, callSummary, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }} />}
         {tab === "build" && <BuildTab {...{ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor }} />}
         {tab === "coverage" && (
           <div>
@@ -384,15 +423,16 @@ export default function CallCentre({ onHome }) {
               <Stat label={`${day} coverage`} value={`${(P.dayScore * 100).toFixed(1)}%`} tone={supplyTeal} />
               <Stat label="Week coverage" value={`${weekPct}%`} tone={targetInk} />
               <Stat label="Agents on (peak)" value={P.peakSup} tone={supplyTeal} />
-              <Stat label="Designed shifts" value={distinctShifts} />
+              <Stat label="Required (peak)" value={peakReq} tone="#B0455E" sub={`${glob.slTargetPct > 1 ? glob.slTargetPct : glob.slTargetPct * 100}% in ${glob.slTargetSec}s`} />
               <Stat label="Rule flags" value={flagCount} tone={flagCount ? gapRed : supplyTeal} />
             </div>
             <div style={cardStyle}>
               <div style={hTitle}>Agents vs active calls — {day}</div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={0} showBookout={false} showProductivity={false} demandShare={100}
-                supplyName="Agents on shift" targetName="Demand-aligned staffing" unitLabel="active calls" minName="floor" sugTooltip={false} />
+                supplyName="Agents on shift" targetName="Demand-aligned staffing" unitLabel="active calls" minName="floor" sugTooltip={false}
+                extraSeries={peakReq > 0 ? [{ key: "req", name: "Agents required (Erlang)", color: "#B0455E", values: reqCurve, dash: "5 3" }] : null} />
               <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 6 }}>
-                Teal = agents on shift; shaded target = the demand-aligned agent shape (scale-free coverage of active calls). Amber floor line = minimum agents.
+                Teal = agents on shift; shaded target = the demand-aligned agent shape (scale-free coverage of active calls). Amber floor line = minimum agents. Dashed red = agents an Erlang C model needs to answer {glob.slTargetPct > 1 ? glob.slTargetPct : glob.slTargetPct * 100}% of calls within {glob.slTargetSec}s (from active calls + handle time in Rules) — an absolute headcount check the scale-free coverage can't give.
               </div>
             </div>
           </div>
@@ -471,22 +511,38 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor }) {
           </div>
           <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>Shifts never start before open or end after close; the minimum-agents floor applies inside these hours.</div>
         </div>
+
+        <div style={cardStyle}>
+          <div style={hTitle}>Service level (Erlang sizing)</div>
+          <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "8px 10px", alignItems: "center", fontSize: 13 }}>
+            <span>Average handle time (min)</span><NumField value={glob.ahtMin ?? 1.8} step={0.1} onCommit={(v) => setG("ahtMin", Math.max(0.1, Math.round(v * 100) / 100))} />
+            <span>Answer target (%)</span><NumField value={glob.slTargetPct > 1 ? glob.slTargetPct : Math.round((glob.slTargetPct ?? 0.8) * 100)} step={5} onCommit={(v) => setG("slTargetPct", Math.min(0.999, Math.max(0.5, Math.round(v) / 100)))} />
+            <span>…within (seconds)</span><NumField value={glob.slTargetSec ?? 30} step={5} onCommit={(v) => setG("slTargetSec", Math.max(1, Math.round(v)))} />
+          </div>
+          <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>Drives the "agents required" line on Coverage — the Erlang C headcount to answer the target share of calls in time, given the active-calls load and handle time. Handle time auto-fills from uploaded call data.</div>
+        </div>
       </div>
     </div>
   );
 }
 
 /* ================= DEMAND ================= */
-function DemandTab({ day, calls, demSource, uploadInfo, callSummary, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }) {
+function DemandTab({ day, calls, arrivals, showArrivals, setShowArrivals, demSource, uploadInfo, callSummary, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }) {
   const upRef = useRef(null);
   const srcLabel = { sample: "Sample call data (DATS Jul–Aug 2025)", sketched: "Sketched", uploaded: "Uploaded call data" }[demSource] || demSource;
+  const hasArrivals = arrivals && arrivals[day];
   return (
     <div>
       <div style={cardStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
           <div style={hTitle}>Active calls — {day}</div>
           <span style={{ fontSize: 11, padding: "2px 8px", background: "#EEF4F5", border: "1px solid #D7E1E4", color: sampleGray }}>{srcLabel}</span>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            {hasArrivals && (
+              <label style={{ fontSize: 12, color: sampleGray, display: "flex", alignItems: "center", gap: 5, cursor: "pointer", marginRight: 4 }}>
+                <input type="checkbox" checked={showArrivals} onChange={(e) => setShowArrivals(e.target.checked)} /> show arrivals
+              </label>
+            )}
             <button style={nudgeBtn} onClick={useSample}>Use sample</button>
             <button style={nudgeBtn} onClick={downloadTemplate}>Download template</button>
             <button style={nudgeBtn} onClick={() => upRef.current && upRef.current.click()}>Upload call data</button>
@@ -497,7 +553,7 @@ function DemandTab({ day, calls, demSource, uploadInfo, callSummary, sketchRaw, 
         {uploadInfo && (
           <div style={{ background: "#EEF4F5", border: "1px solid #CFE0E2", padding: "7px 11px", marginBottom: 8, fontSize: 12, color: "#2C4A4A" }}>{uploadInfo}</div>
         )}
-        <CallCurveChart ev={calls[day]} day={day} />
+        <CallCurveChart ev={calls[day]} day={day} arrivals={showArrivals && hasArrivals ? arrivals[day] : null} />
         <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 6 }}>
           Upload accepts a raw ACD call export (one row per call with Call Start Time / Call End Time) — it derives concurrent active calls per interval, inbound only, averaged into a typical week — or the simple Day / Time / Active calls template.
         </div>
@@ -632,14 +688,15 @@ function ScheduleTab({ board, day, setDay, selSeg, selId, setSelId, selIssues, p
   );
 }
 
-/* Active-calls curve — concurrency per 5-min slot, no trip/vehicle framing. */
-function CallCurveChart({ ev, day }) {
+/* Active-calls curve — concurrency per 5-min slot, no trip/vehicle framing. Optional arrivals line. */
+function CallCurveChart({ ev, day, arrivals }) {
   const W = 940, H = 240, PADL = 34, PADB = 22;
   const maxV = Math.max(1, Math.max(...ev) * 1.15);
   const x = (i) => PADL + (i / (N - 1)) * (W - PADL - 8);
   const y = (v) => (H - PADB) - (Math.min(v, maxV) / maxV) * (H - PADB - 8);
   const path = ev.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
   const area = `${path} L${x(N - 1).toFixed(1)},${y(0)} L${x(0).toFixed(1)},${y(0)} Z`;
+  const arrPath = arrivals ? arrivals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ") : null;
   const peakI = ev.indexOf(Math.max(...ev));
   const peakLeft = peakI > N * 0.75;
   return (
@@ -665,11 +722,12 @@ function CallCurveChart({ ev, day }) {
       })}
       <path d={area} fill={demandAmber} fillOpacity={0.14} />
       <path d={path} fill="none" stroke={demandAmber} strokeWidth={2.5} strokeLinejoin="round" />
+      {arrPath && <path d={arrPath} fill="none" stroke={supplyTeal} strokeWidth={1.6} strokeDasharray="4 3" strokeLinejoin="round" />}
       <circle cx={x(peakI)} cy={y(ev[peakI])} r={5} fill="#C0392B" stroke="#fff" strokeWidth={1.2} />
       <text x={x(peakI) + (peakLeft ? -9 : 9)} y={y(ev[peakI]) - 6} fontSize={11} fontWeight={700} fill="#C0392B" textAnchor={peakLeft ? "end" : "start"}>
         {ev[peakI].toFixed(1)} concurrent
       </text>
-      <text x={PADL} y={16} fontSize={11} fill="#5B6B75">Active calls (queue + talking) — {day} · axis in concurrent calls per 5-minute slot</text>
+      <text x={PADL} y={16} fontSize={11} fill="#5B6B75">Active calls (queue + talking){arrivals ? " (amber) + calls arriving (teal dashed)" : ""} — {day} · concurrent calls per 5-minute slot</text>
     </svg>
   );
 }
@@ -701,6 +759,43 @@ function CallDataSummary({ summary, day, calls }) {
           );
         })}
       </div>
+      {(summary.composition || (summary.queues && summary.queues.length > 0)) && (
+        <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginTop: 12, paddingTop: 10, borderTop: "1px solid #EEF2F3" }}>
+          {summary.composition && (() => {
+            const tot = (summary.composition.acd || 0) + (summary.composition.nonAcd || 0);
+            const acdPct = tot ? Math.round((summary.composition.acd / tot) * 100) : 0;
+            return (
+              <div style={{ minWidth: 190 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: sampleGray, marginBottom: 5 }}>CALL COMPOSITION</div>
+                <div style={{ display: "flex", height: 14, borderRadius: 2, overflow: "hidden", border: "1px solid #E2E8EA" }}>
+                  <div style={{ width: `${acdPct}%`, background: supplyTeal }} title={`Queued (ACD) ${acdPct}%`} />
+                  <div style={{ width: `${100 - acdPct}%`, background: "#CBD8DA" }} title={`Non-ACD ${100 - acdPct}%`} />
+                </div>
+                <div style={{ fontSize: 11, color: sampleGray, marginTop: 4 }}>
+                  <span style={{ color: supplyTeal, fontWeight: 600 }}>{acdPct}% queued (ACD)</span> · {100 - acdPct}% non-ACD
+                </div>
+              </div>
+            );
+          })()}
+          {summary.queues && summary.queues.length > 0 && (() => {
+            const maxQ = Math.max(1, ...summary.queues.map((q) => q.calls));
+            return (
+              <div style={{ flex: 1, minWidth: 240 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: sampleGray, marginBottom: 5 }}>BUSIEST QUEUES (period total)</div>
+                {summary.queues.slice(0, 4).map((q) => (
+                  <div key={q.name} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+                    <div style={{ width: 130, fontSize: 11.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{q.name}</div>
+                    <div style={{ flex: 1, background: "#EEF2F3", borderRadius: 2, height: 12 }}>
+                      <div style={{ width: `${(q.calls / maxQ) * 100}%`, background: "#2E86AB", height: "100%", borderRadius: 2 }} />
+                    </div>
+                    <div style={{ width: 54, textAlign: "right", fontSize: 11, color: sampleGray, fontVariantNumeric: "tabular-nums" }}>{q.calls.toLocaleString()}</div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+      )}
       <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>
         Average inbound calls per day (bars) and average handle time, from the loaded call data. Longer handle time ties each agent up longer, so more agents are needed for the same call volume.
       </div>
