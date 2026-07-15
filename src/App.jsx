@@ -3789,7 +3789,16 @@ export default function App({ onHome }) {
                             <select value={selHolSeg.type} onChange={(e) => setHolSegType(e.target.value)}>
                               {Object.keys(rules).map((t) => <option key={t} value={t}>{t}</option>)}
                             </select>
-                            {selHolSeg.sourceShift != null && <span style={{ fontSize: 11, color: "#5B6B75" }}>from shift {selHolSeg.sourceShift} / run {selHolSeg.sourceRun}</span>}
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#5B6B75" }} title="Which signup shift/run this stat day belongs under — edit to move it onto a different shift. Blank means unassigned; it exports on its own at the end.">
+                              <span>Shift</span>
+                              <input key={"holsh" + selHolSeg.id} defaultValue={selHolSeg.sourceShift ?? ""} inputMode="numeric" placeholder="—"
+                                onBlur={(e) => { const v = e.target.value.trim(); patchHolSeg({ sourceShift: v === "" ? null : (Number.isFinite(+v) ? +v : (selHolSeg.sourceShift ?? null)) }); }}
+                                style={{ width: 62, background: "#fff", color: ink, border: "1px solid #CBD5DA", padding: "3px 6px", fontSize: 12 }} />
+                              <span>Run</span>
+                              <input key={"holrun" + selHolSeg.id} defaultValue={selHolSeg.sourceRun ?? ""} placeholder="—"
+                                onBlur={(e) => { const v = e.target.value.trim(); patchHolSeg({ sourceRun: v === "" ? null : v }); }}
+                                style={{ width: 62, background: "#fff", color: ink, border: "1px solid #CBD5DA", padding: "3px 6px", fontSize: 12 }} />
+                            </div>
                             <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
                               <button style={nudgeBtn} onClick={duplicateHolSeg}>Duplicate</button>
                               <button style={{ ...nudgeBtn, borderColor: gapRed, color: gapRed }} onClick={removeHolSeg}>Remove</button>
@@ -3841,8 +3850,13 @@ export default function App({ onHome }) {
                             const barTitle = `${fmt(sg.s)}–${fmt(sg.e)} · ${workHrs}h working${sg.b ? ` · ${brkMin}m break (${fmt(sg.b[0])}–${fmt(sg.b[1])})` : ""}${sg.sourceShift != null ? ` · from shift ${sg.sourceShift}/run ${sg.sourceRun}` : ""}`;
                             return (
                               <div key={sg.id} className="ganttrow" onClick={() => setSelHolSegId(sg.id)}>
-                                <div className="glabel" style={{ fontWeight: isSel ? 700 : 400, color: bad ? gapRed : undefined }}>
-                                  {sg.type}
+                                <div className="glabel" style={{ fontWeight: isSel ? 700 : 400, color: bad ? gapRed : undefined, lineHeight: 1.15 }}>
+                                  <div>{sg.type}</div>
+                                  {(sg.sourceRun != null || sg.sourceShift != null) && (
+                                    <div style={{ fontSize: 9.5, opacity: .7, fontWeight: 400 }}>
+                                      {sg.sourceRun != null ? `run ${sg.sourceRun}` : "run —"}{sg.sourceShift != null ? ` · sh ${sg.sourceShift}` : ""}
+                                    </div>
+                                  )}
                                 </div>
                                 <div className="gtrack" title={barTitle}>
                                   {[360, 600, 840, 1080, 1320].map((m) => (
