@@ -5029,3 +5029,14 @@ export default function App({ onHome }) {
     </div>
   );
 }
+
+// Shared with the Call Centre module (src/CallCentre.jsx): the coverage engine, rule helpers, and
+// UI atoms are all pure/module-scope and parameterized by rules/glob/DEM, so a second staffing
+// module reuses them directly. Exporting here (rather than extracting to engine.js) keeps this a
+// one-file change; the operator tool above is unaffected.
+export {
+  T0, T1, N, SLOT, DAYS, WEEKEND_DAYS, fmt, parseHM, cloneSeg,
+  buildSupply, computeEngine, buildCandidates, generateBoard,
+  validateSeg, autofixSeg, packageInfo, startVarianceIssues, segContrib,
+  TimeField, NumField, Nudge, WeekStrip, Stat, CoverageChart, Sketcher, ActualCurve,
+};

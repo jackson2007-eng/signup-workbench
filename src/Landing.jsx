@@ -11,10 +11,10 @@ const MODULES = [
     body: "Design operator signups against real ridership demand. Score coverage, auto-build or retime the board, optimize continuously, and hand off a clean, rule-checked signup.",
   },
   {
-    key: "callcentre", path: null, status: "roadmap", accent: bookoutViolet,
+    key: "callcentre", path: "/callcentre", status: "live", accent: bookoutViolet,
     title: "Call Centre Staffing",
     tag: "Booking & information lines",
-    body: "Shape agent schedules against call-arrival curves and handle times, with the same coverage engine sized for service-level targets instead of vehicles.",
+    body: "Shape agent schedules against active-call curves with the same coverage engine, sized against calls in queue and in service instead of vehicles.",
   },
   {
     key: "dispatch", path: null, status: "roadmap", accent: demandAmber,
