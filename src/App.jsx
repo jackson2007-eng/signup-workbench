@@ -1967,6 +1967,7 @@ export default function App({ onHome }) {
   const [buildN, setBuildN] = useState(100);
   const [buildResult, setBuildResult] = useState(null);
   const [buildBusy, setBuildBusy] = useState(false);
+  const [sizeInfo, setSizeInfo] = useState(null);
   const [retimeResult, setRetimeResult] = useState(null);
   const [retimeBusy, setRetimeBusy] = useState(false);
 
@@ -2584,6 +2585,19 @@ export default function App({ onHome }) {
   const recycleViol = useMemo(() => recycleViolations(board, glob), [board, glob.recycleEnabled, glob.recycleTurnaround, glob.recycleWindow, glob.recycleCount]);
   const P = eng.perDay[day];
   const req = useMemo(() => requirementCurve(P, glob), [P, glob.demandShare, glob.avgCycleTime, glob.maxFleet]);
+  // Week-wide requirement sizing: total capped vehicle-hours across all 7 days,
+  // divided by 40 (every weekly package = 40 paid hours = ~40 vehicle-hours,
+  // straight or split). Gives the package count that reproduces the demand-implied
+  // workload under the fleet cap, instead of the planner guessing the envelope.
+  const reqSize = useMemo(() => {
+    let hours = 0, peak = 0;
+    for (const d of DAYS) {
+      const r = requirementCurve(eng.perDay[d], glob);
+      hours += r.values.reduce((a, b) => a + b, 0) / 12;
+      if (r.peak > peak) peak = r.peak;
+    }
+    return { hours: Math.round(hours), peak, packages: Math.max(1, Math.round(hours / 40)) };
+  }, [eng, glob.demandShare, glob.avgCycleTime, glob.maxFleet]);
 
   const originalMap = useMemo(() => new Map(baselineBoard.map((s) => [s.id, s])), [baselineBoard]);
 
@@ -3589,7 +3603,16 @@ export default function App({ onHome }) {
                   }}>
                   {buildBusy ? "Generating…" : "Generate board"}
                 </button>
+                <button style={{ ...nudgeBtn, borderColor: "#185FA5", color: "#185FA5", fontWeight: 600 }} disabled={buildBusy || optRunning}
+                  onClick={() => { setBuildN(reqSize.packages); setSizeInfo(reqSize); }}>
+                  Size to requirement ({reqSize.packages})
+                </button>
               </div>
+              {sizeInfo && (
+                <div style={{ marginTop: 10, padding: "9px 12px", background: "#EAF1FB", border: "1px solid #BBD3EC", fontSize: 12.5, color: "#185FA5", lineHeight: 1.5 }}>
+                  <b>Sized to requirement:</b> the week's demand (share {glob.demandShare}%) ÷ productivity (cycle {glob.avgCycleTime} min), redistributed under the fleet cap of {glob.maxFleet}, totals <b>{sizeInfo.hours.toLocaleString()}</b> vehicle-hours/week at a peak of <b>{sizeInfo.peak}</b> — ÷ 40 paid hours per package = <b>{sizeInfo.packages}</b> packages. Count set{sizeInfo.packages !== buildN ? ` (currently ${buildN})` : ""} — click <b>Generate board</b>.{ptEnabled ? " Part-time shifts add capacity on top, so trim the count if you keep them." : ""}
+                </div>
+              )}
               <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
                 <input type="checkbox" checked={followBaselinePattern} onChange={(e) => setFollowBaselinePattern(e.target.checked)} />
                 Follow existing shift-type pattern (recommended when working from an uploaded signup)
