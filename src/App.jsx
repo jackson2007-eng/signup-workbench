@@ -3352,6 +3352,31 @@ export default function App({ onHome }) {
           </div>
         </div>
 
+        {/* step navigation — walk the phase order without hunting through the tab row */}
+        {(() => {
+          const FLOW = [
+            ["rules", "RULES"], ["signup", "SIGNUP"], ["demand", "DEMAND"],
+            ["signup-builder", "SIGNUP BUILDER"], ["board", "SHIFT BUILDER"],
+            ["coverage", "COVERAGE"], ["suggest", "SUGGESTIONS"], ["compare", "COMPARE"], ["pack", "PACKAGING"],
+          ];
+          const i = FLOW.findIndex(([k]) => k === tab);
+          if (i < 0) return null;
+          const prev = i > 0 ? FLOW[i - 1] : null;
+          const next = i < FLOW.length - 1 ? FLOW[i + 1] : null;
+          return (
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
+              {prev ? (
+                <button style={nudgeBtn} onClick={() => setTab(prev[0])}>← {prev[1]}</button>
+              ) : <span />}
+              {next ? (
+                <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }} onClick={() => setTab(next[0])}>
+                  Next step: {next[1]} →
+                </button>
+              ) : <span />}
+            </div>
+          );
+        })()}
+
         {tab === "signup" && (
           <>
             <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14 }}>
