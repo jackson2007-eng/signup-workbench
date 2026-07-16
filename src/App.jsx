@@ -2687,6 +2687,13 @@ export default function App({ onHome }) {
     }
     return c;
   }, [daySegs]);
+  // Sign-ins per 5-minute slot on this day (the garage-stagger view): count of runs starting in
+  // each slot, flagged where it exceeds the maxPullout cap.
+  const dayStarts = useMemo(() => {
+    const c = new Array(N).fill(0);
+    for (const sg of daySegs) { const k = Math.floor((sg.s - T0) / 5); if (k >= 0 && k < N) c[k]++; }
+    return c;
+  }, [daySegs]);
   const timeFilteredSegs = ganttTimeFilter != null ? daySegs.filter((sg) => sg.s <= ganttTimeFilter && sg.e >= ganttTimeFilter) : null;
   const ganttSegs = selShift != null ? daySegs.filter((sg) => sg.shift === selShift) : (timeFilteredSegs || daySegs);
   // Clicking a coverage chart marks a focus time (does NOT jump tabs); the user chooses when to
@@ -2826,6 +2833,20 @@ export default function App({ onHome }) {
       : daySegs[(idx + dir + daySegs.length) % daySegs.length];
     setSelId(next.id);
   };
+  // Left/Right arrows step through the day's runs in the Shift Builder while one is selected — same
+  // as the ◀/▶ buttons. Ignored while typing in a field or with a modifier held.
+  useEffect(() => {
+    if (tab !== "board" || selShift == null) return;
+    const onKey = (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target, tag = t && t.tagName;
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || (t && t.isContentEditable)) return;
+      if (e.key === "ArrowLeft") { e.preventDefault(); navSel(-1); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); navSel(1); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [tab, selShift, sel, daySegs]);
   const shiftBreak = (delta) => {
     if (!sel || !sel.b) return;
     patchSel({ b: [sel.b[0] + delta, sel.b[1] + delta] });
@@ -4162,6 +4183,28 @@ export default function App({ onHome }) {
                   ))}
                 </div>
               </div>
+              {(() => {
+                const peak = Math.max(1, ...dayStarts);
+                const cap = glob.maxPullout || 0;
+                const overSlots = cap > 0 ? dayStarts.filter((n) => n > cap).length : 0;
+                return (
+                  <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                    <div className="glabel" style={{ fontSize: 9.5, color: "#5B6B75", display: "flex", alignItems: "flex-end", lineHeight: 1.1 }}>
+                      sign-ins{cap > 0 ? ` /5m (cap ${cap})` : " /5m"}
+                    </div>
+                    <div style={{ position: "relative", flex: 1, height: 26, borderBottom: "1px solid #EDF1F3" }}
+                      title={`Runs signing in per 5-minute slot on ${day}. Peak ${peak}${cap > 0 ? `; ${overSlots} slot${overSlots === 1 ? "" : "s"} over the ${cap} cap` : ""}.`}>
+                      {dayStarts.map((n, i) => n > 0 && (
+                        <div key={i} style={{
+                          position: "absolute", bottom: 0, left: `${pctPos(SLOT(i))}%`, width: 2, transform: "translateX(-1px)",
+                          height: `${Math.max(2, (n / peak) * 24)}px`,
+                          background: (cap > 0 && n > cap) ? gapRed : supplyTeal,
+                        }} title={`${fmt(SLOT(i))} · ${n} sign-in${n === 1 ? "" : "s"}`} />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
               <div style={{ maxHeight: 430, overflowY: "auto" }}>
                 {ganttSegs.map((sg) => {
                   const issues = validateSeg(sg, allRules, glob);
