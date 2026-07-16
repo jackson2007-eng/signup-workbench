@@ -1832,23 +1832,30 @@ function ActualCurve({ ev, label }) {
 // your own fleet holds a flatter plateau. This water-fills the SAME hours under the fleet cap: cap
 // the peak, raise the shoulders to preserve area. Result peaks at ~the cap and matches the real
 // board. Returns { values[N], peak, hours }. No cap ⇒ returns the raw curve unchanged.
+// Water-fill a raw per-slot vehicle curve under a cap, preserving its area (vehicle-hours):
+// scale the shape up (binary search on k) with every slot clamped at the cap, so the peak
+// flattens into a plateau and the hours redistribute to the shoulders — how a real fleet
+// absorbs a booking spike. No cap or peak already under it ⇒ returns the curve unchanged.
+function waterFillCap(raw, cap) {
+  let H = 0, rawPeak = 0;
+  for (let i = 0; i < raw.length; i++) { H += raw[i] / 12; if (raw[i] > rawPeak) rawPeak = raw[i]; }
+  if (!(cap > 0) || !(cap < Infinity) || rawPeak <= cap) return raw.slice();
+  const areaOf = (k) => { let a = 0; for (let i = 0; i < raw.length; i++) a += Math.min(k * raw[i], cap); return a / 12; };
+  let lo = 1, hi = 8;
+  for (let it = 0; it < 40; it++) { const mid = (lo + hi) / 2; if (areaOf(mid) < H) lo = mid; else hi = mid; }
+  const k = (lo + hi) / 2;
+  return raw.map((v) => Math.min(k * v, cap));
+}
 function requirementCurve(P, glob) {
   const share = (glob.demandShare > 0 ? glob.demandShare : 100) / 100;
   const cyc = glob.avgCycleTime || 31;
   const cap = glob.maxFleet > 0 ? glob.maxFleet : Infinity;
   const sm = (i) => { let s = 0, c = 0; for (let k = Math.max(0, i - 3); k <= Math.min(N - 1, i + 3); k++) { s += P.ev[k]; c++; } return c ? s / c : 0; };
   const raw = new Array(N);
-  let H = 0, rawPeak = 0;
-  for (let i = 0; i < N; i++) { raw[i] = sm(i) * share * cyc / 10; H += raw[i] / 12; if (raw[i] > rawPeak) rawPeak = raw[i]; }
-  if (!(cap < Infinity) || rawPeak <= cap) {
-    return { values: raw.map((v) => Math.round(v * 10) / 10), peak: Math.round(rawPeak * 10) / 10, hours: Math.round(H) };
-  }
-  const areaOf = (k) => { let a = 0; for (let i = 0; i < N; i++) a += Math.min(k * raw[i], cap); return a / 12; };
-  let lo = 1, hi = 8;
-  for (let it = 0; it < 40; it++) { const mid = (lo + hi) / 2; if (areaOf(mid) < H) lo = mid; else hi = mid; }
-  const k = (lo + hi) / 2;
-  const vals = raw.map((v) => Math.min(k * v, cap));
-  return { values: vals.map((v) => Math.round(v * 10) / 10), peak: Math.round(Math.max(...vals)), hours: Math.round(H) };
+  let H = 0;
+  for (let i = 0; i < N; i++) { raw[i] = sm(i) * share * cyc / 10; H += raw[i] / 12; }
+  const vals = waterFillCap(raw, cap);
+  return { values: vals.map((v) => Math.round(v * 10) / 10), peak: Math.round(Math.max(...vals) * 10) / 10, hours: Math.round(H) };
 }
 
 function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity, avgCycleTime = 0, demandShare = 100, height = 320, selBand,
@@ -1874,6 +1881,25 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
     };
     let dayEv = 0, daySup = 0;
     for (let i = 0; i < N; i++) { dayEv += P.ev[i]; daySup += P.sup[i]; }
+    // Two "vehicles required" reference lines, both anchored to the same required total
+    // (Little's Law hours: ev × share × cycle/10, summed over the day — identical to
+    // Requirement mode's banner and Size-to-requirement):
+    //   impVals — DEMAND SHAPE, water-filled under the fleet cap: where demand wants the
+    //     hours, with spikes flattened to the plateau a real fleet holds. A 5-minute
+    //     booking spike never again implies vehicles ≈ events.
+    //   patVals — YOUR DEPLOYMENT PATTERN: each slot's share of the board's own
+    //     vehicle-hours × the required total. The shape you actually run — plateau,
+    //     shoulders, operational judgment included — rescaled to what demand totals.
+    // Where the two separate, demand has shifted relative to your deployment pattern.
+    const rawImp = new Array(N);
+    for (let i = 0; i < N; i++) {
+      rawImp[i] = avgCycleTime > 0 ? smoothedEv(i) * (demandShare > 0 ? demandShare / 100 : 1) * avgCycleTime / 10 : 0;
+    }
+    const cap = fleetCap > 0 ? fleetCap : Infinity;
+    const impVals = avgCycleTime > 0 ? waterFillCap(rawImp, cap) : null;
+    let reqH = 0;
+    for (let i = 0; i < N; i++) reqH += rawImp[i] / 12;
+    const patRatio = avgCycleTime > 0 && daySup > 0 ? reqH / (daySup / 12) : null;
     const rows = [];
     for (let i = 0; i < N; i++) {
       const t = SLOT(i), tgt = P.target[i];
@@ -1884,21 +1910,15 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         covered: Math.round(Math.min(tgt, P.sup[i]) * 10) / 10,
         gap: tgt - P.sup[i] > 0.05 ? Math.round(tgt * 10) / 10 : null,
         bookout: bkMap[t] ?? null,
-        sugVeh: dayEv > 0 && daySup > 0 ? Math.round((smoothedEv(i) / dayEv) * daySup * 10) / 10 : null,
-        // "Vehicles demand implies" — absolute concurrent-vehicle need from demand, NOT the board's
-        // own hours. By Little's Law, concurrent vehicles = trip arrival rate × cycle time. With
-        // ev = pickups+dropoffs (trips = ev/2), this fleet's share = demandShare/100, and cycle
-        // time = avgCycleTime min = avgCycleTime/5 slots, it reduces to ev × share × cycle / 10.
-        // Same SHAPE as sugVeh but scaled to required (not scheduled) hours: the vertical gap
-        // between the two lines is how over-/under-fleeted you are. Scale-sensitive by design.
-        impliedVeh: avgCycleTime > 0 ? Math.round(smoothedEv(i) * (demandShare > 0 ? demandShare / 100 : 1) * avgCycleTime / 10 * 10) / 10 : null,
+        reqPat: patRatio != null ? Math.round(P.sup[i] * patRatio * 10) / 10 : null,
+        impliedVeh: impVals ? Math.round(impVals[i] * 10) / 10 : null,
         events: P.ev[i],
         onDuty: onDutyCounts ? onDutyCounts[i] : null,
         ...(extraSeries ? Object.fromEntries(extraSeries.map((s) => [s.key, s.values && s.values[i] != null ? s.values[i] : null])) : {}),
       });
     }
     return rows;
-  }, [P, day, avgCycleTime, demandShare, extraSeries, onDutyCounts]);
+  }, [P, day, avgCycleTime, demandShare, fleetCap, extraSeries, onDutyCounts]);
   return (
     <ResponsiveContainer width="100%" height={height}>
       <ComposedChart data={data} margin={{ top: 5, right: 14, left: -8, bottom: 0 }}
@@ -1908,13 +1928,13 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         <XAxis dataKey="time" tick={{ fontSize: 10.5 }} interval={23} tickLine={false} />
         <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
         <Tooltip
-          formatter={(v, name) => [v, { target: targetName, sup: supplyName, covered: "Aligned", bookout: "Observed (sample)", gap: "Target (underweighted)", sugVeh: "Suggested vehicles (day share)", impliedVeh: "Vehicles demand implies" }[name] || name]}
+          formatter={(v, name) => [v, { target: targetName, sup: supplyName, covered: "Aligned", bookout: "Observed (sample)", gap: "Target (underweighted)", reqPat: "Required (your deployment pattern)", impliedVeh: "Required (demand shape, capped)" }[name] || name]}
           labelFormatter={(l, pl) => {
             const r = pl && pl[0] && pl[0].payload;
             if (!r) return l;
             const evTxt = r.events >= 10 ? Math.round(r.events).toString() : r.events.toFixed(1);
-            const sugTxt = sugTooltip && r.sugVeh != null ? ` · ${r.sugVeh.toFixed(1)} suggested vehicles` : "";
-            const impTxt = sugTooltip && r.impliedVeh != null ? ` · demand implies ${r.impliedVeh.toFixed(1)}` : "";
+            const sugTxt = sugTooltip && r.impliedVeh != null ? ` · ${r.impliedVeh.toFixed(1)} required (demand)` : "";
+            const impTxt = sugTooltip && r.reqPat != null ? ` · ${r.reqPat.toFixed(1)} required (your pattern)` : "";
             const dutyTxt = onPointClick && r.onDuty != null ? ` · ${r.onDuty} run${r.onDuty === 1 ? "" : "s"} on duty — click to mark this time` : "";
             return `${l} · ${evTxt} ${unitLabel}${sugTxt}${impTxt}${dutyTxt}`;
           }}
@@ -1931,9 +1951,9 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         {showBookout && RAW.bookout[day] &&
           <Line type="monotone" dataKey="bookout" name="Observed (sample)" stroke={bookoutViolet} strokeWidth={1.6} strokeDasharray="5 4" dot={false} connectNulls />}
         {showProductivity &&
-          <Line type="stepAfter" dataKey="sugVeh" name="Suggested vehicles (day share)" stroke={sampleGray} strokeWidth={1.6} strokeDasharray="2 3" dot={false} connectNulls />}
+          <Line type="stepAfter" dataKey="reqPat" name="Required (your deployment pattern)" stroke="#185FA5" strokeWidth={1.8} strokeDasharray="6 3" dot={false} connectNulls />}
         {showProductivity &&
-          <Line type="stepAfter" dataKey="impliedVeh" name="Vehicles demand implies" stroke="#B0455E" strokeWidth={1.8} dot={false} connectNulls />}
+          <Line type="stepAfter" dataKey="impliedVeh" name="Required (demand shape, capped)" stroke="#B0455E" strokeWidth={1.8} dot={false} connectNulls />}
         {extraSeries && extraSeries.map((s) => (
           <Line key={s.key} type="stepAfter" dataKey={s.key} name={s.name} stroke={s.color} strokeWidth={1.8} strokeDasharray={s.dash || undefined} dot={false} connectNulls />
         ))}
@@ -1948,7 +1968,6 @@ export default function App({ onHome }) {
   const [day, setDay] = useState("Wednesday");
   const [showBookout, setShowBookout] = useState(false);
   const [showProductivity, setShowProductivity] = useState(false);
-  const [showRequirement, setShowRequirement] = useState(false);
   const [includePT, setIncludePT] = useState(false);
   const [totalSigned, setTotalSigned] = useState(125);
   const [board, setBoard] = useState(() => RAW.segments.map(cloneSeg));
@@ -3884,15 +3903,11 @@ export default function App({ onHome }) {
               </label>
               <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 7 }}>
                 <input type="checkbox" checked={showProductivity} onChange={(e) => setShowProductivity(e.target.checked)} />
-                Vehicle reference lines (day share + demand-implied)
-              </label>
-              <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 7 }}>
-                <input type="checkbox" checked={showRequirement} onChange={(e) => setShowRequirement(e.target.checked)} />
-                Requirement mode (vehicle-hours, capped at fleet)
+                Vehicle requirement lines (demand shape + your deployment pattern)
               </label>
             </div>
 
-            {showRequirement && (
+            {showProductivity && (
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "#EAF1FB", border: "1px solid #185FA5", padding: "8px 12px", marginBottom: 12, fontSize: 12.5 }}>
                 <b style={{ color: "#0C447C" }}>{day} requirement:</b>
                 <span>peak <b>{req.peak}</b> vehicles · <b>{req.hours.toLocaleString()}</b> vehicle-hours — demand (share {glob.demandShare}%) ÷ productivity (cycle {glob.avgCycleTime} min), the hours redistributed under the fleet cap of {glob.maxFleet}. You have <b>{P.peakSup}</b> at peak / {P.supVH.toFixed(0)} vh scheduled.</span>
@@ -3907,8 +3922,9 @@ export default function App({ onHome }) {
                 <b>Coverage score</b> answers one question: of all the trip demand in the period, what share happens while your service hours are proportionally in place to serve it? 100% would mean your hours perfectly trace the demand pattern — impossible in practice, since shifts come in fixed lengths with rules. Use the score to compare boards: higher means hours better matched to demand.<br /><br />
                 On each day tile, <b>demand</b> is that day's share of the week's trips, and <b>cov</b> is that day's coverage score. In the chart, the dark line is the <b>demand-aligned target</b> — your own hours redrawn to follow demand exactly (or weighted demand, when an off-peak weighting is set in Rules — light periods then claim proportionally more). <b>Red</b> = you're lighter than demand suggests at that time. <b>Teal above the line</b> = heavier than demand suggests (those hours earn no score). <b>Misplaced hours</b> totals the hours sitting in the heavy zones.<br /><br />
                 The overlay adds two vehicle reference lines (both visual only — neither affects the coverage score or generation):<br /><br />
-                <b>Suggested vehicles (day share)</b> takes the vehicle-hours already on today's board and redistributes them along the day's trip-share curve: at each moment, how many of your own vehicles would be in service if the day's fleet were allocated purely by that moment's percentage of the day's trips. No assumed constants — it always adds back up to exactly the hours you've scheduled, so above the supply line you're proportionally light, below it proportionally heavy.<br /><br />
-                <b>Vehicles demand implies</b> is the absolute count demand calls for, independent of what you scheduled. By Little's Law, concurrent vehicles = trip arrival rate × cycle time, so it scales each moment's trips by your <b>average trip cycle time</b> and your fleet's <b>demand share</b> (both set in Rules → Deadhead &amp; productivity). It has the same shape as the day-share line but sits at the height demand <em>requires</em> — the vertical gap between the two is how over- or under-fleeted you are. Because it's an absolute count, it's sensitive to the scale of your demand data: if the two lines diverge wildly, check that cycle time and demand share are right (the calibration in Rules estimates your real cycle time) before trusting the height.
+                Both requirement lines are anchored to the same <b>required total</b> for the day — trips × demand share ÷ productivity (cycle time), the same number behind the requirement banner and the Signup Builder's Size-to-requirement — they differ only in what <em>shape</em> spreads that total across the day.<br /><br />
+                <b>Required (demand shape, capped)</b> follows the demand curve, water-filled under the fleet cap: a 5-minute booking spike flattens into the plateau a real fleet holds (never vehicles ≈ events), with the hours pushed to the shoulders. It shows <em>where demand wants the hours</em>.<br /><br />
+                <b>Required (your deployment pattern)</b> takes each moment's share of your own board's vehicle-hours and scales it to the required total: the shape you actually run — plateau, shoulders, operational judgment included — resized to what demand adds up to. It shows <em>how today's operation would scale</em>. Where the two lines separate, demand has shifted relative to your deployment pattern — that's the time of day worth re-examining. If both sit far from Supply, check cycle time and demand share against the calibration in Rules first.
               </div>
             </details>
 
@@ -3971,7 +3987,7 @@ export default function App({ onHome }) {
               </div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} showProductivity={showProductivity} avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={340}
                 onDutyCounts={onDutyCounts} onPointClick={focusRun}
-                extraSeries={showRequirement ? [{ key: "req", name: "Vehicles required (capped)", color: "#185FA5", values: req.values, dash: "6 3" }] : null} />
+                extraSeries={null} />
               {ganttTimeFilter != null && (
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "#EAF3F3", border: `1px solid ${supplyTeal}`, padding: "8px 12px", margin: "6px 10px 0", fontSize: 13 }}>
                   <b>{fmt(ganttTimeFilter)} ({day}):</b>
