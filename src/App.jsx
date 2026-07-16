@@ -1757,7 +1757,8 @@ function ActualCurve({ ev, label }) {
 
 /* ---------- coverage chart ---------- */
 function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity, avgCycleTime = 0, demandShare = 100, height = 320, selBand,
-  supplyName = "Supply", targetName = "Demand-aligned target", unitLabel = "events", minName = "min", sugTooltip = true, extraSeries = null }) {
+  supplyName = "Supply", targetName = "Demand-aligned target", unitLabel = "events", minName = "min", sugTooltip = true, extraSeries = null,
+  onPointClick = null, onDutyCounts = null }) {
   const data = useMemo(() => {
     const bk = RAW.bookout[day];
     const bkMap = {};
@@ -1797,14 +1798,17 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         // between the two lines is how over-/under-fleeted you are. Scale-sensitive by design.
         impliedVeh: avgCycleTime > 0 ? Math.round(smoothedEv(i) * (demandShare > 0 ? demandShare / 100 : 1) * avgCycleTime / 10 * 10) / 10 : null,
         events: P.ev[i],
+        onDuty: onDutyCounts ? onDutyCounts[i] : null,
         ...(extraSeries ? Object.fromEntries(extraSeries.map((s) => [s.key, s.values && s.values[i] != null ? s.values[i] : null])) : {}),
       });
     }
     return rows;
-  }, [P, day, avgCycleTime, demandShare, extraSeries]);
+  }, [P, day, avgCycleTime, demandShare, extraSeries, onDutyCounts]);
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <ComposedChart data={data} margin={{ top: 5, right: 14, left: -8, bottom: 0 }}>
+      <ComposedChart data={data} margin={{ top: 5, right: 14, left: -8, bottom: 0 }}
+        style={onPointClick ? { cursor: "pointer" } : undefined}
+        onClick={onPointClick ? (st) => { const t = st && st.activeLabel != null ? parseHM(String(st.activeLabel)) : null; if (t != null) onPointClick(t); } : undefined}>
         <CartesianGrid stroke="#EBF0F2" vertical={false} />
         <XAxis dataKey="time" tick={{ fontSize: 10.5 }} interval={23} tickLine={false} />
         <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
@@ -1816,7 +1820,8 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
             const evTxt = r.events >= 10 ? Math.round(r.events).toString() : r.events.toFixed(1);
             const sugTxt = sugTooltip && r.sugVeh != null ? ` · ${r.sugVeh.toFixed(1)} suggested vehicles` : "";
             const impTxt = sugTooltip && r.impliedVeh != null ? ` · demand implies ${r.impliedVeh.toFixed(1)}` : "";
-            return `${l} · ${evTxt} ${unitLabel}${sugTxt}${impTxt}`;
+            const dutyTxt = onPointClick && r.onDuty != null ? ` · ${r.onDuty} run${r.onDuty === 1 ? "" : "s"} on duty — click to edit them` : "";
+            return `${l} · ${evTxt} ${unitLabel}${sugTxt}${impTxt}${dutyTxt}`;
           }}
           contentStyle={{ fontSize: 12, border: "1px solid #D7DFE2" }} />
         <Legend wrapperStyle={{ fontSize: 12 }} />
@@ -2606,6 +2611,8 @@ export default function App({ onHome }) {
   }, [uploadedDem, baselineBoard, signupSource, glob.demandShare]);
 
   const [ganttSort, setGanttSort] = useState("run"); // "run" | "time" | "type"
+  // click a time on a coverage chart → filter the Shift Builder to runs on duty at that minute
+  const [ganttTimeFilter, setGanttTimeFilter] = useState(null);
   const daySegs = useMemo(() => {
     const list = board.filter((sg) => sg.days.includes(day));
     if (ganttSort === "time") list.sort((a, b) => (a.s - b.s) || (a.shift - b.shift));
@@ -2622,7 +2629,19 @@ export default function App({ onHome }) {
   const selDistinctTimes = new Set(selShiftSegs.map((sg) => `${sg.s}|${sg.e}|${JSON.stringify(sg.b)}`));
   const selIsDayVariant = selDistinctTimes.size > 1;
   const selIssues = sel ? validateSeg(sel, allRules, glob) : [];
-  const ganttSegs = selShift != null ? daySegs.filter((sg) => sg.shift === selShift) : daySegs;
+  // A run is "on duty" at minute t if its span covers t (start ≤ t ≤ end), so a run starting or
+  // ending exactly at t is included. Per-slot counts feed the coverage-chart tooltip.
+  const onDutyCounts = useMemo(() => {
+    const c = new Array(N).fill(0);
+    for (const sg of daySegs) {
+      const a = Math.max(0, Math.ceil((sg.s - T0) / 5)), z = Math.min(N - 1, Math.floor((sg.e - T0) / 5));
+      for (let i = a; i <= z; i++) c[i]++;
+    }
+    return c;
+  }, [daySegs]);
+  const timeFilteredSegs = ganttTimeFilter != null ? daySegs.filter((sg) => sg.s <= ganttTimeFilter && sg.e >= ganttTimeFilter) : null;
+  const ganttSegs = selShift != null ? daySegs.filter((sg) => sg.shift === selShift) : (timeFilteredSegs || daySegs);
+  const focusRun = (t) => { setSelId(null); setGanttTimeFilter(t); setTab("board"); };
 
   /* ---- gantt drag ----
      Direct manipulation on the gantt bars: slide a whole shift, slide its break, or resize
@@ -3697,9 +3716,10 @@ export default function App({ onHome }) {
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
                 {day} — service hours vs demand-aligned target
               </div>
-              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} showProductivity={showProductivity} avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={340} />
+              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} showProductivity={showProductivity} avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={340}
+                onDutyCounts={onDutyCounts} onPointClick={focusRun} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
-                The dark line shows where {day}'s {P.supVH.toFixed(0)} service hours would sit if they exactly followed the demand pattern. Red = times you're lighter than demand suggests; teal above the line = heavier.
+                The dark line shows where {day}'s {P.supVH.toFixed(0)} service hours would sit if they exactly followed the demand pattern. Red = times you're lighter than demand suggests; teal above the line = heavier. <b>Click any time</b> on the chart to open the Shift Builder filtered to the runs on duty then.
               </div>
             </div>
 
@@ -4025,12 +4045,25 @@ export default function App({ onHome }) {
               </div>
             )}
 
+            {ganttTimeFilter != null && selShift == null && (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "#EAF3F3", border: `1px solid ${supplyTeal}`, padding: "8px 12px", marginBottom: 12, fontSize: 13 }}>
+                <b>On duty at {fmt(ganttTimeFilter)} ({day}):</b>
+                <span>{ganttSegs.length} run{ganttSegs.length === 1 ? "" : "s"} shown{ganttSegs.length === 0 ? " — none cover this time" : ""}. Tap one to adjust its times.</span>
+                <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                  <button style={nudgeBtn} onClick={() => setGanttTimeFilter(Math.max(T0, ganttTimeFilter - 5))}>−5</button>
+                  <button style={nudgeBtn} onClick={() => setGanttTimeFilter(Math.min(T1 - 5, ganttTimeFilter + 5))}>+5</button>
+                  <button style={{ ...nudgeBtn, borderColor: supplyTeal, color: supplyTeal }} onClick={() => setGanttTimeFilter(null)}>Clear filter</button>
+                </div>
+              </div>
+            )}
+
             {/* gantt */}
             <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 10px", marginBottom: 12 }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600 }}>
                   {day} board — {ganttSegs.length} working segment{ganttSegs.length === 1 ? "" : "s"}
                   {selShift != null && <span style={{ fontSize: 12, fontWeight: 400, color: "#5B6B75" }}> (showing shift {selShift} only — {daySegs.length} total this day)</span>}
+                  {selShift == null && ganttTimeFilter != null && <span style={{ fontSize: 12, fontWeight: 400, color: supplyTeal }}> · on duty at {fmt(ganttTimeFilter)}</span>}
                 </div>
                 <label style={{ fontSize: 12, color: "#41525C", display: "flex", alignItems: "center", gap: 6 }}>
                   Sort
@@ -4155,7 +4188,7 @@ export default function App({ onHome }) {
                 Live {day} coverage
               </div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} showProductivity={showProductivity} avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={280}
-                selBand={sel ? [sel.s, sel.e] : null} />
+                selBand={sel ? [sel.s, sel.e] : null} onDutyCounts={onDutyCounts} onPointClick={(t) => { setSelId(null); setGanttTimeFilter(t); }} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
                 Dashed lines mark the selected shift. On desktop, the KPI strip and shift editor stay pinned while you scroll; on phones everything scrolls freely so the board and this chart get the full screen.
               </div>
