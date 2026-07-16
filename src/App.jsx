@@ -2718,6 +2718,26 @@ export default function App({ onHome }) {
   const selDistinctTimes = new Set(selShiftSegs.map((sg) => `${sg.s}|${sg.e}|${JSON.stringify(sg.b)}`));
   const selIsDayVariant = selDistinctTimes.size > 1;
   const selIssues = sel ? validateSeg(sel, allRules, glob) : [];
+  // When the selected shift flags, offer the types its CURRENT times legally fit as a
+  // one-click reclassification. Each candidate simulates setType's exact output (break
+  // kept, dropped, or defaulted) so a chip is only shown when switching truly clears
+  // every per-shift flag. Tightest window first, same tie-break as signup auto-classify.
+  const retypeOptions = useMemo(() => {
+    if (!sel || selIssues.length === 0) return [];
+    return Object.keys(rules)
+      .filter((t) => {
+        if (t === sel.type) return false;
+        const R = rules[t];
+        let b = sel.b ? [...sel.b] : null;
+        if (R.brk && !b) b = [sel.s + 240, sel.s + 300];
+        if (!R.brk) b = null;
+        return validateSeg({ ...cloneSeg(sel), type: t, b }, allRules, glob).length === 0;
+      })
+      .sort((a, b) => {
+        const span = (R) => (R.s[1] - R.s[0]) + (R.e[1] - R.e[0]) + (R.spr[1] - R.spr[0]);
+        return span(rules[a]) - span(rules[b]);
+      });
+  }, [sel, selIssues.length, rules, glob]);
   // A run is "on duty" at minute t if its span covers t (start ≤ t ≤ end), so a run starting or
   // ending exactly at t is included. Per-slot counts feed the coverage-chart tooltip.
   const onDutyCounts = useMemo(() => {
@@ -4182,6 +4202,16 @@ export default function App({ onHome }) {
                 {selIssues.length > 0 && (
                   <div style={{ marginTop: 10, borderLeft: `3px solid ${gapRed}`, background: "#FDF6F5", padding: "6px 10px" }}>
                     {selIssues.map((iss, i) => <div key={i} style={{ fontSize: 12.5, color: gapRed }}>⚠ {iss}</div>)}
+                    {retypeOptions.length > 0 && (
+                      <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 12, color: "#41525C" }}>These times fit another classification:</span>
+                        {retypeOptions.map((t) => (
+                          <button key={t} style={{ ...nudgeBtn, borderColor: supplyTeal, color: supplyTeal, fontWeight: 600 }} onClick={() => setType(t)}>
+                            Retype to {t}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>This shift's week — tap a day to view it:</div>
