@@ -923,8 +923,13 @@ function schedulingDemand(DEM, deadheadOutMin, deadheadInMin) {
 // Subsumes edge staging (the tails fill the pre/post-service shoulders), so it REPLACES
 // schedulingDemand when on. Returns DEM unchanged when both tails are 0.
 function occupancyDemand(DEM, glob) {
-  const back = Math.round((Math.max(0, glob.avgCycleTime || 0) + Math.max(0, glob.deadheadInMin || 0)) / 5); // committed/return tail (evening)
-  const fwd = Math.round(Math.max(0, glob.deadheadOutMin || 0) / 5); // positioning lead (morning)
+  // A vehicle is occupied by a trip for the CYCLE time (pickup → dropoff → turnaround) —
+  // NOT pull-out/pull-in, which happen once per shift, not per trip (the old window added
+  // both deadheads to every trip, tripling its footprint and smearing the target into mush).
+  // The events curve holds pickups (occupy forward) and dropoffs (occupy backward) in equal
+  // measure, so a half-cycle window each side spreads each trip across its true footprint.
+  const half = Math.round(Math.max(0, glob.avgCycleTime || 0) / 10); // cycle/2, in 5-min slots
+  const back = half, fwd = half;
   if (back <= 0 && fwd <= 0) return DEM;
   const out = {};
   for (const d of DAYS) {
@@ -1912,6 +1917,10 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         bookout: bkMap[t] ?? null,
         reqPat: patRatio != null ? Math.round(P.sup[i] * patRatio * 10) / 10 : null,
         impliedVeh: impVals ? Math.round(impVals[i] * 10) / 10 : null,
+        // tooltip derivation chain: smoothed city trip rate and the pre-cap requirement,
+        // so every hover shows its own arithmetic (events → trips/hr → ÷productivity → cap)
+        cityRate: avgCycleTime > 0 ? Math.round(smoothedEv(i) * 6 * (demandShare > 0 ? demandShare / 100 : 1) * 10) / 10 : null,
+        impRaw: avgCycleTime > 0 ? Math.round(rawImp[i] * 10) / 10 : null,
         events: P.ev[i],
         onDuty: onDutyCounts ? onDutyCounts[i] : null,
         ...(extraSeries ? Object.fromEntries(extraSeries.map((s) => [s.key, s.values && s.values[i] != null ? s.values[i] : null])) : {}),
@@ -1933,7 +1942,11 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
             const r = pl && pl[0] && pl[0].payload;
             if (!r) return l;
             const evTxt = r.events >= 10 ? Math.round(r.events).toString() : r.events.toFixed(1);
-            const sugTxt = sugTooltip && r.impliedVeh != null ? ` · ${r.impliedVeh.toFixed(1)} required (demand)` : "";
+            // show the requirement's own arithmetic: trips/hr ÷ productivity, then the cap if it bit
+            const prodHr = avgCycleTime > 0 ? Math.round((60 / avgCycleTime) * 100) / 100 : 0;
+            const sugTxt = sugTooltip && r.impliedVeh != null && r.cityRate != null
+              ? ` · ${r.cityRate} city trips/hr ÷ ${prodHr} = ${r.impRaw}${r.impRaw > r.impliedVeh + 0.05 ? ` → ${r.impliedVeh.toFixed(1)} required (capped)` : " required"}`
+              : "";
             const impTxt = sugTooltip && r.reqPat != null ? ` · ${r.reqPat.toFixed(1)} required (your pattern)` : "";
             const dutyTxt = onPointClick && r.onDuty != null ? ` · ${r.onDuty} run${r.onDuty === 1 ? "" : "s"} on duty — click to mark this time` : "";
             return `${l} · ${evTxt} ${unitLabel}${sugTxt}${impTxt}${dutyTxt}`;
@@ -5217,10 +5230,15 @@ export default function App({ onHome }) {
                 )}
                 <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 10 }}>
                   <input type="checkbox" checked={!!glob.occupancyTarget} onChange={(e) => setGlob((g) => ({ ...g, occupancyTarget: e.target.checked }))} />
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>Occupancy-based target (spread demand by pull-out + cycle + pull-in)</span>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>Occupancy-based target (spread each trip across its cycle time)</span>
                 </label>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 6 }}>
-                  When on, the coverage <b>target</b> (what the optimizer chases) models each trip committing a bus a little <i>before</i> the pickup (pull-out positioning → lifts the morning ramp) and through the <i>return</i> (cycle time + pull-in → lifts the evening), instead of following raw trip arrivals. The morning and evening return windows then get more than raw-demand-proportional resources, so shifts hold their earlier starts and later finishes. Peaks are unaffected in relative terms — coverage scoring is shape-based, so uniformly inflating demand does nothing; only the spill into quiet shoulders re-weights the target. Uses your pull-out, cycle time, and pull-in numbers — no new inputs. Off = target follows raw trip demand (today's behavior). Ridership displays and the honest coverage % are unchanged either way.
+                  When on, the coverage <b>target</b> (the dark line, and what the optimizer chases) models each trip <i>occupying</i> a vehicle
+                  for its full cycle (pickup → dropoff → turnaround) instead of dropping its whole vehicle-need into the single 5-minute slot
+                  where it books. A booking spike then spreads across the surrounding half hour — the way vehicles already in service actually
+                  absorb it — so the target stops implying vehicles ≈ events at busy moments. Uses your average trip cycle time; pull-out/pull-in
+                  are per-shift, not per-trip, so they don't widen the window. Off = target follows raw trip arrivals. Ridership displays and trip
+                  counts are unchanged either way.
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
                   Pull-out/pull-in affects only Auto-Build's placement — a generated shift may start before the first trip it serves and end after the last, within this lead time. Cycle time (pickup to dropoff to next pickup, including deadhead) is an operational reference: the calibration below compares it against what your uploaded demand + signup imply. It no longer drives the Coverage chart's "Suggested vehicles" line, which now simply redistributes each day's scheduled vehicle-hours along that day's trip-share curve. If contractors or other providers serve part of the demand you upload, set the share this signup's fleet covers — the calibration and the absolute trip captions scale by it, while coverage scoring (shape-based, scale-free) is unaffected.
