@@ -1915,6 +1915,9 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         covered: Math.round(Math.min(tgt, P.sup[i]) * 10) / 10,
         gap: tgt - P.sup[i] > 0.05 ? Math.round(tgt * 10) / 10 : null,
         bookout: bkMap[t] ?? null,
+        // staging: target with no demand nearby — the pull-out/pull-in allowance at the
+        // day's edges, not rider demand. Drawn in its own colour so it can't be misread.
+        staging: tgt > 0.05 && smoothedEv(i) < 0.5 ? Math.round(tgt * 10) / 10 : null,
         reqPat: patRatio != null ? Math.round(P.sup[i] * patRatio * 10) / 10 : null,
         impliedVeh: impVals ? Math.round(impVals[i] * 10) / 10 : null,
         // tooltip derivation chain, kept in 5-MINUTE units end to end (an hourly rate next
@@ -1942,8 +1945,11 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
             // the gap Area's drawing value is the TARGET height (so the red fill spans
             // supply→target); the tooltip must report the actual shortfall instead
             if (name === "Gap") {
-              const s = item && item.payload ? item.payload.sup : null;
-              return [s != null ? Math.round((v - s) * 10) / 10 : v, "Gap"];
+              const pl = item && item.payload;
+              const s = pl ? pl.sup : null;
+              // at the day's edges the "gap" is the pull-out/pull-in staging allowance, not demand
+              const lbl = pl && pl.staging != null ? "Staging (pull-out/pull-in)" : "Gap";
+              return [s != null ? Math.round((v - s) * 10) / 10 : v, lbl];
             }
             return [v, { target: targetName, sup: supplyName, covered: "Aligned", bookout: "Observed (sample)", reqPat: "Required (your deployment pattern)", impliedVeh: "Required (demand shape, capped)" }[name] || name];
           }}
@@ -1966,9 +1972,12 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         <Area type="stepAfter" dataKey="target" name={targetName} stroke={targetInk} strokeWidth={1.5} fill="#233746" fillOpacity={0.07} tooltipType={slim ? "none" : undefined} />
         <Area type="stepAfter" dataKey="gap" name="Gap" stroke="none" fill={gapRed} fillOpacity={0.22} legendType="none" />
         <Area type="stepAfter" dataKey="covered" name="Aligned" stroke="none" fill={supplyTeal} fillOpacity={0.16} legendType="none" />
+        {/* pull-out/pull-in staging: target at the day's edges with no demand nearby — drawn
+            violet over the target/gap fills so it can't be misread as rider demand */}
+        <Area type="stepAfter" dataKey="staging" name="Pull-out/pull-in staging" stroke={bookoutViolet} strokeDasharray="4 3" strokeWidth={1.3} fill={bookoutViolet} fillOpacity={0.3} tooltipType="none" />
         <Line type="stepAfter" dataKey="sup" name={supplyName} stroke={supplyTeal} strokeWidth={2.2} dot={false} />
-        <ReferenceLine y={minVeh} stroke={demandAmber} strokeDasharray="4 4" label={{ value: `${minName} ${minVeh}`, position: "right", fontSize: 10, fill: demandAmber }} />
-        {fleetCap > 0 && <ReferenceLine y={fleetCap} stroke={gapRed} strokeDasharray="6 3" label={{ value: `fleet ${fleetCap}`, position: "right", fontSize: 10, fill: gapRed }} />}
+        <ReferenceLine y={minVeh} stroke={demandAmber} strokeDasharray="4 4" label={{ value: `${minName} vehicles ${minVeh}`, position: "insideBottomRight", fontSize: 10, fill: demandAmber }} />
+        {fleetCap > 0 && <ReferenceLine y={fleetCap} stroke={gapRed} strokeDasharray="6 3" label={{ value: `fleet cap ${fleetCap}`, position: "insideTopRight", fontSize: 10, fill: gapRed }} />}
         {selBand && <ReferenceLine x={fmt(selBand[0])} stroke={ink} strokeDasharray="3 3" />}
         {selBand && <ReferenceLine x={fmt(Math.min(selBand[1], T1 - 5))} stroke={ink} strokeDasharray="3 3" />}
         {showBookout && RAW.bookout[day] &&
