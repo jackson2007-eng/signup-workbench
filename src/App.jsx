@@ -1990,7 +1990,7 @@ export default function App({ onHome }) {
   const [tab, setTab] = useState("rules");
   const [day, setDay] = useState("Wednesday");
   const [includePT, setIncludePT] = useState(false);
-  const [totalSigned, setTotalSigned] = useState(125);
+  const [totalSigned, setTotalSigned] = useState(100); // default matches the Generate card's package count
   const [board, setBoard] = useState(() => RAW.segments.map(cloneSeg));
   const [baselineBoard, setBaselineBoard] = useState(() => RAW.segments.map(cloneSeg));
   const [signupSource, setSignupSource] = useState("imported"); // "imported" | "uploaded"
