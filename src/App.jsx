@@ -1865,7 +1865,7 @@ function requirementCurve(P, glob) {
 
 function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity, avgCycleTime = 0, demandShare = 100, height = 320, selBand,
   supplyName = "Supply", targetName = "Demand-aligned target", unitLabel = "events", minName = "min", sugTooltip = true, extraSeries = null,
-  onPointClick = null, onDutyCounts = null }) {
+  onPointClick = null, onDutyCounts = null, slim = false }) {
   const data = useMemo(() => {
     const bk = RAW.bookout[day];
     const bkMap = {};
@@ -1943,6 +1943,7 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
             const r = pl && pl[0] && pl[0].payload;
             if (!r) return l;
             const evTxt = r.events >= 10 ? Math.round(r.events).toString() : r.events.toFixed(1);
+            if (slim) return `${l} · ${evTxt} ${unitLabel}`; // clean mode: time + demand only
             // show the requirement's own arithmetic in 5-minute units: city trips this slot,
             // each occupying a vehicle for the cycle, then the cap only when it bit
             const sugTxt = sugTooltip && r.impliedVeh != null && r.cityTrips5 != null
@@ -1954,7 +1955,7 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
           }}
           contentStyle={{ fontSize: 12, border: "1px solid #D7DFE2" }} />
         <Legend wrapperStyle={{ fontSize: 12 }} />
-        <Area type="stepAfter" dataKey="target" name={targetName} stroke={targetInk} strokeWidth={1.5} fill="#233746" fillOpacity={0.07} />
+        <Area type="stepAfter" dataKey="target" name={targetName} stroke={targetInk} strokeWidth={1.5} fill="#233746" fillOpacity={0.07} tooltipType={slim ? "none" : undefined} />
         <Area type="stepAfter" dataKey="gap" name="Gap" stroke="none" fill={gapRed} fillOpacity={0.22} legendType="none" />
         <Area type="stepAfter" dataKey="covered" name="Aligned" stroke="none" fill={supplyTeal} fillOpacity={0.16} legendType="none" />
         <Line type="stepAfter" dataKey="sup" name={supplyName} stroke={supplyTeal} strokeWidth={2.2} dot={false} />
@@ -1980,8 +1981,6 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
 export default function App({ onHome }) {
   const [tab, setTab] = useState("rules");
   const [day, setDay] = useState("Wednesday");
-  const [showBookout, setShowBookout] = useState(false);
-  const [showProductivity, setShowProductivity] = useState(false);
   const [includePT, setIncludePT] = useState(false);
   const [totalSigned, setTotalSigned] = useState(125);
   const [board, setBoard] = useState(() => RAW.segments.map(cloneSeg));
@@ -2647,7 +2646,6 @@ export default function App({ onHome }) {
   const base = useMemo(() => computeEngine(DEM, buildSupply(baselineBoard), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, baselineBoard, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime]);
   const recycleViol = useMemo(() => recycleViolations(board, glob), [board, glob.recycleEnabled, glob.recycleTurnaround, glob.recycleWindow, glob.recycleCount]);
   const P = eng.perDay[day];
-  const req = useMemo(() => requirementCurve(P, glob), [P, glob.demandShare, glob.avgCycleTime, glob.maxFleet]);
   // Week-wide requirement sizing: total capped vehicle-hours across all 7 days,
   // divided by 40 (every weekly package = 40 paid hours = ~40 vehicle-hours,
   // straight or split). Gives the package count that reproduces the demand-implied
@@ -2784,6 +2782,7 @@ export default function App({ onHome }) {
   const daySegs = useMemo(() => {
     const list = board.filter((sg) => sg.days.includes(day));
     if (ganttSort === "time") list.sort((a, b) => (a.s - b.s) || (a.shift - b.shift));
+    else if (ganttSort === "end") list.sort((a, b) => (a.e - b.e) || (a.shift - b.shift));
     else if (ganttSort === "type") list.sort((a, b) =>
       (TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type)) || (a.s - b.s) || (a.shift - b.shift));
     else list.sort((a, b) => (a.shift - b.shift) || (a.s - b.s));
@@ -3910,24 +3909,6 @@ export default function App({ onHome }) {
 
         {tab === "coverage" && (
           <>
-            <div style={{ display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap", background: card, border: "1px solid #E2E8EA", padding: "10px 14px", marginBottom: 12 }}>
-              <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 7 }}>
-                <input type="checkbox" checked={showBookout} onChange={(e) => setShowBookout(e.target.checked)} />
-                Observed vehicles{RAW.bookout[day] ? "" : " (none this day)"}
-              </label>
-              <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 7 }}>
-                <input type="checkbox" checked={showProductivity} onChange={(e) => setShowProductivity(e.target.checked)} />
-                Vehicle requirement lines (demand shape + your deployment pattern)
-              </label>
-            </div>
-
-            {showProductivity && (
-              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "#EAF1FB", border: "1px solid #185FA5", padding: "8px 12px", marginBottom: 12, fontSize: 12.5 }}>
-                <b style={{ color: "#0C447C" }}>{day} requirement:</b>
-                <span>peak <b>{req.peak}</b> vehicles · <b>{req.hours.toLocaleString()}</b> vehicle-hours — demand (share {glob.demandShare}%) ÷ productivity (cycle {glob.avgCycleTime} min), the hours redistributed under the fleet cap of {glob.maxFleet}. You have <b>{P.peakSup}</b> at peak / {P.supVH.toFixed(0)} vh scheduled.</span>
-              </div>
-            )}
-
             <details style={{ background: "#F7FAF9", border: "1px solid #DCE7E4", padding: "10px 14px", marginBottom: 12, fontSize: 13 }}>
               <summary style={{ cursor: "pointer", fontWeight: 600, fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16 }}>
                 What do these numbers mean?
@@ -3936,9 +3917,7 @@ export default function App({ onHome }) {
                 <b>Coverage score</b> answers one question: of all the trip demand in the period, what share happens while your service hours are proportionally in place to serve it? 100% would mean your hours perfectly trace the demand pattern — impossible in practice, since shifts come in fixed lengths with rules. Use the score to compare boards: higher means hours better matched to demand.<br /><br />
                 On each day tile, <b>demand</b> is that day's share of the week's trips, and <b>cov</b> is that day's coverage score. In the chart, the dark line is the <b>demand-aligned target</b> — your own hours redrawn to follow demand exactly (or weighted demand, when an off-peak weighting is set in Rules — light periods then claim proportionally more). <b>Red</b> = you're lighter than demand suggests at that time. <b>Teal above the line</b> = heavier than demand suggests (those hours earn no score). <b>Misplaced hours</b> totals the hours sitting in the heavy zones.<br /><br />
                 The overlay adds two vehicle reference lines (both visual only — neither affects the coverage score or generation):<br /><br />
-                Both requirement lines are anchored to the same <b>required total</b> for the day — trips × demand share ÷ productivity (cycle time), the same number behind the requirement banner and the Signup Builder's Size-to-requirement — they differ only in what <em>shape</em> spreads that total across the day.<br /><br />
-                <b>Required (demand shape, capped)</b> follows the demand curve, water-filled under the fleet cap: a 5-minute booking spike flattens into the plateau a real fleet holds (never vehicles ≈ events), with the hours pushed to the shoulders. It shows <em>where demand wants the hours</em>.<br /><br />
-                <b>Required (your deployment pattern)</b> takes each moment's share of your own board's vehicle-hours and scales it to the required total: the shape you actually run — plateau, shoulders, operational judgment included — resized to what demand adds up to. It shows <em>how today's operation would scale</em>. Where the two lines separate, demand has shifted relative to your deployment pattern — that's the time of day worth re-examining. If both sit far from Supply, check cycle time and demand share against the calibration in Rules first.
+                For absolute sizing — how many vehicles and packages the demand requires at your share, productivity, and fleet cap — use the Signup Builder's <b>Size to requirement</b>; it uses the same demand data and the settings in Rules → Deadhead &amp; productivity.
               </div>
             </details>
 
@@ -3999,7 +3978,7 @@ export default function App({ onHome }) {
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
                 {day} — service hours vs demand-aligned target
               </div>
-              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} showProductivity={showProductivity} avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={340}
+              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={false} showProductivity={false} slim avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={340}
                 onDutyCounts={onDutyCounts} onPointClick={focusRun}
                 extraSeries={null} />
               {ganttTimeFilter != null && (
@@ -4377,6 +4356,7 @@ export default function App({ onHome }) {
                   <select value={ganttSort} onChange={(e) => setGanttSort(e.target.value)} style={{ fontSize: 12 }}>
                     <option value="run">Run number</option>
                     <option value="time">Start time</option>
+                    <option value="end">End time</option>
                     <option value="type">Type, then time</option>
                   </select>
                 </label>
@@ -4516,7 +4496,7 @@ export default function App({ onHome }) {
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
                 Live {day} coverage
               </div>
-              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} showProductivity={showProductivity} avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={280}
+              <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={false} showProductivity={false} slim avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={280}
                 selBand={sel ? [sel.s, sel.e] : null} onDutyCounts={onDutyCounts} onPointClick={(t) => { setSelId(null); setGanttTimeFilter(t); }} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
                 Dashed lines mark the selected shift. On desktop, the KPI strip and shift editor stay pinned while you scroll; on phones everything scrolls freely so the board and this chart get the full screen.
