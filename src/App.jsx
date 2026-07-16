@@ -1917,9 +1917,10 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         bookout: bkMap[t] ?? null,
         reqPat: patRatio != null ? Math.round(P.sup[i] * patRatio * 10) / 10 : null,
         impliedVeh: impVals ? Math.round(impVals[i] * 10) / 10 : null,
-        // tooltip derivation chain: smoothed city trip rate and the pre-cap requirement,
-        // so every hover shows its own arithmetic (events → trips/hr → ÷productivity → cap)
-        cityRate: avgCycleTime > 0 ? Math.round(smoothedEv(i) * 6 * (demandShare > 0 ? demandShare / 100 : 1) * 10) / 10 : null,
+        // tooltip derivation chain, kept in 5-MINUTE units end to end (an hourly rate next
+        // to a 5-min event count reads as inflation): city trips this slot × the slots each
+        // trip occupies a vehicle (cycle/5) = vehicles required, then the cap if it bites
+        cityTrips5: avgCycleTime > 0 ? Math.round(smoothedEv(i) * (demandShare > 0 ? demandShare / 100 : 1) / 2 * 10) / 10 : null,
         impRaw: avgCycleTime > 0 ? Math.round(rawImp[i] * 10) / 10 : null,
         events: P.ev[i],
         onDuty: onDutyCounts ? onDutyCounts[i] : null,
@@ -1942,10 +1943,10 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
             const r = pl && pl[0] && pl[0].payload;
             if (!r) return l;
             const evTxt = r.events >= 10 ? Math.round(r.events).toString() : r.events.toFixed(1);
-            // show the requirement's own arithmetic: trips/hr ÷ productivity, then the cap if it bit
-            const prodHr = avgCycleTime > 0 ? Math.round((60 / avgCycleTime) * 100) / 100 : 0;
-            const sugTxt = sugTooltip && r.impliedVeh != null && r.cityRate != null
-              ? ` · ${r.cityRate} city trips/hr ÷ ${prodHr} = ${r.impRaw}${r.impRaw > r.impliedVeh + 0.05 ? ` → ${r.impliedVeh.toFixed(1)} required (capped)` : " required"}`
+            // show the requirement's own arithmetic in 5-minute units: city trips this slot,
+            // each occupying a vehicle for the cycle, then the cap only when it bit
+            const sugTxt = sugTooltip && r.impliedVeh != null && r.cityTrips5 != null
+              ? ` · ≈${r.cityTrips5} city trips/5 min (30-min avg) × ${avgCycleTime}-min cycle = ${r.impRaw}${r.impRaw > r.impliedVeh + 0.05 ? ` → ${r.impliedVeh.toFixed(1)} required (capped)` : " required"}`
               : "";
             const impTxt = sugTooltip && r.reqPat != null ? ` · ${r.reqPat.toFixed(1)} required (your pattern)` : "";
             const dutyTxt = onPointClick && r.onDuty != null ? ` · ${r.onDuty} run${r.onDuty === 1 ? "" : "s"} on duty — click to mark this time` : "";
