@@ -1820,7 +1820,7 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
             const evTxt = r.events >= 10 ? Math.round(r.events).toString() : r.events.toFixed(1);
             const sugTxt = sugTooltip && r.sugVeh != null ? ` · ${r.sugVeh.toFixed(1)} suggested vehicles` : "";
             const impTxt = sugTooltip && r.impliedVeh != null ? ` · demand implies ${r.impliedVeh.toFixed(1)}` : "";
-            const dutyTxt = onPointClick && r.onDuty != null ? ` · ${r.onDuty} run${r.onDuty === 1 ? "" : "s"} on duty — click to edit them` : "";
+            const dutyTxt = onPointClick && r.onDuty != null ? ` · ${r.onDuty} run${r.onDuty === 1 ? "" : "s"} on duty — click to mark this time` : "";
             return `${l} · ${evTxt} ${unitLabel}${sugTxt}${impTxt}${dutyTxt}`;
           }}
           contentStyle={{ fontSize: 12, border: "1px solid #D7DFE2" }} />
@@ -2641,7 +2641,9 @@ export default function App({ onHome }) {
   }, [daySegs]);
   const timeFilteredSegs = ganttTimeFilter != null ? daySegs.filter((sg) => sg.s <= ganttTimeFilter && sg.e >= ganttTimeFilter) : null;
   const ganttSegs = selShift != null ? daySegs.filter((sg) => sg.shift === selShift) : (timeFilteredSegs || daySegs);
-  const focusRun = (t) => { setSelId(null); setGanttTimeFilter(t); setTab("board"); };
+  // Clicking a coverage chart marks a focus time (does NOT jump tabs); the user chooses when to
+  // open those runs in the Shift Builder via the banner button.
+  const focusRun = (t) => { setSelId(null); setGanttTimeFilter(t); };
 
   /* ---- gantt drag ----
      Direct manipulation on the gantt bars: slide a whole shift, slide its break, or resize
@@ -3718,8 +3720,20 @@ export default function App({ onHome }) {
               </div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} showProductivity={showProductivity} avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={340}
                 onDutyCounts={onDutyCounts} onPointClick={focusRun} />
-              <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
-                The dark line shows where {day}'s {P.supVH.toFixed(0)} service hours would sit if they exactly followed the demand pattern. Red = times you're lighter than demand suggests; teal above the line = heavier. <b>Click any time</b> on the chart to open the Shift Builder filtered to the runs on duty then.
+              {ganttTimeFilter != null && (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "#EAF3F3", border: `1px solid ${supplyTeal}`, padding: "8px 12px", margin: "6px 10px 0", fontSize: 13 }}>
+                  <b>{fmt(ganttTimeFilter)} ({day}):</b>
+                  <span>{timeFilteredSegs ? timeFilteredSegs.length : 0} run{(timeFilteredSegs && timeFilteredSegs.length === 1) ? "" : "s"} on duty.</span>
+                  <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                    <button style={nudgeBtn} onClick={() => setGanttTimeFilter(Math.max(T0, ganttTimeFilter - 5))}>−5</button>
+                    <button style={nudgeBtn} onClick={() => setGanttTimeFilter(Math.min(T1 - 5, ganttTimeFilter + 5))}>+5</button>
+                    <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={() => setTab("board")}>Open in Shift Builder →</button>
+                    <button style={nudgeBtn} onClick={() => setGanttTimeFilter(null)}>Clear</button>
+                  </div>
+                </div>
+              )}
+              <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "6px 10px 10px" }}>
+                The dark line shows where {day}'s {P.supVH.toFixed(0)} service hours would sit if they exactly followed the demand pattern. Red = times you're lighter than demand suggests; teal above the line = heavier. <b>Click any time</b> on the chart to mark it, then open those runs in the Shift Builder.
               </div>
             </div>
 
