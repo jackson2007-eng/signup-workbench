@@ -541,6 +541,29 @@ function recycleViolations(board, glob) {
   return out;
 }
 
+// The "coarser totals pasted into every 5-minute row" signature: most of a day's active
+// slots sit in runs of 6+ identical values — half-hourly totals repeated into each row
+// instead of split across them, inflating totals ~6x. Detected from the stored demand
+// itself (not upload-time state) so the flag survives save/load and keeps warning until
+// the data is converted or replaced. Returns the flagged day names.
+function detectPastedDemand(dem) {
+  const flagged = [];
+  if (!dem) return flagged;
+  for (const d of DAYS) {
+    const arr = dem[d] || [];
+    let active = 0, susp = 0, i = 0;
+    while (i < arr.length) {
+      let j = i;
+      while (j < arr.length && arr[j] === arr[i]) j++;
+      const len = j - i;
+      if (arr[i] > 0) { active += len; if (len >= 6) susp += len; }
+      i = j;
+    }
+    if (active > 0 && susp / active >= 0.5) flagged.push(d);
+  }
+  return flagged;
+}
+
 /* ---------- rules ---------- */
 function validateSeg(seg, RULES, G) {
   const issues = [];
@@ -1954,6 +1977,11 @@ export default function App({ onHome }) {
   const [demSource, setDemSource] = useState("imported"); // "imported" | "sketched" | "uploaded"
   const [uploadedDem, setUploadedDem] = useState(null);
   const [demUploadResult, setDemUploadResult] = useState(null);
+  // true once the pasted-totals repair has been applied — suppresses the pattern flag
+  // (converted data still repeats within each 30-min block, indistinguishable from pasting)
+  const [demNormalized, setDemNormalized] = useState(false);
+  // scratch input for the inverse calibration (pin a known productivity, solve for share)
+  const [knownProd, setKnownProd] = useState(1.75);
   const demFileRef = useRef(null);
   const [sketchMode, setSketchMode] = useState("weekdaySatSun");
   const [curveTab, setCurveTab] = useState("Weekday");
@@ -2226,7 +2254,7 @@ export default function App({ onHome }) {
   const saveProject = () => {
     const payload = {
       v: 1, savedAt: new Date().toISOString(),
-      demSource, sketch, trips, sketchMode, uploadedDem, board, rules, glob, spans,
+      demSource, sketch, trips, sketchMode, uploadedDem, demNormalized, board, rules, glob, spans,
       totalSigned, includePT, signupPeriod, holidays,
       baselineBoard, signupSource, typeColors,
       ptRules, ptEnabled, ptCount,
@@ -2441,6 +2469,7 @@ export default function App({ onHome }) {
         }
         setSketchMode(p.sketchMode || "weekdaySatSun");
         if (p.uploadedDem) setUploadedDem(p.uploadedDem);
+        setDemNormalized(!!p.demNormalized); // absent in older projects → false, so an inflated file flags again on load
         if (p.demSource === "uploaded" && !p.uploadedDem) setDemSource("imported");
         else if (p.demSource) setDemSource(p.demSource);
         if (p.totalSigned != null) setTotalSigned(p.totalSigned);
@@ -2515,6 +2544,7 @@ export default function App({ onHome }) {
         const res = parseDemandWorkbook(wb);
         if (!res.ok) { alert(res.error); return; }
         setUploadedDem(res.dem);
+        setDemNormalized(false); // fresh file — pattern detection starts over
         setDemSource("uploaded");
         setDemUploadResult(res.summary);
         const impliedTrips = {};
@@ -2683,6 +2713,22 @@ export default function App({ onHome }) {
   // serving work it doesn't do. A wildly high result (implying an implausibly short cycle
   // time) is usually the same data-quality issue parseDemandWorkbook's suspiciousDays flag
   // catches, so callers should check that before offering a one-click "use this" suggestion.
+  // pasted-totals flag, recomputed from the stored demand every session (survives save/load)
+  const pastedDays = useMemo(() => (demNormalized ? [] : detectPastedDemand(uploadedDem)), [uploadedDem, demNormalized]);
+  // One-click repair: every value on a flagged day is a 30-minute total, so value/6 is the
+  // true 5-minute level — identical shape, correct scale. Only flagged days are touched.
+  const convertPastedDemand = () => {
+    if (!uploadedDem || pastedDays.length === 0) return;
+    const next = {};
+    for (const d of DAYS) next[d] = pastedDays.includes(d) ? uploadedDem[d].map((v) => Math.round((v / 6) * 100) / 100) : [...uploadedDem[d]];
+    setUploadedDem(next);
+    setDemNormalized(true);
+    const impliedTrips = {};
+    for (const d of DAYS) impliedTrips[d] = Math.round(next[d].reduce((a, b) => a + b, 0) / 2);
+    setTrips(impliedTrips);
+    setDemUploadResult(null); // upload summary described the raw file — now stale
+  };
+
   const empiricalProductivity = useMemo(() => {
     if (!uploadedDem || signupSource !== "uploaded") return null;
     const share = (glob.demandShare > 0 ? glob.demandShare : 100) / 100;
@@ -3495,15 +3541,27 @@ export default function App({ onHome }) {
                     : " All 7 sheets matched the template exactly."}
                 </div>
               )}
-              {demUploadResult && demUploadResult.suspiciousDays && demUploadResult.suspiciousDays.length > 0 && (
+              {pastedDays.length > 0 && (
                 <div style={{ background: "#FDF3E7", border: `1px solid ${demandAmber}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
-                  <b>Possible data-entry issue on {demUploadResult.suspiciousDays.join(", ")}:</b> most of the active 5-minute
-                  slots on {demUploadResult.suspiciousDays.length > 1 ? "these days" : "this day"} repeat the same pickup/dropoff
-                  values in runs of 6 or more — the usual sign that coarser totals (e.g. half-hourly) were pasted into every
-                  5-minute row instead of split across them. That would inflate trip counts and anything derived from them
-                  (like Suggested vehicles on Coverage) by roughly the run length. This doesn't block anything — your uploaded
-                  numbers are used exactly as-is — but if this wasn't intentional, re-check the source file before relying on
-                  totals derived from it.
+                  <b>Inflated data detected on {pastedDays.join(", ")}:</b> most of the active 5-minute
+                  slots on {pastedDays.length > 1 ? "these days" : "this day"} repeat the same
+                  values in runs of 6 or more — the usual sign that half-hourly totals were pasted into every
+                  5-minute row instead of split across them, inflating trip counts and everything derived from them
+                  (Suggested vehicles, Requirement mode, Size to requirement, cycle-time calibration) by roughly 6×.
+                  Nothing is blocked — your numbers are used exactly as-is — but if each row really is a 30-minute total,
+                  convert it below. The shape of the curve is unchanged either way; only the scale corrects.
+                  <div style={{ marginTop: 8 }}>
+                    <button style={{ ...nudgeBtn, background: demandAmber, color: "#fff", borderColor: demandAmber, fontWeight: 600 }}
+                      onClick={convertPastedDemand}>
+                      Convert to true 5-minute values (÷ 6)
+                    </button>
+                  </div>
+                </div>
+              )}
+              {demNormalized && (
+                <div style={{ background: "#F2F8F7", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
+                  This uploaded file was converted from 30-minute totals (each value ÷ 6) — day totals now reflect true trip
+                  counts. If your cycle time or share was calibrated against the raw file, recalibrate on the Rules tab.
                 </div>
               )}
             </div>
@@ -5134,6 +5192,13 @@ export default function App({ onHome }) {
                   <span>Share of demand served by this signup (%)</span>
                   <NumField value={glob.demandShare} step={5} onCommit={(v) => setGlob((g) => ({ ...g, demandShare: Math.min(100, Math.max(1, Math.round(v))) }))} />
                 </div>
+                {(glob.avgCycleTime < 15 || glob.avgCycleTime > 90) && (
+                  <div style={{ background: "#FDF3E7", border: `1px solid ${demandAmber}`, padding: "6px 10px", fontSize: 12, marginTop: 8 }}>
+                    ⚠ A {glob.avgCycleTime}-minute cycle time is outside the typical shared-ride paratransit range (20–45 min).
+                    Suggested vehicles, Requirement mode, and Size to requirement all scale directly with this number. If it came
+                    from the calibration below while the demand file was inflated, fix the demand first (Demand tab), then recalibrate.
+                  </div>
+                )}
                 <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 10 }}>
                   <input type="checkbox" checked={!!glob.occupancyTarget} onChange={(e) => setGlob((g) => ({ ...g, occupancyTarget: e.target.checked }))} />
                   <span style={{ fontSize: 13, fontWeight: 600 }}>Occupancy-based target (spread demand by pull-out + cycle + pull-in)</span>
@@ -5159,11 +5224,44 @@ export default function App({ onHome }) {
                     <div style={{ background: "#FDF3E7", border: `1px solid ${demandAmber}`, padding: "8px 12px", fontSize: 12, marginTop: 10 }}>
                       Your uploaded demand{glob.demandShare < 100 ? ` (at this signup's ${glob.demandShare}% share)` : ""} + signup imply {empiricalProductivity.overall.toFixed(1)} trips/vehicle-hour — an
                       unrealistically short {(60 / empiricalProductivity.overall).toFixed(1)}-minute cycle time. That usually means
-                      the demand file has a data-quality issue (check the warning banner on the Demand tab) or the demand share
+                      the demand file has a data-quality issue or the demand share
                       above is set too high for what this fleet really serves — fix that before using it to set cycle time.
+                      {pastedDays.length > 0 && <>{" "}<b>The Demand tab has flagged this file as pasted 30-minute totals (~6× inflated) and offers a one-click conversion — do that first, then recalibrate here.</b></>}
                     </div>
                   )
                 )}
+                {empiricalProductivity && empiricalProductivity.overall > 0 && (() => {
+                  // Inverse calibration: pin the productivity the agency KNOWS it runs and solve
+                  // for the share of THIS FILE's demand that makes file + signup + productivity
+                  // consistent. The share input scales the uploaded file, so when a file counts
+                  // trips (not passengers) or misses a provider, the file-relative share can
+                  // legitimately differ from the agency's system-wide passenger share.
+                  const impliedShare = Math.round(glob.demandShare * knownProd / empiricalProductivity.overall);
+                  const ok = impliedShare >= 1 && impliedShare <= 100;
+                  return (
+                    <div style={{ background: "#EAF1FB", border: "1px solid #BBD3EC", padding: "8px 12px", fontSize: 12, marginTop: 8, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <span>
+                        <b>Or pin the productivity you know you run:</b>
+                      </span>
+                      <NumField value={knownProd} step={0.05} onCommit={(v) => setKnownProd(Math.max(0.2, Math.min(8, v)))} style={{ ...numInput, width: 60 }} />
+                      <span>
+                        trips/vehicle-hour = a <b>{(60 / knownProd).toFixed(1)}-min</b> cycle. With this demand file + signup, that
+                        implies this signup serves <b>{impliedShare}%</b> of the file's demand{ok ? "" : " — out of range; check the file"}.
+                      </span>
+                      {ok && (
+                        <button style={{ ...nudgeBtn, borderColor: "#185FA5", color: "#185FA5", fontWeight: 600 }}
+                          onClick={() => setGlob((g) => ({ ...g, avgCycleTime: Math.round((60 / knownProd) * 10) / 10, demandShare: impliedShare }))}>
+                          Apply share {impliedShare}% + cycle {(60 / knownProd).toFixed(1)} min
+                        </button>
+                      )}
+                      <span style={{ flexBasis: "100%", color: "#41525C" }}>
+                        Applying both makes Requirement mode and Size-to-requirement reproduce this signup's actual vehicle-hours from
+                        this demand file — the requirement then scales honestly when demand grows or shifts. The file-relative share can
+                        differ from your system-wide passenger share when the file counts trips rather than passengers.
+                      </span>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
 
