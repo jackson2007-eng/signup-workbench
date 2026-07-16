@@ -91,6 +91,4 @@ The Signup Package banner + day paddles, the `.kpistrip`, and (on Shift Builder,
 
 ## Roadmap context (for scoping new work)
 
-1. **Shipped**: signup period + statutory holiday detection, per-holiday "runs as an existing weekday" or fully custom one-off shift boards (inline "Exception days" section on the Coverage tab), demand data template download/upload, getting-started checklist/tab status dots.
-2. **Next up**: Compare & Publish module (scenario comparison, posting-format export, change memo), certified-ceiling computation (LP/MILP, premium-tier candidate), Gantt edge-drag, per-day sketch overrides.
-3. SaaS/multi-tenant accounts are explicitly parked until a second agency is real — don't add backend/auth infrastructure speculatively.
+The living backlog is [ROADMAP.md](ROADMAP.md) — check it before scoping new work, and move items there when they ship or get parked. Standing rule: SaaS/multi-tenant accounts are explicitly parked until a second agency is real — don't add backend/auth infrastructure speculatively (the Service Tracker's phase 2 in ROADMAP.md is the designated path when that changes).
