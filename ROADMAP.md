@@ -25,6 +25,13 @@ A tracker for the daily service report agencies already keep in Excel (modelled 
 - Compare & Publish module — scenario comparison, posting-format export, change memo.
 - Certified-ceiling computation (LP/MILP) — premium-tier candidate.
 
+## Idea stage — planning & administration modules (added 2026-07-15)
+
+- **Annual Trip Forecaster** — project ridership forward from historical trips (Service Tracker history is the natural input): trend + seasonality by day type, registrant growth, scenario sliders (growth %, service changes). Output feeds the signup tool's demand scaling and the annual plan below.
+- **Annual Service Plan & Budget tool** — turn a trip forecast into planned service hours and dollars for the year: forecast trips ÷ target productivity = vehicle-hours, × rates (city hourly cost, contractor rates, taxi per-trip) = budget, split by provider share. Works hand-in-hand with the Service Tracker: the plan sets the monthly/daily budget line, the tracker's actuals plot against it (plan-vs-actual variance is the report every manager asks for).
+- **Employee Performance Tracking** — per-operator/agent metrics (on-time, productivity, absences, incidents). ⚠ First module that would hold *personal* data — breaks the current "no PII anywhere" doctrine that the toolkit's procurement story leans on. Needs a deliberate decision: employee IDs only, local-only storage, or accept the posture change (likely pairs with the phase-2 accounts work, not before).
+- **Customer Complaints & Concerns** — log, categorize, and trend complaints/commendations (by type, provider, route/area, day), track resolution status and response times, feed a monthly summary. Same PII caution as above (customer names/contacts) — categorized aggregate trending can be built PII-light; case management cannot.
+
 ## Signup workbench enhancements (parked)
 - Editable stat-holiday template in the UI (currently a hardcoded constant applied via button).
 - Growth % scaler on uploaded demand (size next signup for projected ridership).
