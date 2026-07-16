@@ -2807,7 +2807,9 @@ export default function App({ onHome }) {
       setHist((h) => [...h.slice(-49), d.boardSnapshot]);
       setFuture([]);
       setSugsStale(true);
-      setSelId(d.sgId);
+      // deliberately NOT setSelId here: selecting mid-drag would open the shift editor
+      // and filter the Gantt to that shift under the pointer. Drags happen in place in
+      // whichever view you're in; only a plain click (below threshold) opens the editor.
       if (!editAllDays && d.orig.days.length > 1) {
         // day-scoped drag: carve the viewed day out of the shared times at activation —
         // the dragged segment keeps its id (so the bar under the pointer survives the
