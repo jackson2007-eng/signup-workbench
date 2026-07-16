@@ -82,6 +82,53 @@ function buildTypeSequence(blocks, nPackages) {
   return seq;
 }
 
+/* ---------- statutory-holiday stat roster ---------- */
+// A default stat-day roster (run numbers, types, straight start/end times), hardcoded from a
+// reference signup's stat rows. Applying it to a holiday drops these one-off shifts onto that date;
+// each becomes an editable exception seg, its parent shift auto-assigned by assignStatShifts.
+const STAT_TEMPLATE = [
+  { run: "301", type: "AM", s: 345, e: 825 }, { run: "303", type: "AM", s: 345, e: 825 }, { run: "302", type: "AM", s: 350, e: 830 },
+  { run: "304", type: "AM", s: 390, e: 870 }, { run: "305", type: "AM", s: 390, e: 870 }, { run: "306", type: "AM", s: 450, e: 930 },
+  { run: "307", type: "AM", s: 510, e: 990 }, { run: "308", type: "AX", s: 510, e: 990 }, { run: "309", type: "AX", s: 540, e: 1020 },
+  { run: "310", type: "AX", s: 555, e: 1035 }, { run: "311", type: "NN", s: 555, e: 1035 }, { run: "312", type: "AX", s: 555, e: 1035 },
+  { run: "313", type: "AX", s: 555, e: 1035 }, { run: "314", type: "AX", s: 675, e: 1155 }, { run: "315", type: "BST", s: 735, e: 1215 },
+  { run: "316", type: "BST", s: 735, e: 1215 }, { run: "321", type: "BST", s: 810, e: 1290 }, { run: "322", type: "BST", s: 810, e: 1290 },
+  { run: "323", type: "BST", s: 840, e: 1320 }, { run: "324", type: "BST", s: 840, e: 1320 }, { run: "325", type: "BST", s: 840, e: 1320 },
+  { run: "327", type: "BX", s: 840, e: 1320 }, { run: "326", type: "BX", s: 870, e: 1350 }, { run: "328", type: "BX", s: 930, e: 1410 },
+  { run: "329", type: "BX", s: 960, e: 1440 }, { run: "330", type: "BX", s: 960, e: 1440 },
+];
+
+// Assign each stat run to a parent signup shift that (1) works that weekday [hard], (2) is closest
+// in start time, same AM/PM half first [preference], and (3) hasn't already been taken by another
+// stat this week [spread]. Returns { segs, assigned, unassigned }. sourceShift stays null when no
+// eligible shift exists (flagged downstream). Matches against the live board so stats replace real
+// scheduled work.
+function assignStatShifts(template, weekday, board, excludeShifts = []) {
+  // one candidate per distinct shift number that works this weekday, at its start time that day
+  const candByShift = new Map();
+  for (const sg of board) {
+    if (!sg.days.includes(weekday)) continue;
+    const prev = candByShift.get(sg.shift);
+    if (!prev || sg.s < prev.s) candByShift.set(sg.shift, { shift: sg.shift, s: sg.s });
+  }
+  const candidates = [...candByShift.values()];
+  const used = new Set(excludeShifts);
+  let assigned = 0;
+  const ordered = [...template].sort((a, b) => (a.s - b.s) || String(a.run).localeCompare(String(b.run)));
+  const segs = ordered.map((t) => {
+    let best = null, bestKey = Infinity;
+    for (const c of candidates) {
+      if (used.has(c.shift)) continue;
+      const samePeriod = (c.s < 720) === (t.s < 720) ? 0 : 1; // AM (<12:00) vs PM half
+      const key = samePeriod * 100000 + Math.abs(c.s - t.s);
+      if (key < bestKey) { bestKey = key; best = c; }
+    }
+    if (best) { used.add(best.shift); assigned++; }
+    return { type: t.type, s: t.s, e: t.e, b: null, sourceShift: best ? best.shift : null, sourceRun: t.run };
+  });
+  return { segs, assigned, unassigned: segs.length - assigned };
+}
+
 /* ---------- editable rule defaults ---------- */
 const DEFAULT_RULES = JSON.parse(JSON.stringify(RAW.rules));
 const DEFAULT_GLOBAL = JSON.parse(JSON.stringify(RAW.global));
@@ -2061,6 +2108,7 @@ export default function App({ onHome }) {
   const hdImportStarted = useRef(false);
   const [selectedHolidayId, setSelectedHolidayId] = useState(null);
   const [selHolSegId, setSelHolSegId] = useState(null);
+  const [statApplyInfo, setStatApplyInfo] = useState(null);
   const [holFixResult, setHolFixResult] = useState(null);
   const [hasVisitedCoverage, setHasVisitedCoverage] = useState(false);
 
@@ -2891,6 +2939,22 @@ export default function App({ onHome }) {
 
   const patchHolidaySegs = (holId, fn) => {
     setHolidays((hs) => hs.map((h) => (h.id === holId ? { ...h, segs: fn(h.segs || []) } : h)));
+  };
+  // Apply the stat template to a holiday: fill its date with the stat roster, each run auto-assigned
+  // to a shift that works that weekday (spread across shifts already used by same-week stats).
+  const mondayISO = (dateISO) => { const d = new Date(dateISO + "T00:00:00"); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); return d.toISOString().slice(0, 10); };
+  const applyStatTemplate = (hol) => {
+    const weekday = DAYS[new Date(hol.date + "T00:00:00").getDay()];
+    const wk = mondayISO(hol.date);
+    const exclude = [];
+    for (const h of holidays) {
+      if (h.id === hol.id || mondayISO(h.date) !== wk) continue;
+      for (const sg of (h.segs || [])) if (sg.sourceShift != null) exclude.push(sg.sourceShift);
+    }
+    const { segs, assigned, unassigned } = assignStatShifts(STAT_TEMPLATE, weekday, board, exclude);
+    const withIds = segs.map((sg) => ({ ...sg, id: nextId.current++ }));
+    setHolidays((hs) => hs.map((h) => (h.id === hol.id ? { ...h, runsAs: "custom", segs: withIds } : h)));
+    setStatApplyInfo(`${hol.date} (${weekday}): ${withIds.length} stat shifts applied — ${assigned} matched to a ${weekday} shift${unassigned ? `, ${unassigned} unassigned (no free ${weekday} shift)` : ""}.`);
   };
   const patchHolSeg = (patch) => {
     if (!selHoliday || !selHolSeg) return;
@@ -3810,6 +3874,7 @@ export default function App({ onHome }) {
                         <div className="kpi"><span className="l">shifts</span><span className="v">{segs.length}</span></div>
                         <div className="kpi"><span className="l">rule flags</span><span className="v" style={{ color: flagCountHol ? "#F09E93" : "#7FD1C0" }}>{flagCountHol}</span></div>
                         <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                          <button style={{ ...nudgeBtn, borderColor: supplyTeal, color: supplyTeal }} title="Replace with the stat roster, auto-assigning each run to a shift that works this weekday" onClick={() => applyStatTemplate(selHoliday)}>Fill from stat template</button>
                           <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }} onClick={addHolSeg}>+ Add shift</button>
                           <button style={nudgeBtn} onClick={() => setSelectedHolidayId(null)}>Close</button>
                         </div>
@@ -5020,6 +5085,11 @@ export default function App({ onHome }) {
                               )}
                             </td>
                             <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>
+                              <button style={{ ...nudgeBtn, padding: "3px 8px", fontSize: 12, borderColor: supplyTeal, color: supplyTeal, marginRight: 6 }}
+                                title={`Fill ${weekday} with the stat roster and auto-assign each run to a ${weekday} shift`}
+                                onClick={() => applyStatTemplate(h)}>
+                                {(h.segs || []).length ? "Re-apply stat" : "Apply stat template"}
+                              </button>
                               {h.runsAs === "custom" ? (
                                 <button style={{ ...nudgeBtn, padding: "3px 8px", fontSize: 12 }}
                                   onClick={() => { setSelectedHolidayId(h.id); setTab("coverage"); }}>
@@ -5043,6 +5113,13 @@ export default function App({ onHome }) {
                       })}
                     </tbody>
                   </table>
+                </div>
+              )}
+
+              {statApplyInfo && (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#EAF3F3", border: `1px solid ${supplyTeal}`, padding: "7px 11px", marginTop: 10, fontSize: 12.5 }}>
+                  <span>{statApplyInfo} Review or move assignments under <b>Edit shifts</b>.</span>
+                  <button style={{ ...nudgeBtn, padding: "2px 8px", fontSize: 12, marginLeft: "auto" }} onClick={() => setStatApplyInfo(null)}>Dismiss</button>
                 </div>
               )}
 
