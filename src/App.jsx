@@ -2796,15 +2796,28 @@ export default function App({ onHome }) {
   const [ganttSort, setGanttSort] = useState("run"); // "run" | "time" | "type"
   // click a time on a coverage chart → filter the Shift Builder to runs on duty at that minute
   const [ganttTimeFilter, setGanttTimeFilter] = useState(null);
+  // shifts carrying any rule flag — segment-level (classification, breaks) or
+  // package-level (rest, report-time variance, days-off) — for the "Flagged first" sort
+  const flaggedShifts = useMemo(() => {
+    const byShift = new Map();
+    for (const sg of board) { if (!byShift.has(sg.shift)) byShift.set(sg.shift, []); byShift.get(sg.shift).push(sg); }
+    const set = new Set();
+    for (const [sh, segs] of byShift) {
+      if (segs.some((sg) => validateSeg(sg, allRules, glob).length > 0) || packageInfo(segs, allRules, glob).issues.length > 0) set.add(sh);
+    }
+    return set;
+  }, [board, allRules, glob]);
   const daySegs = useMemo(() => {
     const list = board.filter((sg) => sg.days.includes(day));
     if (ganttSort === "time") list.sort((a, b) => (a.s - b.s) || (a.shift - b.shift));
     else if (ganttSort === "end") list.sort((a, b) => (a.e - b.e) || (a.shift - b.shift));
+    else if (ganttSort === "flags") list.sort((a, b) =>
+      ((flaggedShifts.has(b.shift) ? 1 : 0) - (flaggedShifts.has(a.shift) ? 1 : 0)) || (a.shift - b.shift) || (a.s - b.s));
     else if (ganttSort === "type") list.sort((a, b) =>
       (TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type)) || (a.s - b.s) || (a.shift - b.shift));
     else list.sort((a, b) => (a.shift - b.shift) || (a.s - b.s));
     return list;
-  }, [board, day, ganttSort]);
+  }, [board, day, ganttSort, flaggedShifts]);
 
   const selSeg = selId != null ? board.find((s) => s.id === selId) : null;
   const selShift = selSeg ? selSeg.shift : null;
@@ -4375,6 +4388,7 @@ export default function App({ onHome }) {
                     <option value="time">Start time</option>
                     <option value="end">End time</option>
                     <option value="type">Type, then time</option>
+                    <option value="flags">Flagged first{flaggedShifts.size > 0 ? ` (${flaggedShifts.size})` : ""}</option>
                   </select>
                 </label>
                 <div style={{ marginLeft: "auto", fontSize: 11, color: "#5B6B75" }}>{fmt(T0)} — {fmt(T1)}</div>
