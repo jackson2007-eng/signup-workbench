@@ -1803,6 +1803,31 @@ function ActualCurve({ ev, label }) {
 }
 
 /* ---------- coverage chart ---------- */
+// Requirement mode: the demand-implied vehicle curve (ev × share × cycle/10, Little's Law) has the
+// RIGHT total vehicle-hours (area = day trips × share ÷ productivity) but too peaky a SHAPE — its
+// instantaneous peak over-states the fleet you need, because contractors/spare shave the spike and
+// your own fleet holds a flatter plateau. This water-fills the SAME hours under the fleet cap: cap
+// the peak, raise the shoulders to preserve area. Result peaks at ~the cap and matches the real
+// board. Returns { values[N], peak, hours }. No cap ⇒ returns the raw curve unchanged.
+function requirementCurve(P, glob) {
+  const share = (glob.demandShare > 0 ? glob.demandShare : 100) / 100;
+  const cyc = glob.avgCycleTime || 31;
+  const cap = glob.maxFleet > 0 ? glob.maxFleet : Infinity;
+  const sm = (i) => { let s = 0, c = 0; for (let k = Math.max(0, i - 3); k <= Math.min(N - 1, i + 3); k++) { s += P.ev[k]; c++; } return c ? s / c : 0; };
+  const raw = new Array(N);
+  let H = 0, rawPeak = 0;
+  for (let i = 0; i < N; i++) { raw[i] = sm(i) * share * cyc / 10; H += raw[i] / 12; if (raw[i] > rawPeak) rawPeak = raw[i]; }
+  if (!(cap < Infinity) || rawPeak <= cap) {
+    return { values: raw.map((v) => Math.round(v * 10) / 10), peak: Math.round(rawPeak * 10) / 10, hours: Math.round(H) };
+  }
+  const areaOf = (k) => { let a = 0; for (let i = 0; i < N; i++) a += Math.min(k * raw[i], cap); return a / 12; };
+  let lo = 1, hi = 8;
+  for (let it = 0; it < 40; it++) { const mid = (lo + hi) / 2; if (areaOf(mid) < H) lo = mid; else hi = mid; }
+  const k = (lo + hi) / 2;
+  const vals = raw.map((v) => Math.min(k * v, cap));
+  return { values: vals.map((v) => Math.round(v * 10) / 10), peak: Math.round(Math.max(...vals)), hours: Math.round(H) };
+}
+
 function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity, avgCycleTime = 0, demandShare = 100, height = 320, selBand,
   supplyName = "Supply", targetName = "Demand-aligned target", unitLabel = "events", minName = "min", sugTooltip = true, extraSeries = null,
   onPointClick = null, onDutyCounts = null }) {
@@ -1900,6 +1925,7 @@ export default function App({ onHome }) {
   const [day, setDay] = useState("Wednesday");
   const [showBookout, setShowBookout] = useState(false);
   const [showProductivity, setShowProductivity] = useState(false);
+  const [showRequirement, setShowRequirement] = useState(false);
   const [includePT, setIncludePT] = useState(false);
   const [totalSigned, setTotalSigned] = useState(125);
   const [board, setBoard] = useState(() => RAW.segments.map(cloneSeg));
@@ -2557,6 +2583,7 @@ export default function App({ onHome }) {
   const base = useMemo(() => computeEngine(DEM, buildSupply(baselineBoard), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, baselineBoard, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime]);
   const recycleViol = useMemo(() => recycleViolations(board, glob), [board, glob.recycleEnabled, glob.recycleTurnaround, glob.recycleWindow, glob.recycleCount]);
   const P = eng.perDay[day];
+  const req = useMemo(() => requirementCurve(P, glob), [P, glob.demandShare, glob.avgCycleTime, glob.maxFleet]);
 
   const originalMap = useMemo(() => new Map(baselineBoard.map((s) => [s.id, s])), [baselineBoard]);
 
@@ -3731,7 +3758,18 @@ export default function App({ onHome }) {
                 <input type="checkbox" checked={showProductivity} onChange={(e) => setShowProductivity(e.target.checked)} />
                 Vehicle reference lines (day share + demand-implied)
               </label>
+              <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 7 }}>
+                <input type="checkbox" checked={showRequirement} onChange={(e) => setShowRequirement(e.target.checked)} />
+                Requirement mode (vehicle-hours, capped at fleet)
+              </label>
             </div>
+
+            {showRequirement && (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "#EAF1FB", border: "1px solid #185FA5", padding: "8px 12px", marginBottom: 12, fontSize: 12.5 }}>
+                <b style={{ color: "#0C447C" }}>{day} requirement:</b>
+                <span>peak <b>{req.peak}</b> vehicles · <b>{req.hours.toLocaleString()}</b> vehicle-hours — demand (share {glob.demandShare}%) ÷ productivity (cycle {glob.avgCycleTime} min), the hours redistributed under the fleet cap of {glob.maxFleet}. You have <b>{P.peakSup}</b> at peak / {P.supVH.toFixed(0)} vh scheduled.</span>
+              </div>
+            )}
 
             <details style={{ background: "#F7FAF9", border: "1px solid #DCE7E4", padding: "10px 14px", marginBottom: 12, fontSize: 13 }}>
               <summary style={{ cursor: "pointer", fontWeight: 600, fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16 }}>
@@ -3804,7 +3842,8 @@ export default function App({ onHome }) {
                 {day} — service hours vs demand-aligned target
               </div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={showBookout} showProductivity={showProductivity} avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={340}
-                onDutyCounts={onDutyCounts} onPointClick={focusRun} />
+                onDutyCounts={onDutyCounts} onPointClick={focusRun}
+                extraSeries={showRequirement ? [{ key: "req", name: "Vehicles required (capped)", color: "#185FA5", values: req.values, dash: "6 3" }] : null} />
               {ganttTimeFilter != null && (
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "#EAF3F3", border: `1px solid ${supplyTeal}`, padding: "8px 12px", margin: "6px 10px 0", fontSize: 13 }}>
                   <b>{fmt(ganttTimeFilter)} ({day}):</b>
