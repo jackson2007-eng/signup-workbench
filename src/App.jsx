@@ -1938,7 +1938,15 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         <XAxis dataKey="time" tick={{ fontSize: 10.5 }} interval={23} tickLine={false} />
         <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
         <Tooltip
-          formatter={(v, name) => [v, { target: targetName, sup: supplyName, covered: "Aligned", bookout: "Observed (sample)", gap: "Target (underweighted)", reqPat: "Required (your deployment pattern)", impliedVeh: "Required (demand shape, capped)" }[name] || name]}
+          formatter={(v, name, item) => {
+            // the gap Area's drawing value is the TARGET height (so the red fill spans
+            // supply→target); the tooltip must report the actual shortfall instead
+            if (name === "Gap") {
+              const s = item && item.payload ? item.payload.sup : null;
+              return [s != null ? Math.round((v - s) * 10) / 10 : v, "Gap"];
+            }
+            return [v, { target: targetName, sup: supplyName, covered: "Aligned", bookout: "Observed (sample)", reqPat: "Required (your deployment pattern)", impliedVeh: "Required (demand shape, capped)" }[name] || name];
+          }}
           labelFormatter={(l, pl) => {
             const r = pl && pl[0] && pl[0].payload;
             if (!r) return l;
