@@ -42,12 +42,33 @@ A tracker for the daily service report agencies already keep in Excel (modelled 
 - Feed the Erlang required-agents curve into an auto-generator for agent shifts (mirror of the operator Signup Builder).
 - Per-skill / per-queue staffing (bookings vs cancellations vs where's-my-ride).
 
+## Commercialization (added 2026-07-16)
+
+**Go-to-market: operator signup workbench first.** Addressable market ≈ 400–800 North-American agencies large enough to run structured signups (20+ vehicles, seniority/union bids, 2–4 signups/yr), plus paratransit contractors (Transdev/MV-class divisions). No direct competitor in the niche — incumbent suites are six-figure and fixed-route-first; the status quo is Excel. Value anchor: one weekly package ≈ $80–100k/yr loaded labor; demand-calibrated sizing that finds ±1–2 packages pays for the tool ~20× on the first bid.
+
+**Pricing (price to procurement thresholds, not to value)** — flat annual, unlimited planners, keep every tier under typical purchase-card/sole-source limits ($5–10k) to avoid RFPs:
+
+| Tier | Fleet | Price/yr |
+|---|---|---|
+| Small | < 25 vehicles | $1,800 |
+| Standard | 25–75 | $4,800 |
+| Large | 75+ | $9,600 |
+
+**Revenue expectations (honest):** Yr 1: 3–8 agencies ($15–40k ARR, own network + one CTAA/TRB demand-response conference). Yr 2–3: 20–40 ($100–200k, references + validated-against-real-data case study). Mature niche standard: 100–200 ($500k–1M). Caveats: 3–12-month gov sales cycles, hands-on first customers, "solo tool" objection (answered by the no-data-stored architecture).
+
+**Payment/licensing plan (stateless, fits the no-backend doctrine):**
+1. Merchant-of-record (Lemon Squeezy or Paddle) for checkout, subscriptions, tax, and native license keys — customer billing data lives entirely with them.
+2. One Worker route validates a license key against the provider's API and returns a ~7-day signed token cached in the browser; weekly re-validation, offline grace. No user database — only a signing secret in Worker env.
+3. **Trial = demo mode, not a countdown:** everything free and fully interactive on the shipped sample data; upload demand/signup, save/load project, and export gated behind the license. Maps the paywall onto the value line (playing free, operating paid) and stays procurement-friendly.
+4. Optional hard gate later: Worker withholds the app bundle without a valid token — real enforcement, still no customer DB. License keys become the entitlement behind phase-2 accounts when those arrive.
+
 ## Ops / infra chores
 - Connect a real domain (replace `transit-toolkit.jackson2007.workers.dev`).
 - Delete the old obsolete worker.
 - Rename the GitHub repo (signup-workbench → toolkit-wide name).
 
 ## Recently shipped
+- 2026-07-16/17 — Requirement-lines rework (water-fill under fleet cap + deployment-pattern line, then folded into Size-to-requirement after cleanup); demand-data integrity (persistent pasted-totals detection + ÷6 repair, cycle-time plausibility guard, pin-known-productivity calibration); occupancy target fixed to cycle-only window; Gap tooltip shows true shortfall; pull-out/pull-in staging drawn violet; prev/next step navigation; reclassification chips on flagged shifts; drag-in-place from full board; "Flagged first" + end-time sorts.
 - 2026-07-15 — Signup Builder "Size to requirement": package count from capped weekly vehicle-hours ÷ 40.
 - 2026-07-15 — Coverage "Requirement mode": demand-implied vehicle-hours water-filled under the fleet cap.
 - 2026-07 — Stat-holiday template + auto-assignment to shifts; sign-in stagger strip; arrow-key run navigation; coverage click-to-filter-runs.
