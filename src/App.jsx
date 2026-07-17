@@ -24,9 +24,17 @@ const fmt = (m) => {
   const h = Math.floor(m / 60), mm = m % 60;
   return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 };
-const ink = "#182430", paper = "#F4F6F7", card = "#FFFFFF",
-  demandAmber = "#D98324", targetInk = "#233746", supplyTeal = "#0F7B7A",
-  gapRed = "#C0392B", bookoutViolet = "#6C5B9E", sampleGray = "#5B6B75";
+// Theme-aware palette: these resolve via CSS custom properties (see the :root/[data-theme="dark"]
+// block in the app's <style> tag) so every consumer — inline styles AND SVG stroke/fill props —
+// picks up the active theme automatically with no per-call-site changes. `ink` keeps its original
+// role as the dark UI-chrome color (headers, selected tab/paddle fills — stays dark in both themes
+// since white text sits on it); `text` is the separate primary-body-text role that actually inverts
+// between themes. The semantic accents (amber/teal/red/violet/gray) get theme-tuned variants for
+// contrast rather than true inversion, since their meaning (demand/supply/gap/etc.) must stay
+// legible and consistent across both themes.
+const ink = "var(--chrome)", text = "var(--text)", paper = "var(--paper)", card = "var(--card)",
+  demandAmber = "var(--demand-amber)", targetInk = "var(--target-ink)", supplyTeal = "var(--supply-teal)",
+  gapRed = "var(--gap-red)", bookoutViolet = "var(--bookout-violet)", sampleGray = "var(--sample-gray)";
 const DEM_SOURCE_LABEL = { imported: "Sample data", sketched: "Sketched demand", uploaded: "Uploaded real data" };
 // pinned-header stacking: fixed heights (with a small buffer) for the sticky Signup Package
 // banner + day paddles and the .kpistrip, so each locked layer sits directly under the last.
@@ -432,8 +440,8 @@ function TimeField({ value, onCommit, width = 62 }) {
         setBad(false); onCommit(v);
       }}
       style={{
-        width, padding: "5px 6px", border: `1px solid ${bad ? "#C0392B" : "#B9C6CC"}`,
-        background: "#fff", color: "#182430", borderRadius: 2, fontSize: 13,
+        width, padding: "5px 6px", border: `1px solid ${bad ? "#C0392B" : "var(--border-input)"}`,
+        background: card, color: text, borderRadius: 2, fontSize: 13,
         textAlign: "center", fontVariantNumeric: "tabular-nums",
       }} />
   );
@@ -459,8 +467,8 @@ function NumField({ value, onCommit, width = 58, style: styleOverride }) {
         setTxt(String(isNaN(v) ? value : v));
       }}
       style={{
-        width, padding: "5px 6px", border: "1px solid #B9C6CC", background: "#fff",
-        color: "#182430", borderRadius: 2, fontSize: 13, textAlign: "center",
+        width, padding: "5px 6px", border: "1px solid var(--border-input)", background: card,
+        color: text, borderRadius: 2, fontSize: 13, textAlign: "center",
         ...styleOverride,
       }} />
   );
@@ -1779,29 +1787,29 @@ function TourOverlay({ step, stepIndex, total, onNext, onBack, onSkip }) {
       <div style={{
         position: "fixed",
         ...(hasSpot ? { top: cardTop, left: cardLeft, width: CARD_W } : { top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 380 }),
-        background: "#fff", border: "1px solid #E2E8EA", borderRadius: 4,
+        background: card, border: "1px solid var(--border)", borderRadius: 4,
         boxShadow: "0 14px 36px rgba(0,0,0,0.32)", padding: "16px 18px",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-          <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".07em", color: "#8899A3", textTransform: "uppercase" }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".07em", color: "var(--muted-light)", textTransform: "uppercase" }}>
             Step {stepIndex + 1} of {total}
           </div>
           <button onClick={onSkip} aria-label="Close tour"
-            style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 18, color: "#8899A3", cursor: "pointer", lineHeight: 1, padding: 2 }}>
+            style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 18, color: "var(--muted-light)", cursor: "pointer", lineHeight: 1, padding: 2 }}>
             ×
           </button>
         </div>
-        <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700, marginBottom: 6, color: ink }}>
+        <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700, marginBottom: 6, color: text }}>
           {step.title}
         </div>
-        <div style={{ fontSize: 13.5, lineHeight: 1.55, color: "#33434D", marginBottom: 14 }}>
+        <div style={{ fontSize: 13.5, lineHeight: 1.55, color: "var(--text-dark)", marginBottom: 14 }}>
           {step.body}
         </div>
-        <div style={{ height: 3, background: "#E7EDEF", borderRadius: 2, marginBottom: 14, overflow: "hidden" }}>
+        <div style={{ height: 3, background: "var(--row-border)", borderRadius: 2, marginBottom: 14, overflow: "hidden" }}>
           <div style={{ height: "100%", width: `${((stepIndex + 1) / total) * 100}%`, background: supplyTeal, transition: "width .2s" }} />
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button onClick={onSkip} style={{ ...nudgeBtn, border: "1px solid transparent", color: "#8899A3" }}>Skip tour</button>
+          <button onClick={onSkip} style={{ ...nudgeBtn, border: "1px solid transparent", color: "var(--muted-light)" }}>Skip tour</button>
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             {stepIndex > 0 && <button onClick={onBack} style={nudgeBtn}>← Back</button>}
             <button onClick={onNext} style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }}>
@@ -1816,29 +1824,29 @@ function TourOverlay({ step, stepIndex, total, onNext, onBack, onSkip }) {
 
 const Stat = ({ label, value, sub, tone }) => (
   <div style={{
-    background: card, border: "1px solid #E2E8EA", borderTop: `3px solid ${tone || targetInk}`,
+    background: card, border: "1px solid var(--border)", borderTop: `3px solid ${tone || targetInk}`,
     padding: "10px 14px", minWidth: 112, flex: "1 1 auto",
   }}>
-    <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#5B6B75" }}>{label}</div>
-    <div style={{ fontFamily: "'Barlow Condensed', 'Arial Narrow', sans-serif", fontSize: 28, fontWeight: 600, color: ink, lineHeight: 1.1 }}>{value}</div>
-    {sub && <div style={{ fontSize: 11.5, color: "#5B6B75" }}>{sub}</div>}
+    <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--muted)" }}>{label}</div>
+    <div style={{ fontFamily: "'Barlow Condensed', 'Arial Narrow', sans-serif", fontSize: 28, fontWeight: 600, color: text, lineHeight: 1.1 }}>{value}</div>
+    {sub && <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{sub}</div>}
   </div>
 );
 
 const numInput = {
-  width: 74, padding: "7px 8px", border: "1px solid #B9C6CC",
-  background: "#FFFFFF", color: "#182430", borderRadius: 2,
+  width: 74, padding: "7px 8px", border: "1px solid var(--border-input)",
+  background: card, color: text, borderRadius: 2,
   fontFamily: "'Barlow Condensed', 'Arial Narrow', sans-serif",
   fontSize: 20, fontWeight: 600, textAlign: "center",
   WebkitAppearance: "none", appearance: "textfield",
 };
 const nudgeBtn = {
-  padding: "6px 12px", border: "1px solid #B9C6CC", background: "#fff",
-  color: "#182430", fontSize: 14, fontWeight: 600, cursor: "pointer", borderRadius: 2,
+  padding: "6px 12px", border: "1px solid var(--border-input)", background: card,
+  color: text, fontSize: 14, fontWeight: 600, cursor: "pointer", borderRadius: 2,
 };
 const Nudge = ({ label, onDec, onInc, value }) => (
   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-    <span style={{ fontSize: 11.5, color: "#5B6B75", width: 74 }}>{label}</span>
+    <span style={{ fontSize: 11.5, color: "var(--muted)", width: 74 }}>{label}</span>
     <button onClick={onDec} style={nudgeBtn}>−5</button>
     <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, width: 56, textAlign: "center" }}>{value}</span>
     <button onClick={onInc} style={nudgeBtn}>+5</button>
@@ -1856,8 +1864,8 @@ const WeekStrip = ({ segs, day, onPick }) => (
           border: on ? `1px solid ${ink}` : "1px solid transparent",
           background: sg ? "rgba(15,123,122,0.08)" : "transparent",
         }}>
-          <div style={{ fontSize: 10, fontWeight: 600, color: sg ? ink : "#B9C6CC" }}>{d.slice(0, 3).toUpperCase()}</div>
-          <div style={{ fontSize: 10.5, fontVariantNumeric: "tabular-nums", color: sg ? "#41525C" : "#B9C6CC" }}>
+          <div style={{ fontSize: 10, fontWeight: 600, color: sg ? ink : "var(--border-input)" }}>{d.slice(0, 3).toUpperCase()}</div>
+          <div style={{ fontSize: 10.5, fontVariantNumeric: "tabular-nums", color: sg ? "var(--text-mid)" : "var(--border-input)" }}>
             {sg ? `${fmt(sg.s)}–${fmt(sg.e)}` : "OFF"}
           </div>
         </div>
@@ -1926,14 +1934,14 @@ function Sketcher({ raw, setRaw, trips }) {
   const area = `${path} L${x(39).toFixed(1)},${y(0)} L${x(0).toFixed(1)},${y(0)} Z`;
   const peakK = raw.indexOf(Math.max(...raw));
   return (
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", touchAction: "none", cursor: "crosshair", background: "#FBFCFC", border: "1px solid #E2E8EA", borderRadius: 2 }}
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", touchAction: "none", cursor: "crosshair", background: "var(--tint-neutral)", border: "1px solid var(--border)", borderRadius: 2 }}
       onPointerDown={(e) => { dragging.current = true; e.currentTarget.setPointerCapture(e.pointerId); paint(e); }}
       onPointerMove={(e) => { if (dragging.current) paint(e); }}
       onPointerUp={() => { dragging.current = false; }}>
       {[6, 9, 12, 15, 18, 21, 24].map((h) => (
         <g key={h}>
           <line x1={x((h * 60 - 300) / 30)} y1={8} x2={x((h * 60 - 300) / 30)} y2={H - PADB} stroke="#EBF0F2" />
-          <text x={x((h * 60 - 300) / 30)} y={H - 7} fontSize={11} fill="#8899A3" textAnchor="middle">{h}:00</text>
+          <text x={x((h * 60 - 300) / 30)} y={H - 7} fontSize={11} fill="var(--muted-light)" textAnchor="middle">{h}:00</text>
         </g>
       ))}
       {[25, 50, 75, 100].map((v) => (
@@ -1944,7 +1952,7 @@ function Sketcher({ raw, setRaw, trips }) {
       {raw.map((v, k) => (
         <circle key={k} cx={x(k)} cy={y(v)} r={k === peakK ? 5 : 3.5} fill={k === peakK ? "#C0392B" : "#D98324"} stroke="#fff" strokeWidth={1.2} />
       ))}
-      <text x={PADL} y={16} fontSize={11} fill="#5B6B75">relative demand — drag or paint across the curve</text>
+      <text x={PADL} y={16} fontSize={11} fill="var(--muted)">relative demand — drag or paint across the curve</text>
     </svg>
   );
 }
@@ -1963,21 +1971,21 @@ function ActualCurve({ ev, label }) {
   const tripsVal = (v) => { const t = v / 2; return t >= 20 ? Math.round(t).toString() : t.toFixed(1); };
   const peakLeft = peakI > N * 0.75; // flip the peak label when the dot is near the right edge
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: "#FBFCFC", border: "1px solid #E2E8EA", borderRadius: 2 }}>
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: "var(--tint-neutral)", border: "1px solid var(--border)", borderRadius: 2 }}>
       {[6, 9, 12, 15, 18, 21, 24].map((h) => {
         const i = Math.round((h * 60 - T0) / 5);
         if (i < 0 || i >= N) return null;
         return (
           <g key={h}>
             <line x1={x(i)} y1={8} x2={x(i)} y2={H - PADB} stroke="#EBF0F2" />
-            <text x={x(i)} y={H - 7} fontSize={11} fill="#8899A3" textAnchor="middle">{h}:00</text>
+            <text x={x(i)} y={H - 7} fontSize={11} fill="var(--muted-light)" textAnchor="middle">{h}:00</text>
           </g>
         );
       })}
       {[25, 50, 75, 100].map((pct) => (
         <g key={pct}>
           <line x1={PADL} y1={y(maxV * pct / 100)} x2={W - 8} y2={y(maxV * pct / 100)} stroke="#F0F4F5" />
-          <text x={PADL - 4} y={y(maxV * pct / 100) + 3.5} fontSize={10} fill="#8899A3" textAnchor="end">{tripsVal(maxV * pct / 100)}</text>
+          <text x={PADL - 4} y={y(maxV * pct / 100) + 3.5} fontSize={10} fill="var(--muted-light)" textAnchor="end">{tripsVal(maxV * pct / 100)}</text>
         </g>
       ))}
       <path d={area} fill={demandAmber} fillOpacity={0.14} />
@@ -1986,8 +1994,8 @@ function ActualCurve({ ev, label }) {
       <text x={x(peakI) + (peakLeft ? -9 : 9)} y={y(ev[peakI]) - 6} fontSize={11} fontWeight={700} fill="#C0392B" textAnchor={peakLeft ? "end" : "start"}>
         {tripsVal(ev[peakI])} trips / 5 min
       </text>
-      <text x={PADL} y={16} fontSize={11} fill="#5B6B75">{label} · axis in trips per 5-minute slot</text>
-      <text x={W - 8} y={16} fontSize={13} fontWeight={700} fill="#182430" textAnchor="end">{totalTrips.toLocaleString()} passenger trips today</text>
+      <text x={PADL} y={16} fontSize={11} fill="var(--muted)">{label} · axis in trips per 5-minute slot</text>
+      <text x={W - 8} y={16} fontSize={13} fontWeight={700} fill={text} textAnchor="end">{totalTrips.toLocaleString()} passenger trips today</text>
     </svg>
   );
 }
@@ -2129,7 +2137,7 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
             const dutyTxt = onPointClick && r.onDuty != null ? ` · ${r.onDuty} run${r.onDuty === 1 ? "" : "s"} on duty — click to mark this time` : "";
             return `${l} · ${evTxt} ${unitLabel}${sugTxt}${impTxt}${dutyTxt}`;
           }}
-          contentStyle={{ fontSize: 12, border: "1px solid #D7DFE2" }} />
+          contentStyle={{ fontSize: 12, border: "1px solid var(--border-light)" }} />
         <Legend wrapperStyle={{ fontSize: 12 }} />
         <Area type="stepAfter" dataKey="target" name={targetName} stroke={targetInk} strokeWidth={1.5} fill="#233746" fillOpacity={0.07} tooltipType={slim ? "none" : undefined} />
         <Area type="stepAfter" dataKey="gap" name="Gap" stroke="none" fill={gapRed} fillOpacity={0.22} legendType="none" />
@@ -2145,7 +2153,7 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         {showBookout && RAW.bookout[day] &&
           <Line type="monotone" dataKey="bookout" name="Observed (sample)" stroke={bookoutViolet} strokeWidth={1.6} strokeDasharray="5 4" dot={false} connectNulls />}
         {showProductivity &&
-          <Line type="stepAfter" dataKey="reqPat" name="Required (your deployment pattern)" stroke="#185FA5" strokeWidth={1.8} strokeDasharray="6 3" dot={false} connectNulls />}
+          <Line type="stepAfter" dataKey="reqPat" name="Required (your deployment pattern)" stroke="var(--text-blue)" strokeWidth={1.8} strokeDasharray="6 3" dot={false} connectNulls />}
         {showProductivity &&
           <Line type="stepAfter" dataKey="impliedVeh" name="Required (demand shape, capped)" stroke="#B0455E" strokeWidth={1.8} dot={false} connectNulls />}
         {extraSeries && extraSeries.map((s) => (
@@ -2158,6 +2166,12 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
 
 /* ---------- main ---------- */
 export default function App({ onHome }) {
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem("theme");
+    if (saved === "light" || saved === "dark") return saved;
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
+  useEffect(() => { localStorage.setItem("theme", theme); }, [theme]);
   const [tab, setTab] = useState("rules");
   const [tourStep, setTourStep] = useState(null); // null = inactive; index into TOUR_STEPS
   // the tour drives the real tab state so each step spotlights the actual live element,
@@ -3371,27 +3385,56 @@ export default function App({ onHome }) {
   const weekDelta = (eng.weekScore - base.weekScore) * 100;
 
   return (
-    <div style={{ minHeight: "100vh", background: paper, color: ink, fontFamily: "'Inter', system-ui, sans-serif" }}>
+    <div data-theme={theme} style={{ minHeight: "100vh", background: paper, color: text, fontFamily: "'Inter', system-ui, sans-serif" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&display=swap');
-        .paddle { cursor:pointer; border:1px solid #D7DFE2; background:#fff; padding:7px 3px 5px; text-align:center; user-select:none; min-width:0; }
+        :root {
+          --paper: #F4F6F7; --card: #FFFFFF; --chrome: #182430; --text: #182430;
+          --demand-amber: #D98324; --target-ink: #233746; --supply-teal: #0F7B7A;
+          --gap-red: #C0392B; --bookout-violet: #6C5B9E; --sample-gray: #5B6B75;
+          --border: #E2E8EA; --border-light: #D7DFE2; --border-input: #B9C6CC;
+          --muted: #5B6B75; --muted-light: #8899A3; --text-mid: #41525C; --text-dark: #33434D;
+          --row-border: #E7EDEF; --track-bg: #EFF3F4;
+          --tint-neutral: #FBFCFC; --tint-neutral-b: #EEF4F5;
+          --tint-teal-a: #EAF4F3; --tint-teal-b: #F7FAF9; --tint-teal-c: #F2F8F7; --tint-teal-d: #EAF3F3;
+          --tint-amber-a: #FBF1E6; --tint-amber-b: #FDF3E7; --tint-amber-c: #FDF8EF;
+          --tint-red-a: #FBEDEB; --tint-red-b: #FDF6F5;
+          --tint-blue-bg: #EAF1FB; --border-blue: #BBD3EC; --text-blue: #185FA5;
+          --border-teal-b: #DCE7E4; --row-border-b: #EDF1F3;
+        }
+        [data-theme="dark"] {
+          --paper: #12181D; --card: #1B242B; --chrome: #0B1014; --text: #E7ECEF;
+          --demand-amber: #E8A552; --target-ink: #8CA3B8; --supply-teal: #2FB3AC;
+          --gap-red: #E27A70; --bookout-violet: #A594D1; --sample-gray: #8B9AA5;
+          --border: #2A343C; --border-light: #333F47; --border-input: #3A454D;
+          --muted: #93A2AC; --muted-light: #6B7882; --text-mid: #A9B6BF; --text-dark: #C3CDD4;
+          --row-border: #263038; --track-bg: #202A31;
+          --tint-neutral: #1B242B; --tint-neutral-b: #1C262B;
+          --tint-teal-a: #16292A; --tint-teal-b: #172227; --tint-teal-c: #142523; --tint-teal-d: #132423;
+          --tint-amber-a: #2C2211; --tint-amber-b: #2E2410; --tint-amber-c: #2A2410;
+          --tint-red-a: #2E1714; --tint-red-b: #2A1613;
+          --tint-blue-bg: #16222E; --border-blue: #2C4A66; --text-blue: #6FA8DC;
+          --border-teal-b: #2A3B3C; --row-border-b: #263038;
+        }
+        body { background: var(--paper); }
+        .paddle { cursor:pointer; border:1px solid var(--border-light); background:var(--card); padding:7px 3px 5px; text-align:center; user-select:none; min-width:0; }
         .paddle.on { background:${ink}; color:#fff; border-color:${ink}; }
-        .tabbtn { cursor:pointer; padding:9px 16px; border:1px solid #D7DFE2; background:#fff; font-family:'Barlow Condensed',sans-serif; font-size:17px; font-weight:600; letter-spacing:.03em; color:${ink}; }
+        .tabbtn { cursor:pointer; padding:9px 16px; border:1px solid var(--border-light); background:var(--card); font-family:'Barlow Condensed',sans-serif; font-size:17px; font-weight:600; letter-spacing:.03em; color:${text}; }
         .tabbtn.on { background:${ink}; color:#fff; border-color:${ink}; }
         input[type=checkbox] { accent-color:${supplyTeal}; width:16px; height:16px; }
         input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
-        select { padding:6px 8px; border:1px solid #B9C6CC; background:#fff; color:${ink}; font-size:13px; border-radius:2px; }
-        table.shares td, table.shares th { padding:5px 8px; font-size:12.5px; border-bottom:1px solid #E7EDEF; text-align:right; }
-        table.shares th { text-transform:uppercase; letter-spacing:.06em; font-size:10.5px; color:#5B6B75; }
+        select { padding:6px 8px; border:1px solid var(--border-input); background:var(--card); color:${text}; font-size:13px; border-radius:2px; }
+        table.shares td, table.shares th { padding:5px 8px; font-size:12.5px; border-bottom:1px solid var(--row-border); text-align:right; }
+        table.shares th { text-transform:uppercase; letter-spacing:.06em; font-size:10.5px; color:var(--muted); }
         table.shares td:first-child, table.shares th:first-child { text-align:left; }
         .ganttrow { display:flex; align-items:center; gap:6px; height:20px; user-select:none; }
         .glabel { font-size:10.5px; width:118px; flex:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums; }
-        .gtrack { position:relative; flex:1; height:14px; background:#EFF3F4; }
+        .gtrack { position:relative; flex:1; height:14px; background:var(--track-bg); }
         .gbar { position:absolute; top:0; height:14px; border-radius:2px; cursor:grab; touch-action:pan-y; }
         .gbrk { position:absolute; top:0; height:14px; background:repeating-linear-gradient(45deg,#fff,#fff 3px,#AEBAC0 3px,#AEBAC0 6px); border-left:1px solid rgba(0,0,0,.35); border-right:1px solid rgba(0,0,0,.35); cursor:grab; touch-action:pan-y; z-index:1; }
         .gbar.lifted, .gbrk.lifted { transform:scaleY(1.35); box-shadow:0 2px 6px rgba(0,0,0,.35); z-index:2; cursor:grabbing; }
         .ghandle { position:absolute; top:-2px; height:18px; width:7px; cursor:col-resize; touch-action:pan-y; z-index:3; }
-        .daychip { cursor:pointer; padding:5px 8px; border:1px solid #B9C6CC; font-size:11.5px; border-radius:2px; user-select:none; }
+        .daychip { cursor:pointer; padding:5px 8px; border:1px solid var(--border-input); font-size:11.5px; border-radius:2px; user-select:none; }
         .daychip.on { background:${supplyTeal}; color:#fff; border-color:${supplyTeal}; }
         .kpistrip { position:sticky; top:0; z-index:5; display:flex; gap:14px; align-items:center; flex-wrap:wrap; background:${ink}; color:#fff; padding:8px 14px; margin-bottom:12px; }
         .kpi { display:flex; flex-direction:column; }
@@ -3440,6 +3483,9 @@ export default function App({ onHome }) {
             onClick={() => setTourStep(0)}>
             ✦ Take a tour
           </button>
+          <button style={nudgeBtn} onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode">
+            {theme === "dark" ? "☀ Light" : "☾ Dark"}
+          </button>
           <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={exportBoard}>Export Completed Signup</button>
           <button style={nudgeBtn} onClick={saveProject}>Save project</button>
           <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Load project</button>
@@ -3473,15 +3519,15 @@ export default function App({ onHome }) {
               {PHASES.map((phase, pi) => (
                 <React.Fragment key={phase.label}>
                   <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                    <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 10.5, fontWeight: 600, letterSpacing: ".06em", textTransform: "uppercase", color: "#5B6B75" }}>
+                    <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 10.5, fontWeight: 600, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--muted)" }}>
                       {phase.label}
                     </div>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                       {phase.steps.map((s) => {
                         const selected = tab === s.key;
                         const tint = selected ? {}
-                          : s.done === true ? { background: "#EAF4F3", borderColor: supplyTeal }
-                          : s.done === false ? { background: "#FBF1E6", borderColor: demandAmber }
+                          : s.done === true ? { background: "var(--tint-teal-a)", borderColor: supplyTeal }
+                          : s.done === false ? { background: "var(--tint-amber-a)", borderColor: demandAmber }
                           : {};
                         return (
                           <div key={s.key} className={"tabbtn" + (selected ? " on" : "")} style={tint}
@@ -3494,7 +3540,7 @@ export default function App({ onHome }) {
                     </div>
                   </div>
                   {pi < PHASES.length - 1 && (
-                    <div style={{ alignSelf: "center", fontSize: 16, color: "#B9C6CC", marginTop: 12 }}>→</div>
+                    <div style={{ alignSelf: "center", fontSize: 16, color: "var(--border-input)", marginTop: 12 }}>→</div>
                   )}
                 </React.Fragment>
               ))}
@@ -3507,7 +3553,7 @@ export default function App({ onHome }) {
             <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
               <button style={{ ...nudgeBtn, opacity: hist.length ? 1 : 0.4 }} onClick={undo} disabled={!hist.length}>↶ Undo</button>
               <button style={{ ...nudgeBtn, opacity: future.length ? 1 : 0.4 }} onClick={redo} disabled={!future.length}>↷ Redo</button>
-              <button style={{ ...nudgeBtn, borderColor: changedCount ? demandAmber : "#B9C6CC", opacity: changedCount ? 1 : 0.4 }} onClick={resetAll} disabled={!changedCount}>Reset signup</button>
+              <button style={{ ...nudgeBtn, borderColor: changedCount ? demandAmber : "var(--border-input)", opacity: changedCount ? 1 : 0.4 }} onClick={resetAll} disabled={!changedCount}>Reset signup</button>
               {flagCount > 0 && (
                 <button style={{ ...nudgeBtn, background: gapRed, color: "#fff", borderColor: gapRed }} onClick={fixAll}>
                   Fix all flags ({flagCount})
@@ -3520,7 +3566,7 @@ export default function App({ onHome }) {
             </div>
 
             {showDiff && changedCount > 0 && (
-              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 12, fontSize: 12.5 }}>
+              <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 12, fontSize: 12.5 }}>
                 {boardDiff.modified.length > 0 && (() => {
                   const startDeltas = boardDiff.modified.filter(({ seg, orig }) => seg.s !== orig.s).map(({ seg, orig }) => Math.abs(seg.s - orig.s));
                   const brkChanged = boardDiff.modified.filter(({ seg, orig }) => JSON.stringify(seg.b) !== JSON.stringify(orig.b)).length;
@@ -3529,7 +3575,7 @@ export default function App({ onHome }) {
                   const avg = startDeltas.length ? Math.round(startDeltas.reduce((a, b) => a + b, 0) / startDeltas.length) : 0;
                   const max = startDeltas.length ? Math.max(...startDeltas) : 0;
                   return (
-                    <div style={{ background: "#F7FAF9", border: "1px solid #DCE7E4", padding: "8px 12px", marginBottom: 10, fontSize: 12.5 }}>
+                    <div style={{ background: "var(--tint-teal-b)", border: "1px solid var(--border-teal-b)", padding: "8px 12px", marginBottom: 10, fontSize: 12.5 }}>
                       <b>Summary vs loaded signup</b> (each change's ±cov = weekly coverage impact vs undoing just that change):{" "}
                       {startDeltas.length > 0 && `${startDeltas.length} report-time change${startDeltas.length === 1 ? "" : "s"} (avg ${avg} min, largest ${max} min)`}
                       {startDeltas.length > 0 && (brkChanged > 0 || retyped > 0 || daysChanged > 0) && " · "}
@@ -3598,7 +3644,7 @@ export default function App({ onHome }) {
             phones the pinned stack would swallow most of the viewport, so .envlock/.seleditor/
             .kpistrip all fall back to normal scrolling under the 640px breakpoint) */}
         <div data-tour="envelope" className="envlock" style={{ position: "sticky", top: 0, zIndex: 10, background: paper, marginBottom: 12 }}>
-          <div style={{ border: "1px solid #E2E8EA" }}>
+          <div style={{ border: "1px solid var(--border)" }}>
             <div style={{ background: ink, color: "#fff", padding: "10px 14px" }}>
               <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 600 }}>SIGNUP PACKAGE</div>
@@ -3662,7 +3708,7 @@ export default function App({ onHome }) {
 
         {tab === "signup" && (
           <>
-            <div data-tour="signup-source" style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14 }}>
+            <div data-tour="signup-source" style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14 }}>
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>Signup source</div>
               <span style={{ fontSize: 13.5 }}>
                 Working from: <b>{signupSource === "uploaded" ? "your uploaded signup" : "Sample Signup"}</b>
@@ -3674,11 +3720,11 @@ export default function App({ onHome }) {
                   style={{ display: "none" }}
                   onChange={(e) => { if (e.target.files && e.target.files[0]) uploadSignup(e.target.files[0]); e.target.value = ""; }} />
               </div>
-              <div style={{ fontSize: 12, color: "#5B6B75", flexBasis: "100%" }}>
+              <div style={{ fontSize: 12, color: "var(--muted)", flexBasis: "100%" }}>
                 Load a real current or previous signup to work off of instead of Sample Signup — the coverage-score deltas shown throughout the tool ("vs signed") will measure improvement against it instead of synthetic data. Download the template, fill in your real shifts (one row per shift, or one row per day-variant time pattern), and upload it. No operator names or badge numbers are read or stored — only shift structure.
               </div>
               {signupUploadResult && (
-                <div style={{ background: "#F2F8F7", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
+                <div style={{ background: "var(--tint-teal-c)", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
                   <b>Upload complete:</b> now working from {signupUploadResult.shifts} shifts ({signupUploadResult.rows} rows) — this is also your new comparison baseline.
                   {(signupUploadResult.dateSpecificSkipped > 0 || signupUploadResult.footerRowsSkipped > 0 || signupUploadResult.unrecognizedTypes.length > 0 || signupUploadResult.exceptionDates > 0 || signupUploadResult.autoClassified > 0 || signupUploadResult.unclassified > 0) && <>{" "}
                     {signupUploadResult.autoClassified > 0 && `${signupUploadResult.autoClassified} shift(s) had no classification and were auto-matched to your Rules windows from their times${signupUploadResult.ambiguousClassified > 0 ? ` (${signupUploadResult.ambiguousClassified} fit more than one type — the tightest window was chosen; review in Shift Builder)` : ""}. `}
@@ -3693,7 +3739,7 @@ export default function App({ onHome }) {
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(320px,1fr))", gap: 14 }}>
-              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
+              <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
                   Shifts & hours by day
                 </div>
@@ -3707,7 +3753,7 @@ export default function App({ onHome }) {
                         <td>{signupStats.perDay[d].hours.toFixed(0)}</td>
                       </tr>
                     ))}
-                    <tr style={{ fontWeight: 700, borderTop: "1px solid #E7EDEF" }}>
+                    <tr style={{ fontWeight: 700, borderTop: "1px solid var(--row-border)" }}>
                       <td>Total</td>
                       <td>{DAYS.reduce((n, d) => n + signupStats.perDay[d].shifts.size, 0)}</td>
                       <td>{DAYS.reduce((n, d) => n + signupStats.perDay[d].hours, 0).toFixed(0)}</td>
@@ -3715,7 +3761,7 @@ export default function App({ onHome }) {
                   </tbody>
                 </table>
               </div>
-              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
+              <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
                   Weekly hours by shift type
                 </div>
@@ -3728,13 +3774,13 @@ export default function App({ onHome }) {
                         <td>{hrs.toFixed(0)}</td>
                       </tr>
                     ))}
-                    <tr style={{ fontWeight: 700, borderTop: "1px solid #E7EDEF" }}>
+                    <tr style={{ fontWeight: 700, borderTop: "1px solid var(--row-border)" }}>
                       <td>Total planned weekly hours</td>
                       <td>{Object.values(signupStats.byType).reduce((a, b) => a + b, 0).toFixed(0)}</td>
                     </tr>
                   </tbody>
                 </table>
-                <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10 }}>
                   These figures reflect the loaded baseline (what you started with), not live edits made elsewhere in the tool.
                 </div>
               </div>
@@ -3744,7 +3790,7 @@ export default function App({ onHome }) {
 
         {tab === "demand" && (
           <>
-            <div data-tour="demand-source" style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14 }}>
+            <div data-tour="demand-source" style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14 }}>
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>Demand source</div>
               <label style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
                 <input type="radio" checked={demSource === "imported"} onChange={() => setDemSource("imported")} />
@@ -3765,11 +3811,11 @@ export default function App({ onHome }) {
                   style={{ display: "none" }}
                   onChange={(e) => { if (e.target.files && e.target.files[0]) uploadDemand(e.target.files[0]); e.target.value = ""; }} />
               </div>
-              <div style={{ fontSize: 12, color: "#5B6B75", flexBasis: "100%" }}>
+              <div style={{ fontSize: 12, color: "var(--muted)", flexBasis: "100%" }}>
                 No data export needed to get started: tell the tool roughly how many trips you run, then shape the curve by feel. Every screen scores against whichever source is active, and the badge in the header always shows which one that is. Or download the template, fill in your real 5-minute pickup/dropoff counts, and upload it — without losing anything you've already set up.
               </div>
               {demUploadResult && (
-                <div style={{ background: "#F2F8F7", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
+                <div style={{ background: "var(--tint-teal-c)", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
                   <b>Upload complete:</b> now scoring against your uploaded data. Trip counts for each day below were recalculated from your file.
                   {demUploadResult.paddedRows > 0 || demUploadResult.coercedCells > 0 || demUploadResult.extraRowsIgnored > 0
                     ? <>{" "}{demUploadResult.paddedRows > 0 && `${demUploadResult.paddedRows} missing row(s) padded with 0. `}
@@ -3779,7 +3825,7 @@ export default function App({ onHome }) {
                 </div>
               )}
               {pastedDays.length > 0 && (
-                <div style={{ background: "#FDF3E7", border: `1px solid ${demandAmber}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
+                <div style={{ background: "var(--tint-amber-b)", border: `1px solid ${demandAmber}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
                   <b>Inflated data detected on {pastedDays.join(", ")}:</b> most of the active 5-minute
                   slots on {pastedDays.length > 1 ? "these days" : "this day"} repeat the same
                   values in runs of 6 or more — the usual sign that half-hourly totals were pasted into every
@@ -3796,7 +3842,7 @@ export default function App({ onHome }) {
                 </div>
               )}
               {demNormalized && (
-                <div style={{ background: "#F2F8F7", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
+                <div style={{ background: "var(--tint-teal-c)", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12.5, flexBasis: "100%" }}>
                   This uploaded file was converted from 30-minute totals (each value ÷ 6) — day totals now reflect true trip
                   counts. If your cycle time or share was calibrated against the raw file, recalibrate on the Rules tab.
                 </div>
@@ -3804,7 +3850,7 @@ export default function App({ onHome }) {
             </div>
 
             {demSource !== "sketched" && (
-              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14 }}>
+              <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14 }}>
                 <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
                   {DAYS.map((d) => (
                     <div key={d} className={"tabbtn" + (day === d ? " on" : "")} style={{ padding: "6px 12px", fontSize: 13 }}
@@ -3812,7 +3858,7 @@ export default function App({ onHome }) {
                       {d.slice(0, 3).toUpperCase()}
                     </div>
                   ))}
-                  <span style={{ marginLeft: "auto", fontSize: 12.5, color: "#41525C" }}>
+                  <span style={{ marginLeft: "auto", fontSize: 12.5, color: "var(--text-mid)" }}>
                     Scoring against {DEM_SOURCE_LABEL[demSource].toLowerCase()}
                   </span>
                 </div>
@@ -3826,7 +3872,7 @@ export default function App({ onHome }) {
                     if (SLOT(i) < 720) am += ev[i];
                   }
                   return (
-                    <div style={{ fontSize: 12.5, color: "#41525C", marginTop: 8 }}>
+                    <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginTop: 8 }}>
                       Peak {fmt(SLOT(pkI))} · {tot > 0 ? ((am / tot) * 100).toFixed(0) : 0}% of demand before noon · {Math.round(tot / 2).toLocaleString()} implied trips
                       {glob.demandShare < 100 ? ` (all providers; this signup ≈ ${Math.round((tot / 2) * (glob.demandShare / 100)).toLocaleString()} at its ${glob.demandShare}% share)` : ""} · {day}
                     </div>
@@ -3836,12 +3882,12 @@ export default function App({ onHome }) {
             )}
 
             {demSource === "sketched" && (
-              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
-                <div style={{ fontSize: 12.5, color: "#5B6B75", marginBottom: 10 }}>
+              <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
+                <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 10 }}>
                   Sketch a typical day's shape, then set its trip count. Choose how finely to split the week below — a shared weekday pattern, a shared weekend pattern, or every day on its own. Each trip counts as a pickup and a drop-off (×2) in the coverage score.
                 </div>
                 <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-                  <span style={{ fontSize: 11.5, color: "#5B6B75", alignSelf: "center" }}>Split the week:</span>
+                  <span style={{ fontSize: 11.5, color: "var(--muted)", alignSelf: "center" }}>Split the week:</span>
                   {Object.entries(SKETCH_MODE_LABELS).map(([m, label]) => (
                     <div key={m} className={"tabbtn" + (sketchMode === m ? " on" : "")} style={{ padding: "4px 10px", fontSize: 12.5 }}
                       onClick={() => setSketchMode(m)}>
@@ -3865,7 +3911,7 @@ export default function App({ onHome }) {
                 <Sketcher raw={sketch[repDay]} trips={trips[repDay]} setRaw={setGroupSketch} />
 
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
-                  <span style={{ fontSize: 12, color: "#5B6B75" }}>Start from:</span>
+                  <span style={{ fontSize: 12, color: "var(--muted)" }}>Start from:</span>
                   <button style={nudgeBtn} onClick={() => setGroupSketch([...TPL.weekday])}>Weekday pattern</button>
                   <button style={nudgeBtn} onClick={() => setGroupSketch([...TPL.hump])}>Midday hump</button>
                   <button style={nudgeBtn} onClick={() => setGroupSketch([...TPL.flat])}>Flat</button>
@@ -3878,7 +3924,7 @@ export default function App({ onHome }) {
                       if (SLOT(i) < 720) am += ev[i];
                     }
                     return (
-                      <span style={{ marginLeft: "auto", fontSize: 12.5, color: "#41525C" }}>
+                      <span style={{ marginLeft: "auto", fontSize: 12.5, color: "var(--text-mid)" }}>
                         Peak {fmt(SLOT(pkI))} · {tot > 0 ? ((am / tot) * 100).toFixed(0) : 0}% of demand before noon · applies to {activeGroup.days.map((d) => d.slice(0, 3)).join(", ")}
                       </span>
                     );
@@ -3891,28 +3937,28 @@ export default function App({ onHome }) {
 
         {tab === "signup-builder" && (
           <>
-            <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14 }}>
+            <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14 }}>
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 6 }}>
                 Start from your uploaded signup
               </div>
               {signupSource === "uploaded" ? (
                 <>
-                  <div style={{ fontSize: 13, color: "#41525C" }}>
+                  <div style={{ fontSize: 13, color: "var(--text-mid)" }}>
                     Your working signup already reflects the upload{changedCount > 0 ? ` — ${changedCount} local change${changedCount > 1 ? "s" : ""} since then` : " — no local changes yet"}.
                   </div>
-                  <button style={{ ...nudgeBtn, marginTop: 8, borderColor: changedCount ? demandAmber : "#B9C6CC", opacity: changedCount ? 1 : 0.5 }} disabled={!changedCount}
+                  <button style={{ ...nudgeBtn, marginTop: 8, borderColor: changedCount ? demandAmber : "var(--border-input)", opacity: changedCount ? 1 : 0.5 }} disabled={!changedCount}
                     onClick={resetAll}>
                     Reset to the uploaded signup
                   </button>
                 </>
               ) : (
-                <div style={{ fontSize: 13, color: "#41525C" }}>
+                <div style={{ fontSize: 13, color: "var(--text-mid)" }}>
                   Still working from Sample Signup — upload your real signup on the SIGNUP tab to promote it as your working signup.
                 </div>
               )}
             </div>
 
-            <div data-tour="generate-signup" style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14 }}>
+            <div data-tour="generate-signup" style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>
                   Generate a starting signup from the rules and demand
@@ -3945,13 +3991,13 @@ export default function App({ onHome }) {
                   }}>
                   {buildBusy ? "Generating…" : "Generate signup"}
                 </button>
-                <button style={{ ...nudgeBtn, borderColor: "#185FA5", color: "#185FA5", fontWeight: 600 }} disabled={buildBusy || optRunning}
+                <button style={{ ...nudgeBtn, borderColor: "var(--text-blue)", color: "var(--text-blue)", fontWeight: 600 }} disabled={buildBusy || optRunning}
                   onClick={() => { setBuildN(reqSize.packages); setSizeInfo(reqSize); }}>
                   Size to requirement ({reqSize.packages})
                 </button>
               </div>
               {sizeInfo && (
-                <div style={{ marginTop: 10, padding: "9px 12px", background: "#EAF1FB", border: "1px solid #BBD3EC", fontSize: 12.5, color: "#185FA5", lineHeight: 1.5 }}>
+                <div style={{ marginTop: 10, padding: "9px 12px", background: "var(--tint-blue-bg)", border: "1px solid var(--border-blue)", fontSize: 12.5, color: "var(--text-blue)", lineHeight: 1.5 }}>
                   <b>Sized to requirement:</b> the week's demand (share {glob.demandShare}%) ÷ productivity (cycle {glob.avgCycleTime} min), redistributed under the fleet cap of {glob.maxFleet}, totals <b>{sizeInfo.hours.toLocaleString()}</b> vehicle-hours/week at a peak of <b>{sizeInfo.peak}</b> — ÷ 40 paid hours per package = <b>{sizeInfo.packages}</b> packages. Count set{sizeInfo.packages !== buildN ? ` (currently ${buildN})` : ""} — click <b>Generate signup</b>.{ptEnabled ? " Part-time shifts add capacity on top, so trim the count if you keep them." : ""}
                 </div>
               )}
@@ -3959,7 +4005,7 @@ export default function App({ onHome }) {
                 <input type="checkbox" checked={followBaselinePattern} onChange={(e) => setFollowBaselinePattern(e.target.checked)} />
                 Follow existing shift-type pattern (recommended when working from an uploaded signup)
               </label>
-              <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 6 }}>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>
                 Builds whole weekly packages: each placement chooses a shift type, a start time on the 5-minute grid, and a consecutive days-off pattern together, so every generated shift is signable by construction — consistent report times all week, legal rest, no orphan runs. Fills at least the minimum 10-hour shifts set in Rules and never exceeds the maximum, choosing 8-hour work for the rest. Break-taking types are explored at every legal length (30 min to 4 h) and position, so long midday breaks that stretch a shift across both peaks are found automatically. The fleet cap, minimum-vehicle floor, sign-in stagger, and pull-out/pull-in lead time (Rules → Deadhead & productivity) steer every placement — a shift may start before the first trip it serves and end after the last, to allow for that lead time. Set the count to your designed-run envelope ({designed} currently). Loading a build replaces the current signup — save your project first. With "Follow existing shift-type pattern" checked, new shifts fill one baseline shift-type block completely before moving to the next, in the same order as your uploaded signup, numbered to continue past its highest shift number.
               </div>
             </div>
@@ -3972,7 +4018,7 @@ export default function App({ onHome }) {
               const eightHour = buildResult.packages - buildResult.used10 - ptBuilt;
               const mixRows = Object.entries(buildResult.mix).sort((a, b) => b[1] - a[1]);
               return (
-                <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", maxWidth: 460, marginBottom: 14 }}>
+                <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", maxWidth: 460, marginBottom: 14 }}>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "0 0 10px" }}>
                     <Stat label="Weekly coverage score" value={`${(buildResult.score * 100).toFixed(1)}%`} sub={`${(buildResult.evaluated || 0).toLocaleString()} placements evaluated`} tone={supplyTeal} />
                     <Stat label="Paid hours / week" value={buildResult.paidHours.toFixed(0)} tone={targetInk} />
@@ -3980,16 +4026,16 @@ export default function App({ onHome }) {
                     <Stat label="8-hour packages" value={eightHour} tone={supplyTeal} />
                     {ptBuilt > 0 && <Stat label="Part-time shifts" value={ptBuilt} tone={targetInk} />}
                   </div>
-                  <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", color: "#8899A3", marginBottom: 4 }}>
+                  <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", color: "var(--muted-light)", marginBottom: 4 }}>
                     Shift classifications built
                   </div>
                   <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5 }}>
                     <thead>
-                      <tr style={{ borderBottom: "1px solid #E7EDEF" }}>
-                        <th style={{ textAlign: "left", padding: "2px 6px 4px 0", color: "#5B6B75", fontWeight: 600 }}>Type</th>
-                        <th style={{ textAlign: "right", padding: "2px 6px 4px", color: "#5B6B75", fontWeight: 600 }}>Count</th>
-                        <th style={{ textAlign: "right", padding: "2px 6px 4px", color: "#5B6B75", fontWeight: 600 }}>Hours ea.</th>
-                        <th style={{ textAlign: "right", padding: "2px 0 4px 6px", color: "#5B6B75", fontWeight: 600 }}>% of built</th>
+                      <tr style={{ borderBottom: "1px solid var(--row-border)" }}>
+                        <th style={{ textAlign: "left", padding: "2px 6px 4px 0", color: "var(--muted)", fontWeight: 600 }}>Type</th>
+                        <th style={{ textAlign: "right", padding: "2px 6px 4px", color: "var(--muted)", fontWeight: 600 }}>Count</th>
+                        <th style={{ textAlign: "right", padding: "2px 6px 4px", color: "var(--muted)", fontWeight: 600 }}>Hours ea.</th>
+                        <th style={{ textAlign: "right", padding: "2px 0 4px 6px", color: "var(--muted)", fontWeight: 600 }}>% of built</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -3999,11 +4045,11 @@ export default function App({ onHome }) {
                             <span style={{ fontSize: 11.5, padding: "1px 6px", background: tColor(t), color: "#fff", borderRadius: 2, fontWeight: 600 }}>{t}</span>
                           </td>
                           <td style={{ textAlign: "right", padding: "2px 6px", fontVariantNumeric: "tabular-nums" }}>{n}</td>
-                          <td style={{ textAlign: "right", padding: "2px 6px", color: "#5B6B75", fontVariantNumeric: "tabular-nums" }}>{allRules[t] ? (allRules[t].work / 60).toFixed(0) : "—"}</td>
-                          <td style={{ textAlign: "right", padding: "2px 0 2px 6px", color: "#5B6B75", fontVariantNumeric: "tabular-nums" }}>{((n / buildResult.packages) * 100).toFixed(0)}%</td>
+                          <td style={{ textAlign: "right", padding: "2px 6px", color: "var(--muted)", fontVariantNumeric: "tabular-nums" }}>{allRules[t] ? (allRules[t].work / 60).toFixed(0) : "—"}</td>
+                          <td style={{ textAlign: "right", padding: "2px 0 2px 6px", color: "var(--muted)", fontVariantNumeric: "tabular-nums" }}>{((n / buildResult.packages) * 100).toFixed(0)}%</td>
                         </tr>
                       ))}
-                      <tr style={{ borderTop: "1px solid #E7EDEF", fontWeight: 700 }}>
+                      <tr style={{ borderTop: "1px solid var(--row-border)", fontWeight: 700 }}>
                         <td style={{ padding: "4px 6px 2px 0" }}>Total</td>
                         <td style={{ textAlign: "right", padding: "4px 6px 2px", fontVariantNumeric: "tabular-nums" }}>{buildResult.packages}</td>
                         <td /><td />
@@ -4022,7 +4068,7 @@ export default function App({ onHome }) {
               );
             })()}
 
-            <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14 }}>
+            <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>
                   Retime the loaded signup within the rules
@@ -4042,13 +4088,13 @@ export default function App({ onHome }) {
                   {retimeBusy ? "Retiming…" : "Retime signup"}
                 </button>
               </div>
-              <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 6 }}>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>
                 "Same runs, better times": every run keeps its shift number, run number, classification, and days-off pattern — only report time, end time, and break placement are re-chosen, from the full rule windows in Rules, to maximize coverage. Placement prefers keeping each run near its current report time: near-equal options resolve to the run already at that hour instead of swapping two runs’ times, and only genuine coverage gains move a run far. Because the runs stay recognizable, the result compares one-for-one against the loaded signup (ghost bars and the change list show every move). Starts from the loaded signup, not local edits. Runs whose times vary by day are consolidated to one consistent time across their days; runs whose type isn't defined in Rules pass through unchanged. Fleet cap, minimum vehicles, sign-in stagger, and pull-out/pull-in lead all steer every placement.
               </div>
             </div>
 
             {retimeResult && (
-              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", maxWidth: 460 }}>
+              <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", maxWidth: 460 }}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "0 0 10px" }}>
                   <Stat label="Weekly coverage score"
                     value={`${(retimeResult.baselineScore * 100).toFixed(1)}% → ${(retimeResult.score * 100).toFixed(1)}%`}
@@ -4057,7 +4103,7 @@ export default function App({ onHome }) {
                   <Stat label="Runs retimed" value={retimeResult.retimed} sub={`${retimeResult.kept} kept as-is`} tone={targetInk} />
                   <Stat label="Placements evaluated" value={(retimeResult.evaluated || 0).toLocaleString()} tone={demandAmber} />
                 </div>
-                <div style={{ fontSize: 12.5, color: "#41525C" }}>
+                <div style={{ fontSize: 12.5, color: "var(--text-mid)" }}>
                   Mix (unchanged by construction): {Object.entries(retimeResult.mix).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${t} ${n}`).join(" · ")}
                 </div>
                 <button style={{ ...nudgeBtn, marginTop: 10, background: supplyTeal, color: "#fff", borderColor: supplyTeal }}
@@ -4071,7 +4117,7 @@ export default function App({ onHome }) {
               </div>
             )}
 
-            <div style={{ background: card, border: `1px solid ${optRunning ? supplyTeal : "#E2E8EA"}`, padding: "12px 14px", marginTop: 14 }}>
+            <div style={{ background: card, border: `1px solid ${optRunning ? supplyTeal : "var(--border)"}`, padding: "12px 14px", marginTop: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>
                   Optimization monitor
@@ -4101,7 +4147,7 @@ export default function App({ onHome }) {
                   </button>
                 )}
               </div>
-              <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 6 }}>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>
                 Runs until you stop it: randomized full rebuilds explore different constructions, then the search digs around the best signup found by re-placing a few runs at a time with everything else locked — millions of placements deep. Every move stays within each day's service span and the report-time-variation limits, so runs never drift to times a day has no service. The best score only ever goes up. Inputs (rules, demand, signup) are snapshotted when you press Start; keep this page open while it runs. Stopping finishes with a polish pass before the result is final — with "Fit report times to each day's demand" on (default), that polish splits runs into per-day report times within the variation limits, so a run can sit later on days with later service; off keeps every run uniform across its days.
               </div>
 
@@ -4128,7 +4174,7 @@ export default function App({ onHome }) {
                           <Line type="stepAfter" dataKey="score" stroke={supplyTeal} strokeWidth={1.8} dot={false} isAnimationActive={false} />
                         </ComposedChart>
                       </ResponsiveContainer>
-                      <div style={{ fontSize: 11, color: "#8899A3", textAlign: "right" }}>best coverage over time</div>
+                      <div style={{ fontSize: 11, color: "var(--muted-light)", textAlign: "right" }}>best coverage over time</div>
                     </div>
                   )}
                   {optRun.bestScore != null && (
@@ -4151,11 +4197,11 @@ export default function App({ onHome }) {
 
         {tab === "coverage" && (
           <>
-            <details style={{ background: "#F7FAF9", border: "1px solid #DCE7E4", padding: "10px 14px", marginBottom: 12, fontSize: 13 }}>
+            <details style={{ background: "var(--tint-teal-b)", border: "1px solid var(--border-teal-b)", padding: "10px 14px", marginBottom: 12, fontSize: 13 }}>
               <summary style={{ cursor: "pointer", fontWeight: 600, fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16 }}>
                 What do these numbers mean?
               </summary>
-              <div style={{ marginTop: 8, lineHeight: 1.55, color: "#33434D" }}>
+              <div style={{ marginTop: 8, lineHeight: 1.55, color: "var(--text-dark)" }}>
                 <b>Coverage score</b> answers one question: of all the trip demand in the period, what share happens while your service hours are proportionally in place to serve it? 100% would mean your hours perfectly trace the demand pattern — impossible in practice, since shifts come in fixed lengths with rules. Use the score to compare signups: higher means hours better matched to demand.<br /><br />
                 On each day tile, <b>demand</b> is that day's share of the week's trips, and <b>cov</b> is that day's coverage score. In the chart, the dark line is the <b>demand-aligned target</b> — your own hours redrawn to follow demand exactly (or weighted demand, when an off-peak weighting is set in Rules — light periods then claim proportionally more). <b>Red</b> = you're lighter than demand suggests at that time. <b>Teal above the line</b> = heavier than demand suggests (those hours earn no score). <b>Misplaced hours</b> totals the hours sitting in the heavy zones.<br /><br />
                 The overlay adds two vehicle reference lines (both visual only — neither affects the coverage score or generation):<br /><br />
@@ -4172,7 +4218,7 @@ export default function App({ onHome }) {
               }
               if (!viol.length) return null;
               return (
-                <div style={{ background: "#FDF3E7", border: `1px solid ${demandAmber}`, padding: "8px 12px", marginBottom: 12, fontSize: 12.5 }}>
+                <div style={{ background: "var(--tint-amber-b)", border: `1px solid ${demandAmber}`, padding: "8px 12px", marginBottom: 12, fontSize: 12.5 }}>
                   <b>Sign-in bottlenecks ({day}):</b>{" "}
                   {viol.slice(0, 8).map((v, i) => (
                     <span key={i}>{fmt(v.t)} has {v.n} sign-ins (max {glob.maxPullout}){i < Math.min(viol.length, 8) - 1 ? "; " : ""}</span>
@@ -4184,7 +4230,7 @@ export default function App({ onHome }) {
             })()}
 
             {P.floorViol.length > 0 && (
-              <div style={{ background: "#FDF3E7", border: `1px solid ${demandAmber}`, padding: "8px 12px", marginBottom: 12, fontSize: 12.5 }}>
+              <div style={{ background: "var(--tint-amber-b)", border: `1px solid ${demandAmber}`, padding: "8px 12px", marginBottom: 12, fontSize: 12.5 }}>
                 <b>Minimum vehicles check ({day}):</b>{" "}
                 {P.floorViol.map((v, i) => (
                   <span key={i}>{fmt(SLOT(v.from))}–{fmt(SLOT(v.to) + 5)} runs {v.min} (minimum {glob.minVeh}){i < P.floorViol.length - 1 ? "; " : ""}</span>
@@ -4192,7 +4238,7 @@ export default function App({ onHome }) {
               </div>
             )}
             {P.fleetViol.length > 0 && (
-              <div style={{ background: "#FBEDEB", border: `1px solid ${gapRed}`, padding: "8px 12px", marginBottom: 12, fontSize: 12.5 }}>
+              <div style={{ background: "var(--tint-red-a)", border: `1px solid ${gapRed}`, padding: "8px 12px", marginBottom: 12, fontSize: 12.5 }}>
                 <b>Fleet cap ({day}):</b>{" "}
                 {P.fleetViol.map((v, i) => (
                   <span key={i}>{fmt(SLOT(v.from))}–{fmt(SLOT(v.to) + 5)} peaks at {v.max} vehicles (cap {glob.maxFleet}){i < P.fleetViol.length - 1 ? "; " : ""}</span>
@@ -4201,7 +4247,7 @@ export default function App({ onHome }) {
               </div>
             )}
             {glob.recycleEnabled && recycleViol[day] && (
-              <div style={{ background: "#FBEDEB", border: `1px solid ${gapRed}`, padding: "8px 12px", marginBottom: 12, fontSize: 12.5 }}>
+              <div style={{ background: "var(--tint-red-a)", border: `1px solid ${gapRed}`, padding: "8px 12px", marginBottom: 12, fontSize: 12.5 }}>
                 <b>Vehicle recycling ({day}):</b>{" "}
                 <span>only {recycleViol[day].recyclers} of {recycleViol[day].need} morning runs finish and turn around ({glob.recycleTurnaround} min) by {fmt((glob.recycleWindow || [795, 900])[1])} to recycle for the afternoon.</span>
               </div>
@@ -4216,7 +4262,7 @@ export default function App({ onHome }) {
               <Stat label="Day resources" value={`${P.supVH.toFixed(0)} vh`} sub={`${(P.resourceShare * 100).toFixed(1)}% of week vs ${(P.demandShare * 100).toFixed(1)}% demand`} tone={targetInk} />
             </div>
 
-            <div data-tour="coverage-chart" style={{ background: card, border: "1px solid #E2E8EA", padding: "14px 4px 4px" }}>
+            <div data-tour="coverage-chart" style={{ background: card, border: "1px solid var(--border)", padding: "14px 4px 4px" }}>
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
                 {day} — service hours vs demand-aligned target
               </div>
@@ -4224,7 +4270,7 @@ export default function App({ onHome }) {
                 onDutyCounts={onDutyCounts} onPointClick={focusRun}
                 extraSeries={null} />
               {ganttTimeFilter != null && (
-                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "#EAF3F3", border: `1px solid ${supplyTeal}`, padding: "8px 12px", margin: "6px 10px 0", fontSize: 13 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "var(--tint-teal-d)", border: `1px solid ${supplyTeal}`, padding: "8px 12px", margin: "6px 10px 0", fontSize: 13 }}>
                   <b>{fmt(ganttTimeFilter)} ({day}):</b>
                   <span>{timeFilteredSegs ? timeFilteredSegs.length : 0} run{(timeFilteredSegs && timeFilteredSegs.length === 1) ? "" : "s"} on duty.</span>
                   <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
@@ -4235,28 +4281,28 @@ export default function App({ onHome }) {
                   </div>
                 </div>
               )}
-              <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "6px 10px 10px" }}>
+              <div style={{ fontSize: 11.5, color: "var(--muted)", padding: "6px 10px 10px" }}>
                 The dark line shows where {day}'s {P.supVH.toFixed(0)} service hours would sit if they exactly followed the demand pattern. Red = times you're lighter than demand suggests; teal above the line = heavier. <b>Click any time</b> on the chart to mark it, then open those runs in the Shift Builder.
               </div>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(290px,1fr))", gap: 14, marginTop: 14 }}>
-              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
+              <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 17, fontWeight: 600, marginBottom: 8 }}>
                   Most underweighted {day} windows
                 </div>
                 {P.gaps.slice(0, 3).map((g, i) => (
-                  <div key={i} style={{ borderLeft: `3px solid ${gapRed}`, padding: "6px 10px", marginBottom: 8, background: "#FDF6F5" }}>
+                  <div key={i} style={{ borderLeft: `3px solid ${gapRed}`, padding: "6px 10px", marginBottom: 8, background: "var(--tint-red-b)" }}>
                     <div style={{ fontWeight: 600, fontSize: 13.5 }}>
                       {fmt(SLOT(g.from))}–{fmt(SLOT(g.to) + 5)} · up to {g.maxVeh.toFixed(1)} vehicles below target
                     </div>
-                    <div style={{ fontSize: 12, color: "#5B6B75" }}>
+                    <div style={{ fontSize: 12, color: "var(--muted)" }}>
                       Worth {(g.weight * 100).toFixed(2)} points of {day}'s score. Open the Shift Builder to move work here.
                     </div>
                   </div>
                 ))}
               </div>
-              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
+              <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 17, fontWeight: 600, marginBottom: 4 }}>
                   Demand share vs resource share
                 </div>
@@ -4271,7 +4317,7 @@ export default function App({ onHome }) {
                           <td>{d}</td>
                           <td>{(p.demandShare * 100).toFixed(1)}</td>
                           <td>{(p.resourceShare * 100).toFixed(1)}</td>
-                          <td style={{ color: Math.abs(delta) > 1.5 ? demandAmber : "#5B6B75" }}>{delta >= 0 ? "+" : ""}{delta.toFixed(1)}</td>
+                          <td style={{ color: Math.abs(delta) > 1.5 ? demandAmber : "var(--muted)" }}>{delta >= 0 ? "+" : ""}{delta.toFixed(1)}</td>
                           <td style={{ fontWeight: 600, color: p.dayScore >= 0.9 ? supplyTeal : demandAmber }}>{(p.dayScore * 100).toFixed(1)}%</td>
                         </tr>
                       );
@@ -4319,12 +4365,12 @@ export default function App({ onHome }) {
                         </div>
                       </div>
 
-                      <div style={{ background: "#EEF4F5", border: "1px dashed #B9C6CC", padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#41525C" }}>
+                      <div style={{ background: "var(--tint-neutral-b)", border: "1px dashed var(--border-input)", padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "var(--text-mid)" }}>
                         A one-off shift list for this specific date only — no coverage score, and none of the weekly-package rules (rest between shifts, consecutive days, days-off contiguity) apply, since this isn't a recurring week. Each shift is still checked against its type's classification rules.
                       </div>
 
                       {selHolSeg && (
-                        <div style={{ background: card, border: `1px solid ${selHolSegIssues.length ? gapRed : "#E2E8EA"}`, padding: "12px 14px", marginBottom: 12 }}>
+                        <div style={{ background: card, border: `1px solid ${selHolSegIssues.length ? gapRed : "var(--border)"}`, padding: "12px 14px", marginBottom: 12 }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                             <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700 }}>
                               One-off shift
@@ -4332,15 +4378,15 @@ export default function App({ onHome }) {
                             <select value={selHolSeg.type} onChange={(e) => setHolSegType(e.target.value)}>
                               {Object.keys(rules).map((t) => <option key={t} value={t}>{t}</option>)}
                             </select>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#5B6B75" }} title="Which signup shift/run this stat day belongs under — edit to move it onto a different shift. Blank means unassigned; it exports on its own at the end.">
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--muted)" }} title="Which signup shift/run this stat day belongs under — edit to move it onto a different shift. Blank means unassigned; it exports on its own at the end.">
                               <span>Shift</span>
                               <input key={"holsh" + selHolSeg.id} defaultValue={selHolSeg.sourceShift ?? ""} inputMode="numeric" placeholder="—"
                                 onBlur={(e) => { const v = e.target.value.trim(); patchHolSeg({ sourceShift: v === "" ? null : (Number.isFinite(+v) ? +v : (selHolSeg.sourceShift ?? null)) }); }}
-                                style={{ width: 62, background: "#fff", color: ink, border: "1px solid #CBD5DA", padding: "3px 6px", fontSize: 12 }} />
+                                style={{ width: 62, background: card, color: text, border: "1px solid #CBD5DA", padding: "3px 6px", fontSize: 12 }} />
                               <span>Run</span>
                               <input key={"holrun" + selHolSeg.id} defaultValue={selHolSeg.sourceRun ?? ""} placeholder="—"
                                 onBlur={(e) => { const v = e.target.value.trim(); patchHolSeg({ sourceRun: v === "" ? null : v }); }}
-                                style={{ width: 62, background: "#fff", color: ink, border: "1px solid #CBD5DA", padding: "3px 6px", fontSize: 12 }} />
+                                style={{ width: 62, background: card, color: text, border: "1px solid #CBD5DA", padding: "3px 6px", fontSize: 12 }} />
                             </div>
                             <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
                               <button style={nudgeBtn} onClick={duplicateHolSeg}>Duplicate</button>
@@ -4368,22 +4414,22 @@ export default function App({ onHome }) {
                             <button style={nudgeBtn} onClick={toggleHolSegBreak}>{selHolSeg.b ? "Remove break" : "Add break"}</button>
                           </div>
                           {selHolSegIssues.length > 0 && (
-                            <div style={{ marginTop: 10, borderLeft: `3px solid ${gapRed}`, background: "#FDF6F5", padding: "6px 10px" }}>
+                            <div style={{ marginTop: 10, borderLeft: `3px solid ${gapRed}`, background: "var(--tint-red-b)", padding: "6px 10px" }}>
                               {selHolSegIssues.map((iss, i) => <div key={i} style={{ fontSize: 12.5, color: gapRed }}>⚠ {iss}</div>)}
                             </div>
                           )}
                           {holFixResult && holFixResult.stuck && (
-                            <div style={{ marginTop: 10, fontSize: 12.5, color: "#5B6B75" }}>
+                            <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--muted)" }}>
                               No legal correction exists for this shift under its current type — try changing its type, or adjust the windows in Rules.
                             </div>
                           )}
                         </div>
                       )}
 
-                      <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 10px" }}>
+                      <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 10px" }}>
                         <div style={{ maxHeight: 430, overflowY: "auto" }}>
                           {segs.length === 0 && (
-                            <div style={{ fontSize: 13, color: "#5B6B75", padding: "8px 4px" }}>No shifts yet — "+ Add shift" above to start laying out this date's schedule.</div>
+                            <div style={{ fontSize: 13, color: "var(--muted)", padding: "8px 4px" }}>No shifts yet — "+ Add shift" above to start laying out this date's schedule.</div>
                           )}
                           {segs.map((sg) => {
                             const bad = validateSeg(sg, allRules, glob).length > 0;
@@ -4403,7 +4449,7 @@ export default function App({ onHome }) {
                                 </div>
                                 <div className="gtrack" title={barTitle}>
                                   {[360, 600, 840, 1080, 1320].map((m) => (
-                                    <div key={m} style={{ position: "absolute", left: `${pctPos(m)}%`, top: 0, bottom: 0, width: 1, background: "#E2E8EA" }} />
+                                    <div key={m} style={{ position: "absolute", left: `${pctPos(m)}%`, top: 0, bottom: 0, width: 1, background: "var(--border)" }} />
                                   ))}
                                   <div className="gbar" style={{
                                     left: `${pctPos(sg.s)}%`, width: `${pctPos(Math.min(sg.e, T1)) - pctPos(sg.s)}%`,
@@ -4449,7 +4495,7 @@ export default function App({ onHome }) {
             </div>
 
             {fixResult && (
-              <div style={{ background: fixResult.stuck ? "#FDF3E7" : "#F2F8F7", border: `1px solid ${fixResult.stuck ? demandAmber : supplyTeal}`, padding: "8px 12px", marginBottom: 10, fontSize: 12.5 }}>
+              <div style={{ background: fixResult.stuck ? "var(--tint-amber-b)" : "var(--tint-teal-c)", border: `1px solid ${fixResult.stuck ? demandAmber : supplyTeal}`, padding: "8px 12px", marginBottom: 10, fontSize: 12.5 }}>
                 {fixResult.single
                   ? "No legal correction exists for this shift under its current type — the time windows can't accommodate it. Try changing its type, or adjust the windows in Rules if the rule itself is wrong."
                   : <><b>Autocorrect:</b> {fixResult.fixed} shift{fixResult.fixed === 1 ? "" : "s"} repaired with the smallest legal adjustment{fixResult.stuck > 0 ? `; ${fixResult.stuck} couldn't be fixed under their current type — retype them or review the rule windows` : ""}. Check the score delta in the header — fixes move times, so coverage shifts too.</>}
@@ -4458,7 +4504,7 @@ export default function App({ onHome }) {
 
             {/* selected shift editor */}
             {sel ? (
-              <div className="seleditor" style={{ background: card, border: `1px solid ${selIssues.length ? gapRed : "#E2E8EA"}`, padding: "12px 14px", marginBottom: 12, position: "sticky", top: ENVELOPE_H + KPI_H, zIndex: 4 }}>
+              <div className="seleditor" style={{ background: card, border: `1px solid ${selIssues.length ? gapRed : "var(--border)"}`, padding: "12px 14px", marginBottom: 12, position: "sticky", top: ENVELOPE_H + KPI_H, zIndex: 4 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <button style={nudgeBtn} title="Previous run this day" onClick={() => navSel(-1)}>◀</button>
                   <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700 }}>
@@ -4467,7 +4513,7 @@ export default function App({ onHome }) {
                   <select value={sel.type} onChange={(e) => setType(e.target.value)}>
                     {Object.keys(rules).map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
-                  <span style={{ fontSize: 12, color: "#5B6B75" }}>{sel.splitType}</span>
+                  <span style={{ fontSize: 12, color: "var(--muted)" }}>{sel.splitType}</span>
                   {selIsDayVariant && <span style={{ fontSize: 11.5, color: demandAmber, border: `1px solid ${demandAmber}`, borderRadius: 2, padding: "2px 6px" }}>Times vary by day</span>}
                   <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <button style={nudgeBtn} onClick={duplicateSel}>Duplicate</button>
@@ -4485,18 +4531,18 @@ export default function App({ onHome }) {
                       <div>
                         <Nudge label="Start" value={fmt(sel.s)}
                           onDec={() => patchSel({ s: sel.s - 5 })} onInc={() => patchSel({ s: sel.s + 5 })} />
-                        {origSel && origSel.s !== sel.s && <div style={{ fontSize: 10.5, color: "#8899A3", marginLeft: 80 }}>was {fmt(origSel.s)}</div>}
+                        {origSel && origSel.s !== sel.s && <div style={{ fontSize: 10.5, color: "var(--muted-light)", marginLeft: 80 }}>was {fmt(origSel.s)}</div>}
                       </div>
                       <div>
                         <Nudge label="End" value={fmt(sel.e)}
                           onDec={() => patchSel({ e: sel.e - 5 })} onInc={() => patchSel({ e: sel.e + 5 })} />
-                        {origSel && origSel.e !== sel.e && <div style={{ fontSize: 10.5, color: "#8899A3", marginLeft: 80 }}>was {fmt(origSel.e)}</div>}
+                        {origSel && origSel.e !== sel.e && <div style={{ fontSize: 10.5, color: "var(--muted-light)", marginLeft: 80 }}>was {fmt(origSel.e)}</div>}
                       </div>
                       <Nudge label="Shift spread" value={`${((sel.e - sel.s) / 60).toFixed(2)}h`}
                         onDec={() => patchSel({ s: sel.s - 5, e: sel.e - 5, b: sel.b ? [sel.b[0] - 5, sel.b[1] - 5] : null })}
                         onInc={() => patchSel({ s: sel.s + 5, e: sel.e + 5, b: sel.b ? [sel.b[0] + 5, sel.b[1] + 5] : null })} />
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ fontSize: 11.5, color: "#5B6B75" }}>Working hours</span>
+                        <span style={{ fontSize: 11.5, color: "var(--muted)" }}>Working hours</span>
                         <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>
                           {((sel.e - sel.s - (sel.b ? sel.b[1] - sel.b[0] : 0)) / 60).toFixed(2)}h
                         </span>
@@ -4506,7 +4552,7 @@ export default function App({ onHome }) {
                           <div>
                             <Nudge label={`Break start`} value={fmt(sel.b[0])}
                               onDec={() => shiftBreak(-5)} onInc={() => shiftBreak(5)} />
-                            {origSel && origSel.b && origSel.b[0] !== sel.b[0] && <div style={{ fontSize: 10.5, color: "#8899A3", marginLeft: 80 }}>was {fmt(origSel.b[0])}</div>}
+                            {origSel && origSel.b && origSel.b[0] !== sel.b[0] && <div style={{ fontSize: 10.5, color: "var(--muted-light)", marginLeft: 80 }}>was {fmt(origSel.b[0])}</div>}
                           </div>
                           <Nudge label={`Break length`} value={`${sel.b[1] - sel.b[0]}m`}
                             onDec={() => patchSel({ b: [sel.b[0], sel.b[1] - 5] })} onInc={() => patchSel({ b: [sel.b[0], sel.b[1] + 5] })} />
@@ -4517,13 +4563,13 @@ export default function App({ onHome }) {
                   );
                 })()}
                 <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
-                  <span style={{ fontSize: 11.5, color: "#5B6B75" }}>Works:</span>
+                  <span style={{ fontSize: 11.5, color: "var(--muted)" }}>Works:</span>
                   {DAYS.map((d) => (
                     <span key={d} className={"daychip" + (sel.days.includes(d) ? " on" : "")} onClick={() => toggleDay(d)}>
                       {d.slice(0, 2).toUpperCase()}
                     </span>
                   ))}
-                  <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", color: editAllDays ? "#41525C" : demandAmber }}>
+                  <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", color: editAllDays ? "var(--text-mid)" : demandAmber }}>
                     <input type="checkbox" checked={editAllDays} onChange={(e) => setEditAllDays(e.target.checked)} />
                     Apply time changes to all working days
                   </label>
@@ -4534,11 +4580,11 @@ export default function App({ onHome }) {
                   </div>
                 )}
                 {selIssues.length > 0 && (
-                  <div style={{ marginTop: 10, borderLeft: `3px solid ${gapRed}`, background: "#FDF6F5", padding: "6px 10px" }}>
+                  <div style={{ marginTop: 10, borderLeft: `3px solid ${gapRed}`, background: "var(--tint-red-b)", padding: "6px 10px" }}>
                     {selIssues.map((iss, i) => <div key={i} style={{ fontSize: 12.5, color: gapRed }}>⚠ {iss}</div>)}
                     {retypeOptions.length > 0 && (
                       <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                        <span style={{ fontSize: 12, color: "#41525C" }}>These times fit another classification:</span>
+                        <span style={{ fontSize: 12, color: "var(--text-mid)" }}>These times fit another classification:</span>
                         {retypeOptions.map((t) => (
                           <button key={t} style={{ ...nudgeBtn, borderColor: supplyTeal, color: supplyTeal, fontWeight: 600 }} onClick={() => setType(t)}>
                             Retype to {t}
@@ -4548,33 +4594,33 @@ export default function App({ onHome }) {
                     )}
                   </div>
                 )}
-                <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>This shift's week — tap a day to view it:</div>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10 }}>This shift's week — tap a day to view it:</div>
                 <WeekStrip segs={selShiftSegs} day={day} onPick={setDay} />
               </div>
             ) : selShift != null ? (
-              <div className="seleditor" style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 12, position: "sticky", top: ENVELOPE_H + KPI_H, zIndex: 4 }}>
+              <div className="seleditor" style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 12, position: "sticky", top: ENVELOPE_H + KPI_H, zIndex: 4 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <button style={nudgeBtn} title="Last run this day" onClick={() => navSel(-1)}>◀</button>
                   <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700 }}>
                     Shift {selShift}
                   </div>
-                  <span style={{ fontSize: 13, color: "#5B6B75" }}>doesn't work {day}</span>
+                  <span style={{ fontSize: 13, color: "var(--muted)" }}>doesn't work {day}</span>
                   <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
                     <button style={nudgeBtn} onClick={() => setSelId(null)}>Close</button>
                     <button style={nudgeBtn} title="First run this day" onClick={() => navSel(1)}>▶</button>
                   </div>
                 </div>
-                <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>This shift's week — tap a day to view and edit it:</div>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10 }}>This shift's week — tap a day to view and edit it:</div>
                 <WeekStrip segs={selShiftSegs} day={day} onPick={setDay} />
               </div>
             ) : (
-              <div style={{ background: "#EEF4F5", border: "1px dashed #B9C6CC", padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#41525C" }}>
+              <div style={{ background: "var(--tint-neutral-b)", border: "1px dashed var(--border-input)", padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "var(--text-mid)" }}>
                 Tap any bar to open it: nudge times, move breaks, change type, toggle working days, duplicate or remove. "+ Add shift" creates a new AX split shift on {day} to shape from scratch. Every change re-scores instantly; Undo and Reset are always available.
               </div>
             )}
 
             {ganttTimeFilter != null && selShift == null && (
-              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "#EAF3F3", border: `1px solid ${supplyTeal}`, padding: "8px 12px", marginBottom: 12, fontSize: 13 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "var(--tint-teal-d)", border: `1px solid ${supplyTeal}`, padding: "8px 12px", marginBottom: 12, fontSize: 13 }}>
                 <b>On duty at {fmt(ganttTimeFilter)} ({day}):</b>
                 <span>{ganttSegs.length} run{ganttSegs.length === 1 ? "" : "s"} shown{ganttSegs.length === 0 ? " — none cover this time" : ""}. Tap one to adjust its times.</span>
                 <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
@@ -4586,14 +4632,14 @@ export default function App({ onHome }) {
             )}
 
             {/* gantt */}
-            <div data-tour="shift-gantt" style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 10px", marginBottom: 12 }}>
+            <div data-tour="shift-gantt" style={{ background: card, border: "1px solid var(--border)", padding: "12px 10px", marginBottom: 12 }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600 }}>
                   {day} signup — {ganttSegs.length} working segment{ganttSegs.length === 1 ? "" : "s"}
-                  {selShift != null && <span style={{ fontSize: 12, fontWeight: 400, color: "#5B6B75" }}> (showing shift {selShift} only — {daySegs.length} total this day)</span>}
+                  {selShift != null && <span style={{ fontSize: 12, fontWeight: 400, color: "var(--muted)" }}> (showing shift {selShift} only — {daySegs.length} total this day)</span>}
                   {selShift == null && ganttTimeFilter != null && <span style={{ fontSize: 12, fontWeight: 400, color: supplyTeal }}> · on duty at {fmt(ganttTimeFilter)}</span>}
                 </div>
-                <label style={{ fontSize: 12, color: "#41525C", display: "flex", alignItems: "center", gap: 6 }}>
+                <label style={{ fontSize: 12, color: "var(--text-mid)", display: "flex", alignItems: "center", gap: 6 }}>
                   Sort
                   <select value={ganttSort} onChange={(e) => setGanttSort(e.target.value)} style={{ fontSize: 12 }}>
                     <option value="run">Run number</option>
@@ -4603,13 +4649,13 @@ export default function App({ onHome }) {
                     <option value="flags">Flagged first{flaggedShifts.size > 0 ? ` (${flaggedShifts.size})` : ""}</option>
                   </select>
                 </label>
-                <div style={{ marginLeft: "auto", fontSize: 11, color: "#5B6B75" }}>{fmt(T0)} — {fmt(T1)}</div>
+                <div style={{ marginLeft: "auto", fontSize: 11, color: "var(--muted)" }}>{fmt(T0)} — {fmt(T1)}</div>
               </div>
               <div style={{ display: "flex", gap: 6, margin: "6px 0 2px" }}>
                 <div className="glabel" />
                 <div style={{ position: "relative", flex: 1, height: 14 }}>
                   {[6, 8, 10, 12, 14, 16, 18, 20, 22, 24].map((h) => (
-                    <div key={h} style={{ position: "absolute", left: `${pctPos(h * 60)}%`, fontSize: 9.5, color: "#8899A3", transform: "translateX(-50%)" }}>{h}</div>
+                    <div key={h} style={{ position: "absolute", left: `${pctPos(h * 60)}%`, fontSize: 9.5, color: "var(--muted-light)", transform: "translateX(-50%)" }}>{h}</div>
                   ))}
                 </div>
               </div>
@@ -4619,10 +4665,10 @@ export default function App({ onHome }) {
                 const overSlots = cap > 0 ? dayStarts.filter((n) => n > cap).length : 0;
                 return (
                   <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-                    <div className="glabel" style={{ fontSize: 9.5, color: "#5B6B75", display: "flex", alignItems: "flex-end", lineHeight: 1.1 }}>
+                    <div className="glabel" style={{ fontSize: 9.5, color: "var(--muted)", display: "flex", alignItems: "flex-end", lineHeight: 1.1 }}>
                       sign-ins{cap > 0 ? ` /5m (cap ${cap})` : " /5m"}
                     </div>
-                    <div style={{ position: "relative", flex: 1, height: 26, borderBottom: "1px solid #EDF1F3" }}
+                    <div style={{ position: "relative", flex: 1, height: 26, borderBottom: "1px solid var(--row-border-b)" }}
                       title={`Runs signing in per 5-minute slot on ${day}. Peak ${peak}${cap > 0 ? `; ${overSlots} slot${overSlots === 1 ? "" : "s"} over the ${cap} cap` : ""}.`}>
                       {dayStarts.map((n, i) => n > 0 && (
                         <div key={i} style={{
@@ -4658,7 +4704,7 @@ export default function App({ onHome }) {
                       </div>
                       <div className="gtrack" title={isDrag ? undefined : barTitle}>
                         {[360, 600, 840, 1080, 1320].map((m) => (
-                          <div key={m} style={{ position: "absolute", left: `${pctPos(m)}%`, top: 0, bottom: 0, width: 1, background: "#E2E8EA" }} />
+                          <div key={m} style={{ position: "absolute", left: `${pctPos(m)}%`, top: 0, bottom: 0, width: 1, background: "var(--border)" }} />
                         ))}
                         {ghost && (
                           <div title={`was ${fmt(ghost.s)}–${fmt(ghost.e)}`} style={{
@@ -4730,18 +4776,18 @@ export default function App({ onHome }) {
                     <span style={{ width: 12, height: 10, background: tColor(t), display: "inline-block", borderRadius: 2 }} />{t}
                   </span>
                 ))}
-                <span style={{ fontSize: 11, color: "#5B6B75" }}>hatched notch = break · red outline = rule flag · dashed outline = original position before edits · hover a bar for hours</span>
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>hatched notch = break · red outline = rule flag · dashed outline = original position before edits · hover a bar for hours</span>
               </div>
             </div>
 
             {/* live coverage */}
-            <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 4px 4px" }}>
+            <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 4px 4px" }}>
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
                 Live {day} coverage
               </div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={false} showProductivity={false} slim avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={280}
                 selBand={sel ? [sel.s, sel.e] : null} onDutyCounts={onDutyCounts} onPointClick={(t) => { setSelId(null); setGanttTimeFilter(t); }} />
-              <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
+              <div style={{ fontSize: 11.5, color: "var(--muted)", padding: "2px 10px 10px" }}>
                 Dashed lines mark the selected shift. On desktop, the KPI strip and shift editor stay pinned while you scroll; on phones everything scrolls freely so the signup and this chart get the full screen.
               </div>
             </div>
@@ -4789,7 +4835,7 @@ export default function App({ onHome }) {
                 <div className="kpi"><span className="l">modified / added / removed</span><span className="v">{changedWeek} / {boardDiff.added.length} / {boardDiff.removed.length}</span></div>
               </div>
 
-              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 10px" }}>
+              <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 10px" }}>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
                   <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600 }}>
                     {day} — loaded signup (dashed) vs working signup (solid)
@@ -4798,19 +4844,19 @@ export default function App({ onHome }) {
                     <input type="checkbox" checked={compareChangedOnly} onChange={(e) => setCompareChangedOnly(e.target.checked)} />
                     Changed runs only
                   </label>
-                  <div style={{ marginLeft: "auto", fontSize: 11, color: "#5B6B75" }}>{fmt(T0)} — {fmt(T1)} · tap a row to open it in Shift Builder</div>
+                  <div style={{ marginLeft: "auto", fontSize: 11, color: "var(--muted)" }}>{fmt(T0)} — {fmt(T1)} · tap a row to open it in Shift Builder</div>
                 </div>
                 <div style={{ display: "flex", gap: 6, margin: "6px 0 2px" }}>
                   <div className="glabel" />
                   <div style={{ position: "relative", flex: 1, height: 14 }}>
                     {[6, 8, 10, 12, 14, 16, 18, 20, 22, 24].map((h) => (
-                      <div key={h} style={{ position: "absolute", left: `${pctPos(h * 60)}%`, fontSize: 9.5, color: "#8899A3", transform: "translateX(-50%)" }}>{h}</div>
+                      <div key={h} style={{ position: "absolute", left: `${pctPos(h * 60)}%`, fontSize: 9.5, color: "var(--muted-light)", transform: "translateX(-50%)" }}>{h}</div>
                     ))}
                   </div>
                   <div style={{ width: 128, flex: "none" }} />
                 </div>
                 {visible.length === 0 && (
-                  <div style={{ fontSize: 13, color: "#5B6B75", padding: "14px 6px" }}>
+                  <div style={{ fontSize: 13, color: "var(--muted)", padding: "14px 6px" }}>
                     {compareChangedOnly ? `No runs changed on ${day} vs the loaded signup.` : `No runs work ${day}.`}
                   </div>
                 )}
@@ -4825,7 +4871,7 @@ export default function App({ onHome }) {
                         </div>
                         <div className="gtrack">
                           {[360, 600, 840, 1080, 1320].map((m) => (
-                            <div key={m} style={{ position: "absolute", left: `${pctPos(m)}%`, top: 0, bottom: 0, width: 1, background: "#E2E8EA" }} />
+                            <div key={m} style={{ position: "absolute", left: `${pctPos(m)}%`, top: 0, bottom: 0, width: 1, background: "var(--border)" }} />
                           ))}
                           {orig && (
                             <div title={`was ${fmt(orig.s)}–${fmt(orig.e)}${orig.b ? ` (break ${fmt(orig.b[0])}–${fmt(orig.b[1])})` : ""}`} style={{
@@ -4854,7 +4900,7 @@ export default function App({ onHome }) {
                           )}
                         </div>
                         <div style={{ width: 128, flex: "none", fontSize: 10.5, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                          color: status === "removed" ? gapRed : status === "added" ? supplyTeal : status === "changed" ? demandAmber : "#8899A3" }}
+                          color: status === "removed" ? gapRed : status === "added" ? supplyTeal : status === "changed" ? demandAmber : "var(--muted-light)" }}
                           title={delta || status}>
                           {status === "removed" ? "removed" : status === "added" ? "new" : status === "changed" ? delta : "unchanged"}
                         </div>
@@ -4862,7 +4908,7 @@ export default function App({ onHome }) {
                     );
                   })}
                 </div>
-                <div style={{ fontSize: 11, color: "#5B6B75", marginTop: 8 }}>
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
                   Dashed outline = the run as it was in the loaded signup · solid bar = the run on the working signup · hatched = break. Runs are matched by shift number; a generated-from-scratch signup therefore shows the whole loaded signup as removed and the new runs as added — that comparison is honest, just busy.
                 </div>
               </div>
@@ -4918,16 +4964,16 @@ export default function App({ onHome }) {
               </div>
 
               {refineResult && (
-                <div style={{ background: "#F2F8F7", border: `1px solid ${supplyTeal}`, padding: "8px 12px", margin: "0 0 10px", fontSize: 12.5 }}>
+                <div style={{ background: "var(--tint-teal-c)", border: `1px solid ${supplyTeal}`, padding: "8px 12px", margin: "0 0 10px", fontSize: 12.5 }}>
                   <b>Refined:</b> +{refineResult.gained.toFixed(2)} weekly points from {refineResult.moves} per-day adjustment{refineResult.moves === 1 ? "" : "s"} ({refineResult.created} day-variant row{refineResult.created === 1 ? "" : "s"} created, {(refineResult.evaluated || 0).toLocaleString()} candidates evaluated). Every variant stays inside the report-time variation rule.
                 </div>
               )}
-              <div style={{ fontSize: 12.5, color: "#5B6B75", margin: "0 0 10px" }}>
+              <div style={{ fontSize: 12.5, color: "var(--muted)", margin: "0 0 10px" }}>
                 Each row is one signable weekly package. <b>Refine day-to-day times</b> nudges individual days of a package (within the report-time variation rule) wherever a single day's demand justifies a slightly different start — the source of day-variant rows like a 07:20 Sunday inside a 07:30 week. Auto-packaging appears when the signup contains loose single-day runs. Rest, consecutive-day, and variation rules come from the Rules tab. Tap a row to inspect; edit times or working days in the Shift Builder.
               </div>
 
               {flagged.length > 0 && (
-                <div style={{ background: "#FBEDEB", border: `1px solid ${gapRed}`, padding: "8px 12px", marginBottom: 10, fontSize: 12.5, maxHeight: 130, overflowY: "auto" }}>
+                <div style={{ background: "var(--tint-red-a)", border: `1px solid ${gapRed}`, padding: "8px 12px", marginBottom: 10, fontSize: 12.5, maxHeight: 130, overflowY: "auto" }}>
                   {flagged.slice(0, 20).map((x, i) => (
                     <div key={i}><b>Shift {x.sh}:</b> {x.info.issues.join("; ")}</div>
                   ))}
@@ -4935,7 +4981,7 @@ export default function App({ onHome }) {
                 </div>
               )}
 
-              <div style={{ background: card, border: "1px solid #E2E8EA", overflowX: "auto" }}>
+              <div style={{ background: card, border: "1px solid var(--border)", overflowX: "auto" }}>
                 <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 860 }}>
                   <thead>
                     <tr style={{ position: "sticky", top: 0, background: ink, color: "#fff" }}>
@@ -4947,17 +4993,17 @@ export default function App({ onHome }) {
                   </thead>
                   <tbody>
                     {infos.map(({ sh, segs, info }) => (
-                      <tr key={sh} style={{ borderBottom: "1px solid #EDF1F3", background: info.issues.length ? "#FDF6F5" : "transparent", cursor: "pointer" }}
+                      <tr key={sh} style={{ borderBottom: "1px solid var(--row-border-b)", background: info.issues.length ? "var(--tint-red-b)" : "transparent", cursor: "pointer" }}
                         onClick={() => { setSelId(segs[0].id); setTab("board"); setDay(segs[0].days[0]); }}>
                         <td style={{ padding: "4px 10px", fontWeight: 600, fontSize: 12.5, color: info.issues.length ? gapRed : ink }}>{sh}</td>
                         <td style={{ padding: "4px 8px" }}>
                           <span style={{ fontSize: 10.5, padding: "1px 6px", background: tColor(segs[0].type), color: "#fff", borderRadius: 2 }}>{segs[0].type}</span>
                         </td>
-                        <td style={{ padding: "4px 8px", fontSize: 11.5, color: "#5B6B75" }}>{segs[0].daysOff || DAYS.filter((d) => !info.daysWorked.has(d)).map((d) => d.slice(0, 2).toUpperCase()).join("-") || "—"}</td>
+                        <td style={{ padding: "4px 8px", fontSize: 11.5, color: "var(--muted)" }}>{segs[0].daysOff || DAYS.filter((d) => !info.daysWorked.has(d)).map((d) => d.slice(0, 2).toUpperCase()).join("-") || "—"}</td>
                         {DAYS.map((d) => {
                           const sg = info.byDay[d];
                           return (
-                            <td key={d} style={{ padding: "3px 4px", textAlign: "center", fontSize: 10.5, fontVariantNumeric: "tabular-nums", background: sg ? "rgba(15,123,122,0.08)" : "transparent", color: sg ? ink : "#B9C6CC" }}>
+                            <td key={d} style={{ padding: "3px 4px", textAlign: "center", fontSize: 10.5, fontVariantNumeric: "tabular-nums", background: sg ? "rgba(15,123,122,0.08)" : "transparent", color: sg ? ink : "var(--border-input)" }}>
                               {sg ? `${fmt(sg.s)}–${fmt(sg.e)}` : "OFF"}
                             </td>
                           );
@@ -4973,7 +5019,7 @@ export default function App({ onHome }) {
 
         {tab === "suggest" && (
           <>
-            <div data-tour="suggestions" style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14 }}>
+            <div data-tour="suggestions" style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>
                   Top ranked moves — whole-week impact
@@ -5003,16 +5049,16 @@ export default function App({ onHome }) {
                 )}
                 {sugsStale && sugs && <span style={{ fontSize: 12.5, color: demandAmber, fontWeight: 600 }}>Board changed — results are stale, recompute.</span>}
               </div>
-              <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 4 }}>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
                 Searches every legal slide and break move on the current signup. Only moves that keep the shift rule-clean, stay within each day's service span, respect the fleet cap and the report-time-variation limits, and improve the weekly coverage score are shown — hours are never added, only repositioned. So a run is never nudged to a time a given day has no service (e.g. a weekday won't inherit later weekend hours).
               </div>
               {sugs && sugs.length === 0 && (
-                <div style={{ fontSize: 13, color: "#5B6B75", marginTop: 10 }}>
+                <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 10 }}>
                   No single slide or break move improves the weekly score. Remaining misalignment needs structural changes — retyping shifts, moving days, or adding/removing runs.
                 </div>
               )}
               {sugs && sugs.map((s, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, borderLeft: `3px solid ${supplyTeal}`, background: "#F2F8F7", padding: "8px 10px", marginTop: 8, flexWrap: "wrap" }}>
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, borderLeft: `3px solid ${supplyTeal}`, background: "var(--tint-teal-c)", padding: "8px 10px", marginTop: 8, flexWrap: "wrap" }}>
                   <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 17, fontWeight: 700, color: supplyTeal, width: 64 }}>
                     +{(s.delta * 100).toFixed(2)}
                   </div>
@@ -5029,11 +5075,11 @@ export default function App({ onHome }) {
               ))}
             </div>
 
-            <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
+            <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 4 }}>
                 Where the waste sits — {day}
               </div>
-              <div style={{ fontSize: 12, color: "#5B6B75", marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
                 Windows where supply share runs above demand share (hours earning no score), and the shifts spending the most time inside them. Change the day on the paddles above.
               </div>
               {(() => {
@@ -5069,9 +5115,9 @@ export default function App({ onHome }) {
                 return (
                   <>
                     {top.map((w, i) => (
-                      <div key={i} style={{ borderLeft: `3px solid ${demandAmber}`, background: "#FDF8EF", padding: "6px 10px", marginBottom: 8 }}>
+                      <div key={i} style={{ borderLeft: `3px solid ${demandAmber}`, background: "var(--tint-amber-c)", padding: "6px 10px", marginBottom: 8 }}>
                         <b style={{ fontSize: 13.5 }}>{fmt(SLOT(w.from))}–{fmt(SLOT(w.to) + 5)}</b>
-                        <span style={{ fontSize: 12.5, color: "#5B6B75" }}> · {(w.weight * 100).toFixed(2)} points of {day}'s score parked here</span>
+                        <span style={{ fontSize: 12.5, color: "var(--muted)" }}> · {(w.weight * 100).toFixed(2)} points of {day}'s score parked here</span>
                       </div>
                     ))}
                     {idle.length > 0 && (
@@ -5087,7 +5133,7 @@ export default function App({ onHome }) {
                   </>
                 );
               })()}
-              <div style={{ fontSize: 11.5, color: "#8899A3", marginTop: 12 }}>
+              <div style={{ fontSize: 11.5, color: "var(--muted-light)", marginTop: 12 }}>
                 Coming later in this module: the ceiling computation — the best score any rule-legal signup of this size could reach, so you know when a design is done.
               </div>
             </div>
@@ -5097,7 +5143,7 @@ export default function App({ onHome }) {
         {tab === "rules" && (
           <>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-              <div style={{ fontSize: 13, color: "#5B6B75" }}>
+              <div style={{ fontSize: 13, color: "var(--muted)" }}>
                 Every number here drives validation and scoring live. Edits flag existing shifts immediately — nothing is blocked, only flagged. Click a type code to rename it — every shift using it follows along.
               </div>
               <button style={{ ...nudgeBtn, marginLeft: "auto", borderColor: demandAmber }}
@@ -5113,7 +5159,7 @@ export default function App({ onHome }) {
             </div>
 
             {/* shift types */}
-            <div data-tour="rules-classification" style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14, overflowX: "auto" }}>
+            <div data-tour="rules-classification" style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14, overflowX: "auto" }}>
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 8 }}>
                 Shift classification
               </div>
@@ -5121,7 +5167,7 @@ export default function App({ onHome }) {
                 <thead>
                   <tr>
                     {["Type", "Earliest start", "Latest start", "Earliest end", "Latest end", "Min spread (h)", "Max spread (h)", "Work (h)", "Break allowed", "In use", ""].map((h) => (
-                      <th key={h} style={{ padding: "4px 8px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".06em", color: "#5B6B75", textAlign: "left", borderBottom: "1px solid #E7EDEF" }}>{h}</th>
+                      <th key={h} style={{ padding: "4px 8px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".06em", color: "var(--muted)", textAlign: "left", borderBottom: "1px solid var(--row-border)" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -5142,7 +5188,7 @@ export default function App({ onHome }) {
                                   if (e.key === "Escape") setEditingType(null);
                                 }}
                                 onBlur={() => { renameType(t, typeDraft); setEditingType(null); }}
-                                style={{ width: 64, padding: "2px 6px", fontSize: 12, fontWeight: 600, border: `2px solid ${tColor(t)}`, borderRadius: 2, background: "#fff", color: ink, textTransform: "uppercase" }} />
+                                style={{ width: 64, padding: "2px 6px", fontSize: 12, fontWeight: 600, border: `2px solid ${tColor(t)}`, borderRadius: 2, background: card, color: text, textTransform: "uppercase" }} />
                               {typeDraft.trim().toUpperCase() !== t && rules[typeDraft.trim().toUpperCase()] && (
                                 <span style={{ fontSize: 11, color: gapRed }}>exists</span>
                               )}
@@ -5165,7 +5211,7 @@ export default function App({ onHome }) {
                         <td style={{ padding: "3px 6px", textAlign: "center" }}>
                           <input type="checkbox" checked={!!R.brk} onChange={(e) => upd({ brk: e.target.checked })} />
                         </td>
-                        <td style={{ padding: "3px 8px", fontSize: 12, color: inUse ? "#182430" : "#8899A3" }}>{inUse}</td>
+                        <td style={{ padding: "3px 8px", fontSize: 12, color: inUse ? text : "var(--muted-light)" }}>{inUse}</td>
                         <td style={{ padding: "3px 6px" }}>
                           {Object.keys(rules).length > 1 && (
                             <button style={{ ...nudgeBtn, padding: "3px 8px", fontSize: 12, color: gapRed, borderColor: gapRed }}
@@ -5186,7 +5232,7 @@ export default function App({ onHome }) {
                       </tr>
                     );
                   })}
-                  <tr style={{ fontWeight: 700, borderTop: "1px solid #E7EDEF" }}>
+                  <tr style={{ fontWeight: 700, borderTop: "1px solid var(--row-border)" }}>
                     <td style={{ padding: "4px 8px" }}>Total</td>
                     <td /><td /><td /><td /><td /><td /><td /><td />
                     <td style={{ padding: "3px 8px", fontSize: 12 }}>{board.length}</td>
@@ -5197,7 +5243,7 @@ export default function App({ onHome }) {
               <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
                 <input placeholder="New type code (e.g. BS9)" value={newType}
                   onChange={(e) => setNewType(e.target.value.toUpperCase().slice(0, 6))}
-                  style={{ padding: "6px 8px", border: "1px solid #B9C6CC", borderRadius: 2, fontSize: 13, width: 170, background: "#fff", color: ink }} />
+                  style={{ padding: "6px 8px", border: "1px solid var(--border-input)", borderRadius: 2, fontSize: 13, width: 170, background: card, color: text }} />
                 <button style={nudgeBtn} disabled={!newType || !!rules[newType]}
                   onClick={() => {
                     if (!newType || rules[newType]) return;
@@ -5212,21 +5258,21 @@ export default function App({ onHome }) {
             </div>
 
             {/* part-time shift classifications */}
-            <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14, overflowX: "auto" }}>
+            <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14, overflowX: "auto" }}>
               <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
                 <input type="checkbox" checked={ptEnabled} onChange={(e) => setPtEnabled(e.target.checked)} />
                 <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>Offer part-time shifts</span>
               </label>
               {ptEnabled && (
                 <>
-                  <div style={{ fontSize: 11.5, color: "#5B6B75", margin: "6px 0 10px" }}>
+                  <div style={{ fontSize: 11.5, color: "var(--muted)", margin: "6px 0 10px" }}>
                     Part-time classifications use the same start/end/spread/work/break parameters as full-time, plus the days each is available to work. A part-time shift works <b>all</b> of its available days at one time — no 40-hour week, no consecutive days-off rule. Set how many to build in the Signup Builder.
                   </div>
                   <table style={{ borderCollapse: "collapse", minWidth: 820 }}>
                     <thead>
                       <tr>
                         {["Type", "Earliest start", "Latest start", "Earliest end", "Latest end", "Min spread (h)", "Max spread (h)", "Work (h)", "Break", "Available days", "In use", ""].map((h) => (
-                          <th key={h} style={{ padding: "4px 8px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".06em", color: "#5B6B75", textAlign: "left", borderBottom: "1px solid #E7EDEF" }}>{h}</th>
+                          <th key={h} style={{ padding: "4px 8px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".06em", color: "var(--muted)", textAlign: "left", borderBottom: "1px solid var(--row-border)" }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -5259,14 +5305,14 @@ export default function App({ onHome }) {
                                     <button key={d} title={d}
                                       onClick={() => upd({ days: on ? days.filter((x) => x !== d) : [...days, d] })}
                                       style={{ padding: "2px 5px", fontSize: 10.5, fontWeight: 600, borderRadius: 2, cursor: "pointer",
-                                        border: `1px solid ${on ? supplyTeal : "#C7D2D6"}`, background: on ? supplyTeal : "#fff", color: on ? "#fff" : "#8899A3" }}>
+                                        border: `1px solid ${on ? supplyTeal : "#C7D2D6"}`, background: on ? supplyTeal : "#fff", color: on ? "#fff" : "var(--muted-light)" }}>
                                       {d.slice(0, 2)}
                                     </button>
                                   );
                                 })}
                               </div>
                             </td>
-                            <td style={{ padding: "3px 8px", fontSize: 12, color: inUse ? "#182430" : "#8899A3" }}>{inUse}</td>
+                            <td style={{ padding: "3px 8px", fontSize: 12, color: inUse ? text : "var(--muted-light)" }}>{inUse}</td>
                             <td style={{ padding: "3px 6px" }}>
                               <button style={{ ...nudgeBtn, padding: "3px 8px", fontSize: 12, color: gapRed, borderColor: gapRed }}
                                 title={inUse > 0 ? `${inUse} shift${inUse === 1 ? "" : "s"} use this type — they'll be flagged until retyped` : "Remove this type"}
@@ -5282,14 +5328,14 @@ export default function App({ onHome }) {
                         );
                       })}
                       {Object.keys(ptRules).length === 0 && (
-                        <tr><td colSpan={12} style={{ padding: "8px", fontSize: 12, color: "#8899A3" }}>No part-time classifications yet — add one below.</td></tr>
+                        <tr><td colSpan={12} style={{ padding: "8px", fontSize: 12, color: "var(--muted-light)" }}>No part-time classifications yet — add one below.</td></tr>
                       )}
                     </tbody>
                   </table>
                   <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
                     <input placeholder="New part-time code (e.g. PT-AM)" value={newPtType}
                       onChange={(e) => setNewPtType(e.target.value.toUpperCase().slice(0, 8))}
-                      style={{ padding: "6px 8px", border: "1px solid #B9C6CC", borderRadius: 2, fontSize: 13, width: 210, background: "#fff", color: ink }} />
+                      style={{ padding: "6px 8px", border: "1px solid var(--border-input)", borderRadius: 2, fontSize: 13, width: 210, background: card, color: text }} />
                     <button style={nudgeBtn} disabled={!newPtType || !!allRules[newPtType]}
                       onClick={() => {
                         if (!newPtType || allRules[newPtType]) return;
@@ -5307,7 +5353,7 @@ export default function App({ onHome }) {
 
             {/* breaks + limits + spans */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 14 }}>
-              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
+              <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
                   Break rules
                 </div>
@@ -5323,7 +5369,7 @@ export default function App({ onHome }) {
                 </div>
               </div>
 
-              <div data-tour="rules-limits" style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
+              <div data-tour="rules-limits" style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
                   Signup limits
                 </div>
@@ -5345,13 +5391,13 @@ export default function App({ onHome }) {
                   <span>Off-peak weighting (%)</span>
                   <NumField value={glob.offPeakBias ?? 0} step={5} onCommit={(v) => setGlob((g) => ({ ...g, offPeakBias: Math.min(60, Math.max(0, Math.round(v))) }))} />
                 </div>
-                <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10, lineHeight: 1.6 }}>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10, lineHeight: 1.6 }}>
                   <b>Coverage priority</b> spreads resources across busy times: 0 sends everything to the single biggest gap first; higher (0.5–2) spreads resources more evenly across all under-served times before deepening any one gap.<br /><br />
                   <b>Off-peak weighting</b> gives quiet times of day a bit more service than raw demand alone, since off-peak trips share rides less. 0 = follow demand exactly; higher % = flatter, more even coverage. Only compare scores between signups using the same weighting.
                 </div>
               </div>
 
-              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
+              <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
                   Packaging rules
                 </div>
@@ -5378,19 +5424,19 @@ export default function App({ onHome }) {
                             return { ...g, weekendGroup: on ? cur.filter((x) => x !== d) : [...cur, d] };
                           })}
                           style={{ padding: "2px 5px", fontSize: 10.5, fontWeight: 600, borderRadius: 2, cursor: "pointer",
-                            border: `1px solid ${on ? supplyTeal : "#C7D2D6"}`, background: on ? supplyTeal : "#fff", color: on ? "#fff" : "#8899A3" }}>
+                            border: `1px solid ${on ? supplyTeal : "#C7D2D6"}`, background: on ? supplyTeal : "#fff", color: on ? "#fff" : "var(--muted-light)" }}>
                           {d.slice(0, 2)}
                         </button>
                       );
                     })}
                   </div>
                 </div>
-                <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10 }}>
                   Days checked here (default Sat + Sun) use the <i>weekend</i> report-time limit instead of the <i>weekday</i> one — useful for a day like Friday that runs later. The third limit above caps how far weekday and weekend report times may differ. Applied automatically whenever a signup is built or optimized.
                 </div>
               </div>
 
-              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
+              <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: 10 }}>
                   <input type="checkbox" checked={!!glob.recycleEnabled} onChange={(e) => setGlob((g) => ({ ...g, recycleEnabled: e.target.checked }))} />
                   <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>Recycle vehicles (turn morning buses around for the afternoon)</span>
@@ -5407,14 +5453,14 @@ export default function App({ onHome }) {
                       <span>Recycle window — to</span>
                       <TimeField value={(glob.recycleWindow || [795, 900])[1]} onCommit={(v) => setGlob((g) => ({ ...g, recycleWindow: [(g.recycleWindow || [795, 900])[0], v] }))} />
                     </div>
-                    <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
+                    <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10 }}>
                       Requires at least this many morning runs to finish and turn around within the window, freeing their vehicles for afternoon shifts. A <b>floor</b>, not a cap — it never blocks or delays afternoon starts, only flags a signup that recycles too few. Weekdays only (Sat/Sun exempt). Separate from the fleet cap, which limits vehicles at any one time all day.
                     </div>
                   </>
                 )}
               </div>
 
-              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
+              <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
                   Service span
                 </div>
@@ -5427,12 +5473,12 @@ export default function App({ onHome }) {
                     </React.Fragment>
                   ))}
                 </div>
-                <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10 }}>
                   Shifts built or optimized automatically stay inside this window each day, widened by the pull-out/pull-in lead times below so a shift can still stage before the first trip and after the last. Manual edits can go outside it entirely — they'll just be flagged.
                 </div>
               </div>
 
-              <div data-tour="rules-deadhead" style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
+              <div data-tour="rules-deadhead" style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
                   Deadhead & productivity
                 </div>
@@ -5447,7 +5493,7 @@ export default function App({ onHome }) {
                   <NumField value={glob.demandShare} step={5} onCommit={(v) => setGlob((g) => ({ ...g, demandShare: Math.min(100, Math.max(1, Math.round(v))) }))} />
                 </div>
                 {(glob.avgCycleTime < 15 || glob.avgCycleTime > 90) && (
-                  <div style={{ background: "#FDF3E7", border: `1px solid ${demandAmber}`, padding: "6px 10px", fontSize: 12, marginTop: 8 }}>
+                  <div style={{ background: "var(--tint-amber-b)", border: `1px solid ${demandAmber}`, padding: "6px 10px", fontSize: 12, marginTop: 8 }}>
                     ⚠ A {glob.avgCycleTime}-minute cycle time is outside the typical shared-ride paratransit range (20–45 min).
                     Suggested vehicles, Requirement mode, and Size to requirement all scale directly with this number. If it came
                     from the calibration below while the demand file was inflated, fix the demand first (Demand tab), then recalibrate.
@@ -5457,15 +5503,15 @@ export default function App({ onHome }) {
                   <input type="checkbox" checked={!!glob.occupancyTarget} onChange={(e) => setGlob((g) => ({ ...g, occupancyTarget: e.target.checked }))} />
                   <span style={{ fontSize: 13, fontWeight: 600 }}>Occupancy-based target (spread each trip across its cycle time)</span>
                 </label>
-                <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 6 }}>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 6 }}>
                   Spreads each trip's vehicle-need across its full cycle time instead of one 5-minute booking slot, so a busy moment doesn't look like it needs one vehicle per booking. Affects only the coverage target line and what the optimizer chases — trip counts and ridership numbers don't change.
                 </div>
-                <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10 }}>
                   Pull-out/pull-in give an auto-generated shift room to start before its first trip and end after its last. Cycle time and demand share size the signup on the Signup Builder tab (Size to requirement) — the calibration below checks your cycle time against what your real data implies. If contractors or other providers also serve this demand, set the share your fleet covers.
                 </div>
                 {empiricalProductivity && empiricalProductivity.overall > 0 && (
                   empiricalProductivity.overall <= 7.5 ? (
-                    <div style={{ background: "#F2F8F7", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12, marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <div style={{ background: "var(--tint-teal-c)", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12, marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                       <span>
                         Your uploaded demand{glob.demandShare < 100 ? ` (at this signup's ${glob.demandShare}% share)` : ""} + signup imply <b>{empiricalProductivity.overall.toFixed(2)} trips/vehicle-hour</b> ({(60 / empiricalProductivity.overall).toFixed(1)} min cycle time) on average — calibrated from your own real vehicle-hours, not an assumed constant.
                       </span>
@@ -5475,7 +5521,7 @@ export default function App({ onHome }) {
                       </button>
                     </div>
                   ) : (
-                    <div style={{ background: "#FDF3E7", border: `1px solid ${demandAmber}`, padding: "8px 12px", fontSize: 12, marginTop: 10 }}>
+                    <div style={{ background: "var(--tint-amber-b)", border: `1px solid ${demandAmber}`, padding: "8px 12px", fontSize: 12, marginTop: 10 }}>
                       Your uploaded demand{glob.demandShare < 100 ? ` (at this signup's ${glob.demandShare}% share)` : ""} + signup imply {empiricalProductivity.overall.toFixed(1)} trips/vehicle-hour — an
                       unrealistically short {(60 / empiricalProductivity.overall).toFixed(1)}-minute cycle time. That usually means
                       the demand file has a data-quality issue or the demand share
@@ -5493,7 +5539,7 @@ export default function App({ onHome }) {
                   const impliedShare = Math.round(glob.demandShare * knownProd / empiricalProductivity.overall);
                   const ok = impliedShare >= 1 && impliedShare <= 100;
                   return (
-                    <div style={{ background: "#EAF1FB", border: "1px solid #BBD3EC", padding: "8px 12px", fontSize: 12, marginTop: 8, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <div style={{ background: "var(--tint-blue-bg)", border: "1px solid var(--border-blue)", padding: "8px 12px", fontSize: 12, marginTop: 8, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                       <span>
                         <b>Or pin the productivity you know you run:</b>
                       </span>
@@ -5503,12 +5549,12 @@ export default function App({ onHome }) {
                         implies this signup serves <b>{impliedShare}%</b> of the file's demand{ok ? "" : " — out of range; check the file"}.
                       </span>
                       {ok && (
-                        <button style={{ ...nudgeBtn, borderColor: "#185FA5", color: "#185FA5", fontWeight: 600 }}
+                        <button style={{ ...nudgeBtn, borderColor: "var(--text-blue)", color: "var(--text-blue)", fontWeight: 600 }}
                           onClick={() => setGlob((g) => ({ ...g, avgCycleTime: Math.round((60 / knownProd) * 10) / 10, demandShare: impliedShare }))}>
                           Apply share {impliedShare}% + cycle {(60 / knownProd).toFixed(1)} min
                         </button>
                       )}
-                      <span style={{ flexBasis: "100%", color: "#41525C" }}>
+                      <span style={{ flexBasis: "100%", color: "var(--text-mid)" }}>
                         Applying both makes Requirement mode and Size-to-requirement reproduce this signup's actual vehicle-hours from
                         this demand file — the requirement then scales honestly when demand grows or shifts. The file-relative share can
                         differ from your system-wide passenger share when the file counts trips rather than passengers.
@@ -5519,25 +5565,25 @@ export default function App({ onHome }) {
               </div>
             </div>
 
-            <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginTop: 14 }}>
+            <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginTop: 14 }}>
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
                 Signup period &amp; exception days
               </div>
               <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-end" }}>
                 <label style={{ fontSize: 12.5 }}>
-                  <div style={{ color: "#5B6B75", marginBottom: 4 }}>Period start</div>
+                  <div style={{ color: "var(--muted)", marginBottom: 4 }}>Period start</div>
                   <input type="date" value={signupPeriod.start}
                     onChange={(e) => setSignupPeriod((p) => ({ ...p, start: e.target.value }))}
                     style={{ ...numInput, width: 150, fontSize: 14, fontWeight: 500, textAlign: "left" }} />
                 </label>
                 <label style={{ fontSize: 12.5 }}>
-                  <div style={{ color: "#5B6B75", marginBottom: 4 }}>Period end</div>
+                  <div style={{ color: "var(--muted)", marginBottom: 4 }}>Period end</div>
                   <input type="date" value={signupPeriod.end}
                     onChange={(e) => setSignupPeriod((p) => ({ ...p, end: e.target.value }))}
                     style={{ ...numInput, width: 150, fontSize: 14, fontWeight: 500, textAlign: "left" }} />
                 </label>
                 <label style={{ fontSize: 12.5 }}>
-                  <div style={{ color: "#5B6B75", marginBottom: 4 }}>Country</div>
+                  <div style={{ color: "var(--muted)", marginBottom: 4 }}>Country</div>
                   <select value={signupPeriod.country} disabled={!hdCountries}
                     onChange={(e) => setSignupPeriod((p) => ({ ...p, country: e.target.value, region: "" }))}>
                     {hdCountries
@@ -5546,7 +5592,7 @@ export default function App({ onHome }) {
                   </select>
                 </label>
                 <label style={{ fontSize: 12.5 }}>
-                  <div style={{ color: "#5B6B75", marginBottom: 4 }}>Province / state</div>
+                  <div style={{ color: "var(--muted)", marginBottom: 4 }}>Province / state</div>
                   <select value={signupPeriod.region} disabled={!hdCtor}
                     onChange={(e) => setSignupPeriod((p) => ({ ...p, region: e.target.value }))}>
                     <option value="">All / nationwide only</option>
@@ -5554,7 +5600,7 @@ export default function App({ onHome }) {
                   </select>
                 </label>
               </div>
-              <div style={{ fontSize: 11.5, color: hdError ? gapRed : "#5B6B75", marginTop: 10 }}>
+              <div style={{ fontSize: 11.5, color: hdError ? gapRed : "var(--muted)", marginTop: 10 }}>
                 {hdError
                   ? `Couldn't load holiday data: ${hdError}`
                   : !signupPeriod.start || !signupPeriod.end
@@ -5566,9 +5612,9 @@ export default function App({ onHome }) {
                 <div style={{ overflowX: "auto", marginTop: 10 }}>
                   <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 640 }}>
                     <thead>
-                      <tr style={{ borderBottom: "1px solid #E2E8EA" }}>
+                      <tr style={{ borderBottom: "1px solid var(--border)" }}>
                         {["Date", "Weekday", "Holiday", "Runs as", "Source", ""].map((h) => (
-                          <th key={h} style={{ padding: "5px 8px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.06em", color: "#5B6B75", textAlign: "left" }}>{h}</th>
+                          <th key={h} style={{ padding: "5px 8px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--muted)", textAlign: "left" }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -5576,13 +5622,13 @@ export default function App({ onHome }) {
                       {holidays.map((h) => {
                         const weekday = DAYS[new Date(h.date + "T00:00:00").getDay()];
                         return (
-                          <tr key={h.id} style={{ borderBottom: "1px solid #EDF1F3" }}>
+                          <tr key={h.id} style={{ borderBottom: "1px solid var(--row-border-b)" }}>
                             <td style={{ padding: "5px 8px", fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>{h.date}</td>
                             <td style={{ padding: "5px 8px", fontSize: 12.5 }}>{weekday}</td>
                             <td style={{ padding: "5px 8px", fontSize: 12.5 }}>
                               {h.source === "custom"
                                 ? <input value={h.name} onChange={(e) => setHolidays((hs) => hs.map((x) => (x.id === h.id ? { ...x, name: e.target.value } : x)))}
-                                    style={{ padding: "3px 6px", border: "1px solid #B9C6CC", borderRadius: 2, fontSize: 12.5, width: 160 }} />
+                                    style={{ padding: "3px 6px", border: "1px solid var(--border-input)", borderRadius: 2, fontSize: 12.5, width: 160 }} />
                                 : h.name}
                             </td>
                             <td style={{ padding: "5px 8px" }}>
@@ -5631,7 +5677,7 @@ export default function App({ onHome }) {
               )}
 
               {statApplyInfo && (
-                <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#EAF3F3", border: `1px solid ${supplyTeal}`, padding: "7px 11px", marginTop: 10, fontSize: 12.5 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, background: "var(--tint-teal-d)", border: `1px solid ${supplyTeal}`, padding: "7px 11px", marginTop: 10, fontSize: 12.5 }}>
                   <span>{statApplyInfo} Review or move assignments under <b>Edit shifts</b>.</span>
                   <button style={{ ...nudgeBtn, padding: "2px 8px", fontSize: 12, marginLeft: "auto" }} onClick={() => setStatApplyInfo(null)}>Dismiss</button>
                 </div>
@@ -5639,14 +5685,14 @@ export default function App({ onHome }) {
 
               <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginTop: 12, flexWrap: "wrap" }}>
                 <label style={{ fontSize: 12.5 }}>
-                  <div style={{ color: "#5B6B75", marginBottom: 4 }}>Date</div>
+                  <div style={{ color: "var(--muted)", marginBottom: 4 }}>Date</div>
                   <input type="date" value={customDraft.date}
                     onChange={(e) => setCustomDraft((d) => ({ ...d, date: e.target.value }))}
                     style={{ ...numInput, width: 150, fontSize: 14, fontWeight: 500, textAlign: "left" }} />
                 </label>
                 <input placeholder="Closure name" value={customDraft.name}
                   onChange={(e) => setCustomDraft((d) => ({ ...d, name: e.target.value }))}
-                  style={{ padding: "6px 8px", border: "1px solid #B9C6CC", borderRadius: 2, fontSize: 13, width: 170, background: "#fff", color: ink }} />
+                  style={{ padding: "6px 8px", border: "1px solid var(--border-input)", borderRadius: 2, fontSize: 13, width: 170, background: card, color: text }} />
                 <select value={customDraft.runsAs} onChange={(e) => setCustomDraft((d) => ({ ...d, runsAs: e.target.value }))}>
                   <option value="">Regular (not observed)</option>
                   {DAYS.map((d) => <option key={d} value={d}>{d}</option>)}
