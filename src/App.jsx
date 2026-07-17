@@ -834,7 +834,10 @@ function findSuggestions(board, eng, DEM, rules, glob, spans = null) {
       }
       if (spans && cand.s !== seg.s) {
         for (const d of cand.days) {
-          if (spans[d] && (cand.s < spans[d][0] || cand.e > spans[d][1])) return; // outside this day's service span
+          if (spans[d]) {
+            const [lo, hi] = effSpan(spans, d, glob);
+            if (cand.s < lo || cand.e > hi) return; // outside this day's service span (widened by pull-out/pull-in)
+          }
         }
         // don't break a shift's weekday/weekend/cross report-time-variation limits
         const sibs = shiftStartsOf(seg.shift, seg.id);
@@ -953,6 +956,19 @@ function targetDemand(DEM, glob) {
     : schedulingDemand(DEM, glob ? glob.deadheadOutMin : 0, glob ? glob.deadheadInMin : 0);
 }
 
+// Service span widened by the pull-out/pull-in lead times, for AUTOMATIC candidate legality
+// only (generate/retime/refine/suggest). Without this, a span closing at the last trip's
+// time silently vetoes every candidate that stages into the pull-in window, even though the
+// classification rule's end limit and the demand-side edge staging both allow it — the span
+// becomes a hard wall the deadhead settings can never actually reach. The raw span still
+// governs the minVeh bonus window (actual service, not staging) and manual edits, which stay
+// flag-only per doctrine.
+function effSpan(spans, d, glob) {
+  const s = spans[d];
+  if (!s) return s;
+  return [s[0] - (glob.deadheadOutMin || 0), s[1] + (glob.deadheadInMin || 0)];
+}
+
 function buildCandidates(rules, glob) {
   const cands = [];
   for (const [t, R] of Object.entries(rules)) {
@@ -1060,8 +1076,10 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
     }
     const evalDay = (c, d) => {
       // hard constraint: a shift never starts before this day's service span opens or
-      // ends after it closes — classification windows are day-agnostic, spans are not
-      if (c.s < spans[d][0] || c.e > spans[d][1]) return null;
+      // ends after it closes (widened by pull-out/pull-in) — classification windows are
+      // day-agnostic, spans are not
+      const [spLo, spHi] = effSpan(spans, d, glob);
+      if (c.s < spLo || c.e > spHi) return null;
       if (maxPull > 0 && starts[d][c.startSlot] >= maxPull) return null;
       const a = idx(c.s), z = idx(c.e);
       let cap = PC[d][z] - PC[d][a];
@@ -1139,7 +1157,8 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
       PG[d] = pg; PC[d] = pc;
     }
     const evalDay = (c, d) => {
-      if (c.s < spans[d][0] || c.e > spans[d][1]) return null;
+      const [spLo2, spHi2] = effSpan(spans, d, glob);
+      if (c.s < spLo2 || c.e > spHi2) return null;
       if (maxPull > 0 && starts[d][c.startSlot] >= maxPull) return null;
       const a2 = idx(c.s), z2 = idx(c.e);
       let cap = PC[d][z2] - PC[d][a2];
@@ -1297,7 +1316,8 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT, opts 
       evaluated++;
       let total = 0, ok = true;
       for (const d of pkg.days) {
-        if (c.s < spans[d][0] || c.e > spans[d][1]) { ok = false; break; } // outside this day's service span
+        const [spLo, spHi] = effSpan(spans, d, glob);
+        if (c.s < spLo || c.e > spHi) { ok = false; break; } // outside this day's service span (widened by pull-out/pull-in)
         if (maxPull > 0 && starts[d][c.startSlot] >= maxPull) { ok = false; break; }
         const a = idx(c.s), z = idx(c.e);
         let cap = PC[d][z] - PC[d][a];
@@ -1606,7 +1626,10 @@ function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans) {
         evaluated++;
         const s2 = seg.s + m, e2 = seg.e + m;
         if (s2 < R.s[0] || s2 > R.s[1] || e2 < R.e[0] || e2 > R.e[1]) continue;
-        if (spans[d] && (s2 < spans[d][0] || e2 > spans[d][1])) continue; // keep within this day's service span
+        if (spans[d]) {
+          const [spLo, spHi] = effSpan(spans, d, glob);
+          if (s2 < spLo || e2 > spHi) continue; // keep within this day's service span (widened by pull-out/pull-in)
+        }
         const k = Math.floor((s2 - T0) / 5);
         if (maxPull > 0 && k >= 0 && k < N && starts[d][k] >= maxPull) continue;
         const sibs = shiftStartsOf(seg.shift, seg.id, d);
@@ -5253,7 +5276,7 @@ export default function App({ onHome }) {
                   ))}
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
-                  Shifts built or optimized automatically always start and end inside this window each day. Manual edits can still go outside it — they'll just be flagged.
+                  Shifts built or optimized automatically stay inside this window each day, widened by the pull-out/pull-in lead times below so a shift can still stage before the first trip and after the last. Manual edits can go outside it entirely — they'll just be flagged.
                 </div>
               </div>
 
