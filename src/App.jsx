@@ -3732,7 +3732,7 @@ export default function App({ onHome }) {
                 </>
               ) : (
                 <div style={{ fontSize: 13, color: "#41525C" }}>
-                  Still working from Sample Signup — upload your real signup on the SIGNUP tab to promote it as your working board.
+                  Still working from Sample Signup — upload your real signup on the SIGNUP tab to promote it as your working signup.
                 </div>
               )}
             </div>
@@ -4171,7 +4171,7 @@ export default function App({ onHome }) {
                       <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 10px" }}>
                         <div style={{ maxHeight: 430, overflowY: "auto" }}>
                           {segs.length === 0 && (
-                            <div style={{ fontSize: 13, color: "#5B6B75", padding: "8px 4px" }}>No shifts yet — "+ Add shift" above to start laying out this date's board.</div>
+                            <div style={{ fontSize: 13, color: "#5B6B75", padding: "8px 4px" }}>No shifts yet — "+ Add shift" above to start laying out this date's schedule.</div>
                           )}
                           {segs.map((sg) => {
                             const bad = validateSeg(sg, allRules, glob).length > 0;
@@ -4792,7 +4792,7 @@ export default function App({ onHome }) {
                 {sugsStale && sugs && <span style={{ fontSize: 12.5, color: demandAmber, fontWeight: 600 }}>Board changed — results are stale, recompute.</span>}
               </div>
               <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 4 }}>
-                Searches every legal slide and break move on the current board. Only moves that keep the shift rule-clean, stay within each day's service span, respect the fleet cap and the report-time-variation limits, and improve the weekly coverage score are shown — hours are never added, only repositioned. So a run is never nudged to a time a given day has no service (e.g. a weekday won't inherit later weekend hours).
+                Searches every legal slide and break move on the current signup. Only moves that keep the shift rule-clean, stay within each day's service span, respect the fleet cap and the report-time-variation limits, and improve the weekly coverage score are shown — hours are never added, only repositioned. So a run is never nudged to a time a given day has no service (e.g. a weekday won't inherit later weekend hours).
               </div>
               {sugs && sugs.length === 0 && (
                 <div style={{ fontSize: 13, color: "#5B6B75", marginTop: 10 }}>
