@@ -1684,7 +1684,7 @@ const TOUR_STEPS = [
   { tab: null, selector: null, title: "Welcome to the Signup Workbench",
     body: "This short tour walks through building and refining a paratransit operator signup — setting your rules, loading demand and a real signup, then generating and adjusting shifts. About two minutes, and you can replay it anytime from the Take a tour button." },
   { tab: "rules", selector: '[data-tour="rules-classification"]', title: "Start with shift classification",
-    body: "Every shift type — AM, NN10, BX, and so on — is defined here: earliest/latest start and end, spread, work hours, and whether a break is allowed. These windows drive everything downstream: what a generated shift can look like, and what gets flagged." },
+    body: "Every shift type — AM, NN10, BX, and so on — is defined here: earliest/latest start and end, spread, work hours, and whether a break is allowed. These windows drive everything downstream: what a generated shift can look like, and what gets flagged. Click any type's colored code to rename it, or use + Add type to create your own — nothing here is fixed to these examples." },
   { tab: "rules", selector: '[data-tour="rules-limits"]', title: "Set your signup's limits",
     body: "Signup-wide limits live here: how many 10-hour packages you'll allow, your fleet cap, sign-in stagger, and how aggressively resources chase gaps in coverage." },
   { tab: "rules", selector: '[data-tour="rules-deadhead"]', title: "Deadhead, cycle time & share",
