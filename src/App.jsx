@@ -5134,7 +5134,6 @@ export default function App({ onHome }) {
                   <NumField value={glob.offPeakBias ?? 0} step={5} onCommit={(v) => setGlob((g) => ({ ...g, offPeakBias: Math.min(60, Math.max(0, Math.round(v))) }))} />
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10, lineHeight: 1.6 }}>
-                  Currently {tenCount} ten-hour shifts{tenCount > glob.max10 ? " — over the maximum" : (glob.min10 > 0 && tenCount < glob.min10) ? " — under the minimum" : ""}. Auto-Build always fills at least the minimum and never exceeds the maximum; the signup is flagged if either line is crossed. New shifts are numbered starting from the series above.<br /><br />
                   <b>Coverage priority</b> spreads resources across busy times: 0 sends everything to the single biggest gap first; higher (0.5–2) spreads resources more evenly across all under-served times before deepening any one gap.<br /><br />
                   <b>Off-peak weighting</b> gives quiet times of day a bit more service than raw demand alone, since off-peak trips share rides less. 0 = follow demand exactly; higher % = flatter, more even coverage. Only compare scores between signups using the same weighting.
                 </div>
