@@ -3789,26 +3789,63 @@ export default function App({ onHome }) {
               </div>
             </div>
 
-            {buildResult && (
-              <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", maxWidth: 420, marginBottom: 14 }}>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "0 0 10px" }}>
-                  <Stat label="Weekly coverage score" value={`${(buildResult.score * 100).toFixed(1)}%`} sub={`${(buildResult.evaluated || 0).toLocaleString()} placements evaluated`} tone={supplyTeal} />
-                  <Stat label="Paid hours / week" value={buildResult.paidHours.toFixed(0)} tone={targetInk} />
-                  <Stat label="10-hour packages" value={buildResult.used10} sub={`cap ${glob.max10}`} tone={demandAmber} />
+            {buildResult && (() => {
+              // Split the built packages three ways: 10-hour (used10 already counts these),
+              // part-time (segs carry a pt flag), and 8-hour (whatever's left) — so the count
+              // boxes always foot to buildResult.packages regardless of the type mix.
+              const ptBuilt = buildResult.segs.filter((s) => s.pt).length;
+              const eightHour = buildResult.packages - buildResult.used10 - ptBuilt;
+              const mixRows = Object.entries(buildResult.mix).sort((a, b) => b[1] - a[1]);
+              return (
+                <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", maxWidth: 460, marginBottom: 14 }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "0 0 10px" }}>
+                    <Stat label="Weekly coverage score" value={`${(buildResult.score * 100).toFixed(1)}%`} sub={`${(buildResult.evaluated || 0).toLocaleString()} placements evaluated`} tone={supplyTeal} />
+                    <Stat label="Paid hours / week" value={buildResult.paidHours.toFixed(0)} tone={targetInk} />
+                    <Stat label="10-hour packages" value={buildResult.used10} sub={`cap ${glob.max10}`} tone={demandAmber} />
+                    <Stat label="8-hour packages" value={eightHour} tone={supplyTeal} />
+                    {ptBuilt > 0 && <Stat label="Part-time shifts" value={ptBuilt} tone={targetInk} />}
+                  </div>
+                  <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", color: "#8899A3", marginBottom: 4 }}>
+                    Shift classifications built
+                  </div>
+                  <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5 }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid #E7EDEF" }}>
+                        <th style={{ textAlign: "left", padding: "2px 6px 4px 0", color: "#5B6B75", fontWeight: 600 }}>Type</th>
+                        <th style={{ textAlign: "right", padding: "2px 6px 4px", color: "#5B6B75", fontWeight: 600 }}>Count</th>
+                        <th style={{ textAlign: "right", padding: "2px 6px 4px", color: "#5B6B75", fontWeight: 600 }}>Hours ea.</th>
+                        <th style={{ textAlign: "right", padding: "2px 0 4px 6px", color: "#5B6B75", fontWeight: 600 }}>% of built</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {mixRows.map(([t, n]) => (
+                        <tr key={t}>
+                          <td style={{ padding: "2px 6px 2px 0" }}>
+                            <span style={{ fontSize: 11.5, padding: "1px 6px", background: tColor(t), color: "#fff", borderRadius: 2, fontWeight: 600 }}>{t}</span>
+                          </td>
+                          <td style={{ textAlign: "right", padding: "2px 6px", fontVariantNumeric: "tabular-nums" }}>{n}</td>
+                          <td style={{ textAlign: "right", padding: "2px 6px", color: "#5B6B75", fontVariantNumeric: "tabular-nums" }}>{allRules[t] ? (allRules[t].work / 60).toFixed(0) : "—"}</td>
+                          <td style={{ textAlign: "right", padding: "2px 0 2px 6px", color: "#5B6B75", fontVariantNumeric: "tabular-nums" }}>{((n / buildResult.packages) * 100).toFixed(0)}%</td>
+                        </tr>
+                      ))}
+                      <tr style={{ borderTop: "1px solid #E7EDEF", fontWeight: 700 }}>
+                        <td style={{ padding: "4px 6px 2px 0" }}>Total</td>
+                        <td style={{ textAlign: "right", padding: "4px 6px 2px", fontVariantNumeric: "tabular-nums" }}>{buildResult.packages}</td>
+                        <td /><td />
+                      </tr>
+                    </tbody>
+                  </table>
+                  <button style={{ ...nudgeBtn, marginTop: 10, background: supplyTeal, color: "#fff", borderColor: supplyTeal }}
+                    onClick={() => {
+                      mutate(() => buildResult.segs.map(cloneSeg));
+                      setSelId(null);
+                      setTab("board");
+                    }}>
+                    Load this signup into the Designer
+                  </button>
                 </div>
-                <div style={{ fontSize: 12.5, color: "#41525C" }}>
-                  Mix: {Object.entries(buildResult.mix).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${t} ${n}`).join(" · ")}
-                </div>
-                <button style={{ ...nudgeBtn, marginTop: 10, background: supplyTeal, color: "#fff", borderColor: supplyTeal }}
-                  onClick={() => {
-                    mutate(() => buildResult.segs.map(cloneSeg));
-                    setSelId(null);
-                    setTab("board");
-                  }}>
-                  Load this signup into the Designer
-                </button>
-              </div>
-            )}
+              );
+            })()}
 
             <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
