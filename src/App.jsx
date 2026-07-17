@@ -3282,7 +3282,7 @@ export default function App({ onHome }) {
             ] },
             { label: "Phase 2 · Build", steps: [
               { key: "signup-builder", label: "SIGNUP BUILDER" },
-              { key: "board", label: "SHIFT BUILDER", done: changedCount > 0 || signupSource === "uploaded", reason: signupSource === "uploaded" ? "Review the promoted signup or generate a new board" : "Board unchanged from Sample Signup" },
+              { key: "board", label: "SHIFT BUILDER", done: changedCount > 0 || signupSource === "uploaded", reason: signupSource === "uploaded" ? "Review the promoted signup or generate a new one" : "Signup unchanged from Sample Signup" },
             ] },
             { label: "Phase 3 · Review", steps: [
               { key: "coverage", label: "COVERAGE", done: hasVisitedCoverage, reason: "Not yet reviewed" },
@@ -3332,7 +3332,7 @@ export default function App({ onHome }) {
             <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
               <button style={{ ...nudgeBtn, opacity: hist.length ? 1 : 0.4 }} onClick={undo} disabled={!hist.length}>↶ Undo</button>
               <button style={{ ...nudgeBtn, opacity: future.length ? 1 : 0.4 }} onClick={redo} disabled={!future.length}>↷ Redo</button>
-              <button style={{ ...nudgeBtn, borderColor: changedCount ? demandAmber : "#B9C6CC", opacity: changedCount ? 1 : 0.4 }} onClick={resetAll} disabled={!changedCount}>Reset board</button>
+              <button style={{ ...nudgeBtn, borderColor: changedCount ? demandAmber : "#B9C6CC", opacity: changedCount ? 1 : 0.4 }} onClick={resetAll} disabled={!changedCount}>Reset signup</button>
               {flagCount > 0 && (
                 <button style={{ ...nudgeBtn, background: gapRed, color: "#fff", borderColor: gapRed }} onClick={fixAll}>
                   Fix all flags ({flagCount})
@@ -3723,11 +3723,11 @@ export default function App({ onHome }) {
               {signupSource === "uploaded" ? (
                 <>
                   <div style={{ fontSize: 13, color: "#41525C" }}>
-                    Working board already reflects your uploaded signup{changedCount > 0 ? ` — ${changedCount} local change${changedCount > 1 ? "s" : ""} since then` : " — no local changes yet"}.
+                    Your working signup already reflects the upload{changedCount > 0 ? ` — ${changedCount} local change${changedCount > 1 ? "s" : ""} since then` : " — no local changes yet"}.
                   </div>
                   <button style={{ ...nudgeBtn, marginTop: 8, borderColor: changedCount ? demandAmber : "#B9C6CC", opacity: changedCount ? 1 : 0.5 }} disabled={!changedCount}
                     onClick={resetAll}>
-                    Use uploaded signup as working board
+                    Reset to the uploaded signup
                   </button>
                 </>
               ) : (
@@ -3740,7 +3740,7 @@ export default function App({ onHome }) {
             <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px", marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>
-                  Generate a starting board from the rules and demand
+                  Generate a starting signup from the rules and demand
                 </div>
                 <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
                   Weekly packages to build
@@ -3768,7 +3768,7 @@ export default function App({ onHome }) {
                       setBuildBusy(false);
                     }, 30);
                   }}>
-                  {buildBusy ? "Generating…" : "Generate board"}
+                  {buildBusy ? "Generating…" : "Generate signup"}
                 </button>
                 <button style={{ ...nudgeBtn, borderColor: "#185FA5", color: "#185FA5", fontWeight: 600 }} disabled={buildBusy || optRunning}
                   onClick={() => { setBuildN(reqSize.packages); setSizeInfo(reqSize); }}>
@@ -3777,7 +3777,7 @@ export default function App({ onHome }) {
               </div>
               {sizeInfo && (
                 <div style={{ marginTop: 10, padding: "9px 12px", background: "#EAF1FB", border: "1px solid #BBD3EC", fontSize: 12.5, color: "#185FA5", lineHeight: 1.5 }}>
-                  <b>Sized to requirement:</b> the week's demand (share {glob.demandShare}%) ÷ productivity (cycle {glob.avgCycleTime} min), redistributed under the fleet cap of {glob.maxFleet}, totals <b>{sizeInfo.hours.toLocaleString()}</b> vehicle-hours/week at a peak of <b>{sizeInfo.peak}</b> — ÷ 40 paid hours per package = <b>{sizeInfo.packages}</b> packages. Count set{sizeInfo.packages !== buildN ? ` (currently ${buildN})` : ""} — click <b>Generate board</b>.{ptEnabled ? " Part-time shifts add capacity on top, so trim the count if you keep them." : ""}
+                  <b>Sized to requirement:</b> the week's demand (share {glob.demandShare}%) ÷ productivity (cycle {glob.avgCycleTime} min), redistributed under the fleet cap of {glob.maxFleet}, totals <b>{sizeInfo.hours.toLocaleString()}</b> vehicle-hours/week at a peak of <b>{sizeInfo.peak}</b> — ÷ 40 paid hours per package = <b>{sizeInfo.packages}</b> packages. Count set{sizeInfo.packages !== buildN ? ` (currently ${buildN})` : ""} — click <b>Generate signup</b>.{ptEnabled ? " Part-time shifts add capacity on top, so trim the count if you keep them." : ""}
                 </div>
               )}
               <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
@@ -3785,7 +3785,7 @@ export default function App({ onHome }) {
                 Follow existing shift-type pattern (recommended when working from an uploaded signup)
               </label>
               <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 6 }}>
-                Builds whole weekly packages: each placement chooses a shift type, a start time on the 5-minute grid, and a consecutive days-off pattern together, so every generated shift is signable by construction — consistent report times all week, legal rest, no orphan runs. Fills at least the minimum 10-hour shifts set in Rules and never exceeds the maximum, choosing 8-hour work for the rest. Break-taking types are explored at every legal length (30 min to 4 h) and position, so long midday breaks that stretch a shift across both peaks are found automatically. The fleet cap, minimum-vehicle floor, sign-in stagger, and pull-out/pull-in lead time (Rules → Deadhead & productivity) steer every placement — a shift may start before the first trip it serves and end after the last, to allow for that lead time. Set the count to your designed-run envelope ({designed} currently). Loading a build replaces the current board — save your project first. With "Follow existing shift-type pattern" checked, new shifts fill one baseline shift-type block completely before moving to the next, in the same order as your uploaded signup, numbered to continue past its highest shift number.
+                Builds whole weekly packages: each placement chooses a shift type, a start time on the 5-minute grid, and a consecutive days-off pattern together, so every generated shift is signable by construction — consistent report times all week, legal rest, no orphan runs. Fills at least the minimum 10-hour shifts set in Rules and never exceeds the maximum, choosing 8-hour work for the rest. Break-taking types are explored at every legal length (30 min to 4 h) and position, so long midday breaks that stretch a shift across both peaks are found automatically. The fleet cap, minimum-vehicle floor, sign-in stagger, and pull-out/pull-in lead time (Rules → Deadhead & productivity) steer every placement — a shift may start before the first trip it serves and end after the last, to allow for that lead time. Set the count to your designed-run envelope ({designed} currently). Loading a build replaces the current signup — save your project first. With "Follow existing shift-type pattern" checked, new shifts fill one baseline shift-type block completely before moving to the next, in the same order as your uploaded signup, numbered to continue past its highest shift number.
               </div>
             </div>
 
@@ -3805,7 +3805,7 @@ export default function App({ onHome }) {
                     setSelId(null);
                     setTab("board");
                   }}>
-                  Load this board into the Designer
+                  Load this signup into the Designer
                 </button>
               </div>
             )}
@@ -3890,7 +3890,7 @@ export default function App({ onHome }) {
                 )}
               </div>
               <div style={{ fontSize: 12, color: "#5B6B75", marginTop: 6 }}>
-                Runs until you stop it: randomized full rebuilds explore different constructions, then the search digs around the best board found by re-placing a few runs at a time with everything else locked — millions of placements deep. Every move stays within each day's service span and the report-time-variation limits, so runs never drift to times a day has no service. The best score only ever goes up. Inputs (rules, demand, signup) are snapshotted when you press Start; keep this page open while it runs. Stopping finishes with a polish pass before the result is final — with "Fit report times to each day's demand" on (default), that polish splits runs into per-day report times within the variation limits, so a run can sit later on days with later service; off keeps every run uniform across its days.
+                Runs until you stop it: randomized full rebuilds explore different constructions, then the search digs around the best signup found by re-placing a few runs at a time with everything else locked — millions of placements deep. Every move stays within each day's service span and the report-time-variation limits, so runs never drift to times a day has no service. The best score only ever goes up. Inputs (rules, demand, signup) are snapshotted when you press Start; keep this page open while it runs. Stopping finishes with a polish pass before the result is final — with "Fit report times to each day's demand" on (default), that polish splits runs into per-day report times within the variation limits, so a run can sit later on days with later service; off keeps every run uniform across its days.
               </div>
 
               {optRun && (
@@ -3944,7 +3944,7 @@ export default function App({ onHome }) {
                 What do these numbers mean?
               </summary>
               <div style={{ marginTop: 8, lineHeight: 1.55, color: "#33434D" }}>
-                <b>Coverage score</b> answers one question: of all the trip demand in the period, what share happens while your service hours are proportionally in place to serve it? 100% would mean your hours perfectly trace the demand pattern — impossible in practice, since shifts come in fixed lengths with rules. Use the score to compare boards: higher means hours better matched to demand.<br /><br />
+                <b>Coverage score</b> answers one question: of all the trip demand in the period, what share happens while your service hours are proportionally in place to serve it? 100% would mean your hours perfectly trace the demand pattern — impossible in practice, since shifts come in fixed lengths with rules. Use the score to compare signups: higher means hours better matched to demand.<br /><br />
                 On each day tile, <b>demand</b> is that day's share of the week's trips, and <b>cov</b> is that day's coverage score. In the chart, the dark line is the <b>demand-aligned target</b> — your own hours redrawn to follow demand exactly (or weighted demand, when an off-peak weighting is set in Rules — light periods then claim proportionally more). <b>Red</b> = you're lighter than demand suggests at that time. <b>Teal above the line</b> = heavier than demand suggests (those hours earn no score). <b>Misplaced hours</b> totals the hours sitting in the heavy zones.<br /><br />
                 The overlay adds two vehicle reference lines (both visual only — neither affects the coverage score or generation):<br /><br />
                 For absolute sizing — how many vehicles and packages the demand requires at your share, productivity, and fleet cap — use the Signup Builder's <b>Size to requirement</b>; it uses the same demand data and the settings in Rules → Deadhead &amp; productivity.
@@ -3997,7 +3997,7 @@ export default function App({ onHome }) {
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
               <Stat label={`${day} coverage score`} value={`${(P.dayScore * 100).toFixed(1)}%`}
-                sub={changedCount ? `signed board: ${(base.perDay[day].dayScore * 100).toFixed(1)}%` : "% of demand pattern your service hours line up with"}
+                sub={changedCount ? `signed signup: ${(base.perDay[day].dayScore * 100).toFixed(1)}%` : "% of demand pattern your service hours line up with"}
                 tone={P.dayScore >= 0.9 ? supplyTeal : demandAmber} />
               <Stat label="Misplaced hours" value={`${P.misallocVH.toFixed(0)} vh`} sub="service hours sitting where demand is proportionally lower" tone={gapRed} />
               <Stat label="Peak supply" value={P.peakSup} sub={includePT ? "incl. supplemental runs, breaks netted" : "designed runs only, breaks netted"} tone={supplyTeal} />
@@ -4377,7 +4377,7 @@ export default function App({ onHome }) {
             <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 10px", marginBottom: 12 }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600 }}>
-                  {day} board — {ganttSegs.length} working segment{ganttSegs.length === 1 ? "" : "s"}
+                  {day} signup — {ganttSegs.length} working segment{ganttSegs.length === 1 ? "" : "s"}
                   {selShift != null && <span style={{ fontSize: 12, fontWeight: 400, color: "#5B6B75" }}> (showing shift {selShift} only — {daySegs.length} total this day)</span>}
                   {selShift == null && ganttTimeFilter != null && <span style={{ fontSize: 12, fontWeight: 400, color: supplyTeal }}> · on duty at {fmt(ganttTimeFilter)}</span>}
                 </div>
@@ -4530,7 +4530,7 @@ export default function App({ onHome }) {
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={false} showProductivity={false} slim avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={280}
                 selBand={sel ? [sel.s, sel.e] : null} onDutyCounts={onDutyCounts} onPointClick={(t) => { setSelId(null); setGanttTimeFilter(t); }} />
               <div style={{ fontSize: 11.5, color: "#5B6B75", padding: "2px 10px 10px" }}>
-                Dashed lines mark the selected shift. On desktop, the KPI strip and shift editor stay pinned while you scroll; on phones everything scrolls freely so the board and this chart get the full screen.
+                Dashed lines mark the selected shift. On desktop, the KPI strip and shift editor stay pinned while you scroll; on phones everything scrolls freely so the signup and this chart get the full screen.
               </div>
             </div>
           </>
@@ -4572,7 +4572,7 @@ export default function App({ onHome }) {
             <>
               <div className="kpistrip" style={{ top: ENVELOPE_H }}>
                 <div className="kpi"><span className="l">loaded signup · week</span><span className="v">{(base.weekScore * 100).toFixed(1)}%</span></div>
-                <div className="kpi"><span className="l">current board · week</span><span className="v" style={{ color: eng.weekScore >= base.weekScore ? "#7FD1C0" : "#F09E93" }}>{(eng.weekScore * 100).toFixed(1)}%</span></div>
+                <div className="kpi"><span className="l">working signup · week</span><span className="v" style={{ color: eng.weekScore >= base.weekScore ? "#7FD1C0" : "#F09E93" }}>{(eng.weekScore * 100).toFixed(1)}%</span></div>
                 <div className="kpi"><span className="l">{day} cov · was → now</span><span className="v">{(base.perDay[day].dayScore * 100).toFixed(1)}% → {(P.dayScore * 100).toFixed(1)}%</span></div>
                 <div className="kpi"><span className="l">modified / added / removed</span><span className="v">{changedWeek} / {boardDiff.added.length} / {boardDiff.removed.length}</span></div>
               </div>
@@ -4580,7 +4580,7 @@ export default function App({ onHome }) {
               <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 10px" }}>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
                   <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600 }}>
-                    {day} — loaded signup (dashed) vs current board (solid)
+                    {day} — loaded signup (dashed) vs working signup (solid)
                   </div>
                   <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 6 }}>
                     <input type="checkbox" checked={compareChangedOnly} onChange={(e) => setCompareChangedOnly(e.target.checked)} />
@@ -4651,7 +4651,7 @@ export default function App({ onHome }) {
                   })}
                 </div>
                 <div style={{ fontSize: 11, color: "#5B6B75", marginTop: 8 }}>
-                  Dashed outline = the run as it was in the loaded signup · solid bar = the run on the current board · hatched = break. Runs are matched by shift number; a generated-from-scratch board therefore shows the whole loaded signup as removed and the new runs as added — that comparison is honest, just busy.
+                  Dashed outline = the run as it was in the loaded signup · solid bar = the run on the working signup · hatched = break. Runs are matched by shift number; a generated-from-scratch signup therefore shows the whole loaded signup as removed and the new runs as added — that comparison is honest, just busy.
                 </div>
               </div>
             </>
@@ -4711,7 +4711,7 @@ export default function App({ onHome }) {
                 </div>
               )}
               <div style={{ fontSize: 12.5, color: "#5B6B75", margin: "0 0 10px" }}>
-                Each row is one signable weekly package. <b>Refine day-to-day times</b> nudges individual days of a package (within the report-time variation rule) wherever a single day's demand justifies a slightly different start — the source of day-variant rows like a 07:20 Sunday inside a 07:30 week. Auto-packaging appears when the board contains loose single-day runs. Rest, consecutive-day, and variation rules come from the Rules tab. Tap a row to inspect; edit times or working days in the Shift Builder.
+                Each row is one signable weekly package. <b>Refine day-to-day times</b> nudges individual days of a package (within the report-time variation rule) wherever a single day's demand justifies a slightly different start — the source of day-variant rows like a 07:20 Sunday inside a 07:30 week. Auto-packaging appears when the signup contains loose single-day runs. Rest, consecutive-day, and variation rules come from the Rules tab. Tap a row to inspect; edit times or working days in the Shift Builder.
               </div>
 
               {flagged.length > 0 && (
@@ -4876,7 +4876,7 @@ export default function App({ onHome }) {
                 );
               })()}
               <div style={{ fontSize: 11.5, color: "#8899A3", marginTop: 12 }}>
-                Coming later in this module: the ceiling computation — the best score any rule-legal board of this size could reach, so you know when a design is done.
+                Coming later in this module: the ceiling computation — the best score any rule-legal signup of this size could reach, so you know when a design is done.
               </div>
             </div>
           </>
@@ -4963,7 +4963,7 @@ export default function App({ onHome }) {
                                 // shifts keep their code and get a "not defined in Rules" flag —
                                 // visible, fixable by retyping, and undone by re-adding the type
                                 if (inUse > 0 && !window.confirm(
-                                  `${inUse} shift${inUse === 1 ? "" : "s"} on the board still use ${t}. ` +
+                                  `${inUse} shift${inUse === 1 ? "" : "s"} in the signup still use ${t}. ` +
                                   `They won't be deleted — they'll be flagged until you retype them or re-add ${t}. Remove the type?`)) return;
                                 setRules((old) => { const n = { ...old }; delete n[t]; return n; });
                               }}>
@@ -5060,7 +5060,7 @@ export default function App({ onHome }) {
                                 title={inUse > 0 ? `${inUse} shift${inUse === 1 ? "" : "s"} use this type — they'll be flagged until retyped` : "Remove this type"}
                                 onClick={() => {
                                   if (inUse > 0 && !window.confirm(
-                                    `${inUse} shift${inUse === 1 ? "" : "s"} on the board still use ${t}. They won't be deleted — they'll be flagged until you retype them or re-add ${t}. Remove the type?`)) return;
+                                    `${inUse} shift${inUse === 1 ? "" : "s"} in the signup still use ${t}. They won't be deleted — they'll be flagged until you retype them or re-add ${t}. Remove the type?`)) return;
                                   setPtRules((old) => { const n = { ...old }; delete n[t]; return n; });
                                 }}>
                                 remove
@@ -5113,12 +5113,12 @@ export default function App({ onHome }) {
 
               <div style={{ background: card, border: "1px solid #E2E8EA", padding: "12px 14px" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
-                  Board limits
+                  Signup limits
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "10px 12px", alignItems: "center", fontSize: 13 }}>
-                  <span>Minimum 10-hour shifts on board</span>
+                  <span>Minimum 10-hour shifts in signup</span>
                   <NumField value={glob.min10 ?? 0} onCommit={(v) => setGlob((g) => ({ ...g, min10: Math.max(0, Math.round(v)) }))} />
-                  <span>Maximum 10-hour shifts on board</span>
+                  <span>Maximum 10-hour shifts in signup</span>
                   <NumField value={glob.max10} onCommit={(v) => setGlob((g) => ({ ...g, max10: Math.max(0, Math.round(v)) }))} />
                   <span>Minimum vehicles in service (span)</span>
                   <NumField value={glob.minVeh} onCommit={(v) => setGlob((g) => ({ ...g, minVeh: v }))} />
@@ -5133,8 +5133,10 @@ export default function App({ onHome }) {
                   <span>Off-peak weighting (%)</span>
                   <NumField value={glob.offPeakBias ?? 0} step={5} onCommit={(v) => setGlob((g) => ({ ...g, offPeakBias: Math.min(60, Math.max(0, Math.round(v))) }))} />
                 </div>
-                <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
-                  Currently {tenCount} ten-hour shifts on the board{tenCount > glob.max10 ? " — over the maximum" : (glob.min10 > 0 && tenCount < glob.min10) ? " — under the minimum" : ""}. Auto-Build fills at least the minimum with 10-hour packages and never exceeds the maximum; the board flags if either bound is crossed. Generated shifts number from the series above, continuing past it if the board already has higher numbers. Coverage priority: 0 fills the gap — resources chase the biggest unmet demand, so tall peaks attract the most; higher values add diminishing returns so the first coverage at a slot is worth more than the last, spreading resources to the least-served slots before deepening any one peak (0.5 gentle · 1 moderate · 2 aggressive). Off-peak weighting: 0 means resources follow demand exactly (proportional); higher values flatten the target so lightly-loaded early and late periods claim proportionally more vehicles per trip and the peaks fewer — reflecting that off-peak trips share rides less. It applies to scoring, the target line, generation, retime, suggestions, and the optimizer, so scores are only comparable between boards evaluated at the same weighting.
+                <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10, lineHeight: 1.6 }}>
+                  Currently {tenCount} ten-hour shifts{tenCount > glob.max10 ? " — over the maximum" : (glob.min10 > 0 && tenCount < glob.min10) ? " — under the minimum" : ""}. Auto-Build always fills at least the minimum and never exceeds the maximum; the signup is flagged if either line is crossed. New shifts are numbered starting from the series above.<br /><br />
+                  <b>Coverage priority</b> spreads resources across busy times: 0 sends everything to the single biggest gap first; higher (0.5–2) spreads resources more evenly across all under-served times before deepening any one gap.<br /><br />
+                  <b>Off-peak weighting</b> gives quiet times of day a bit more service than raw demand alone, since off-peak trips share rides less. 0 = follow demand exactly; higher % = flatter, more even coverage. Only compare scores between signups using the same weighting.
                 </div>
               </div>
 
@@ -5173,7 +5175,7 @@ export default function App({ onHome }) {
                   </div>
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
-                  The <b>later-service day group</b> (default Sat + Sun) is the set of days whose report times are checked against the <i>weekend</i> cap; every other day uses the <i>weekday</i> cap, and the third cap bounds how far the two groups may drift apart. Add a day here (e.g. Friday) when it has later service and its runs should be allowed to report later than the tight weekday group. Checked on every weekly package in the Packaging tab; the auto-builder and optimizer satisfy these variance rules by construction.
+                  Days checked here (default Sat + Sun) use the <i>weekend</i> report-time limit instead of the <i>weekday</i> one — useful for a day like Friday that runs later. The third limit above caps how far weekday and weekend report times may differ. Applied automatically whenever a signup is built or optimized.
                 </div>
               </div>
 
@@ -5195,7 +5197,7 @@ export default function App({ onHome }) {
                       <TimeField value={(glob.recycleWindow || [795, 900])[1]} onCommit={(v) => setGlob((g) => ({ ...g, recycleWindow: [(g.recycleWindow || [795, 900])[0], v] }))} />
                     </div>
                     <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
-                      A <b>floor</b>, not a cap: at least this many <b>morning runs</b> (starting before the window opens) must finish and turn around by the window's <i>to</i> time, so their buses are free to pull out for afternoon shifts. The auto-builder and optimizer are gently nudged to leave enough early-finishing morning runs, and a loaded board is flagged when fewer than the minimum recycle. It never blocks or delays afternoon starts. Checked on <b>weekdays (Mon–Fri)</b> only — Saturday and Sunday are lighter and exempt. Separate from <i>Max vehicles in service</i>, which stays your all-day fleet cap. Driven by pull-in times — accurate end times / service spans matter.
+                      Requires at least this many morning runs to finish and turn around within the window, freeing their vehicles for afternoon shifts. A <b>floor</b>, not a cap — it never blocks or delays afternoon starts, only flags a signup that recycles too few. Weekdays only (Sat/Sun exempt). Separate from the fleet cap, which limits vehicles at any one time all day.
                     </div>
                   </>
                 )}
@@ -5215,7 +5217,7 @@ export default function App({ onHome }) {
                   ))}
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
-                  The minimum-vehicles rule applies inside the span, and Auto-Build, Retime, and the optimizer never place a shift outside it — no starts before the span opens or ends after it closes on any working day. The demand model itself is unaffected; manual edits can still cross the span (flag-never-block).
+                  Shifts built or optimized automatically always start and end inside this window each day. Manual edits can still go outside it — they'll just be flagged.
                 </div>
               </div>
 
@@ -5245,15 +5247,10 @@ export default function App({ onHome }) {
                   <span style={{ fontSize: 13, fontWeight: 600 }}>Occupancy-based target (spread each trip across its cycle time)</span>
                 </label>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 6 }}>
-                  When on, the coverage <b>target</b> (the dark line, and what the optimizer chases) models each trip <i>occupying</i> a vehicle
-                  for its full cycle (pickup → dropoff → turnaround) instead of dropping its whole vehicle-need into the single 5-minute slot
-                  where it books. A booking spike then spreads across the surrounding half hour — the way vehicles already in service actually
-                  absorb it — so the target stops implying vehicles ≈ events at busy moments. Uses your average trip cycle time; pull-out/pull-in
-                  are per-shift, not per-trip, so they don't widen the window. Off = target follows raw trip arrivals. Ridership displays and trip
-                  counts are unchanged either way.
+                  Spreads each trip's vehicle-need across its full cycle time instead of one 5-minute booking slot, so a busy moment doesn't look like it needs one vehicle per booking. Affects only the coverage target line and what the optimizer chases — trip counts and ridership numbers don't change.
                 </div>
                 <div style={{ fontSize: 11.5, color: "#5B6B75", marginTop: 10 }}>
-                  Pull-out/pull-in affects only Auto-Build's placement — a generated shift may start before the first trip it serves and end after the last, within this lead time. Cycle time (pickup to dropoff to next pickup, including deadhead) is an operational reference: the calibration below compares it against what your uploaded demand + signup imply. It no longer drives the Coverage chart's "Suggested vehicles" line, which now simply redistributes each day's scheduled vehicle-hours along that day's trip-share curve. If contractors or other providers serve part of the demand you upload, set the share this signup's fleet covers — the calibration and the absolute trip captions scale by it, while coverage scoring (shape-based, scale-free) is unaffected.
+                  Pull-out/pull-in give an auto-generated shift room to start before its first trip and end after its last. Cycle time and demand share size the signup on the Signup Builder tab (Size to requirement) — the calibration below checks your cycle time against what your real data implies. If contractors or other providers also serve this demand, set the share your fleet covers.
                 </div>
                 {empiricalProductivity && empiricalProductivity.overall > 0 && (
                   empiricalProductivity.overall <= 7.5 ? (
@@ -5351,7 +5348,7 @@ export default function App({ onHome }) {
                   ? `Couldn't load holiday data: ${hdError}`
                   : !signupPeriod.start || !signupPeriod.end
                     ? "Set a start and end date to detect statutory holidays for the selected jurisdiction."
-                    : `${holidays.length} date${holidays.length === 1 ? "" : "s"} found in range. "Runs as" assigns which weekday's board pattern governs that date; it doesn't change the board itself.`}
+                    : `${holidays.length} date${holidays.length === 1 ? "" : "s"} found in range. "Runs as" assigns which weekday's pattern governs that date; it doesn't change the signup itself.`}
               </div>
 
               {holidays.length > 0 && (
@@ -5404,7 +5401,7 @@ export default function App({ onHome }) {
                               ) : (
                                 <button style={{ ...nudgeBtn, padding: "3px 8px", fontSize: 12 }}
                                   onClick={() => { setDay(h.runsAs || weekday); setTab("board"); }}>
-                                  View board
+                                  View signup
                                 </button>
                               )}
                               {h.source === "custom" && (
