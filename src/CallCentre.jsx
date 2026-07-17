@@ -529,7 +529,7 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor }) {
 /* ================= DEMAND ================= */
 function DemandTab({ day, calls, arrivals, showArrivals, setShowArrivals, demSource, uploadInfo, callSummary, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }) {
   const upRef = useRef(null);
-  const srcLabel = { sample: "Sample call data (DATS Jul–Aug 2025)", sketched: "Sketched", uploaded: "Uploaded call data" }[demSource] || demSource;
+  const srcLabel = { sample: "Sample call data (Jul–Aug 2025)", sketched: "Sketched", uploaded: "Uploaded call data" }[demSource] || demSource;
   const hasArrivals = arrivals && arrivals[day];
   return (
     <div>

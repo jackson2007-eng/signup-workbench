@@ -1,7 +1,7 @@
 // Sample data for the Call Centre Staffing module. Shares the operator tool's 5-minute, 7-day grid
 // (246 slots from 05:00) so it can reuse the same coverage engine.
 //
-// The `calls` curve below is a real Active-calls concurrency curve derived from a DATS ACD call
+// The `calls` curve below is a real Active-calls concurrency curve derived from an agency ACD call
 // export (July–August 2025): for each 5-minute interval, the average number of inbound calls in
 // progress, averaged across each weekday's occurrences into a typical week. It's an aggregate only
 // (no agent names, no call records, no PII) and is shipped as the default so the tool has realistic
@@ -72,7 +72,7 @@ const board = [
 ];
 
 // Call arrivals (calls starting) per 5-minute interval, averaged into a typical week — the same
-// DATS export as `calls`, but counting starts rather than in-progress. Lower than concurrency
+// agency export as `calls`, but counting starts rather than in-progress. Lower than concurrency
 // because each call spans several intervals. Shown as an optional overlay on the demand curve.
 const arrivals = {
   Sunday: [0,0,0,0,0,0,0,0,0,0,0,0,0.13,0.63,0.38,0.5,0.38,0.63,0.25,0.5,0.5,0.25,0.38,0.25,1,2.25,1.75,1.38,1.88,3,4.63,4.13,4.25,4.38,4.13,4.13,5.25,4.75,4.63,4.25,4.25,4.13,4.25,3.13,1.75,2.38,1.5,2.38,4.88,4.75,2.25,3.13,3.75,3.63,4.63,5,4.88,4.75,3.25,3.88,4.88,6,3.63,4.38,4.25,5.25,3.5,4,3.5,4.38,2.63,2.88,4.25,3.38,4.25,4.88,4.13,5.88,3.75,3.88,3.25,5.13,3.5,5,2.5,2.88,1.38,1.75,1.88,1.5,3.75,3.38,4.75,4.25,4,3.63,6.25,4.25,3.25,4.5,3.88,2.63,1.25,0.13,0.75,0,0.38,0.13,1.38,1.88,1.5,1.38,0.75,1.63,1.63,1.38,0.88,0.25,1.63,0.63,1.38,1.25,1.25,0.5,0.25,0,1.13,1.25,1,1.25,1.88,0.88,1.63,0.75,0.88,0.5,0.75,0.88,1.13,0.38,0.38,1,1.25,0.75,0.5,0.88,0.63,0.88,0.75,1.38,0.88,0,0.25,0.13,0.38,0,0.13,0.13,0.25,0,0,0.13,1.13,1.63,1,1.5,1.25,1.25,0.88,1,0.38,0.63,1,0.63,0.75,0.5,0.75,0.38,0.75,0.5,0.63,0.88,0.13,0.13,0.38,0.63,0,0,0.38,0.13,0.38,0.13,0.75,0.75,0.5,0.5,1.13,0.5,1,0.63,0.88,0.13,0.63,0.75,0,0.25,0.25,0.25,0.13,0,0,0.25,0.13,0,0,0.13,0.25,0.13,0,0,0,0.13,0.25,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
@@ -84,7 +84,7 @@ const arrivals = {
   Saturday: [0,0,0,0,0,0,0,0,0.13,0,0,0,0.5,0.63,0.25,0.38,0.25,0.38,0.38,0.38,0.25,0.75,1,0,0.75,0.38,0.13,0.63,0.38,0.5,3.88,4.25,3.13,5,2.88,2.88,3.63,2.63,3.38,2.88,3,2.75,3.25,3.75,3.38,2.63,3.25,3,4.13,3.5,3.75,2.88,4,2.75,2.38,2.13,3.25,2.5,2.25,1.88,1.38,2,2.5,2,2.25,1.38,2,2.75,1.75,2.63,3,2,2.38,2.38,3.63,3.88,2.75,2.38,2.38,2.13,2.88,2.5,2.25,1.63,1.38,1.38,1,1.13,1.25,1.25,0.88,0.75,0.75,0.38,0.38,0.63,0.5,0.63,1.25,0.88,0.38,0.63,1.5,1.5,1.75,1.88,2,1.38,1.38,2.13,1.13,1.38,1.38,1.25,1.63,2,1.38,1,1,1.75,1.25,2.38,1.88,1.13,1.63,1.25,1.38,1.63,2.75,0.88,0.75,0.38,0.88,1.25,0.75,0.63,1.25,1,2.38,2.25,1,0.88,1.5,0.63,1.5,2.13,0.75,0.38,0.25,1.13,2,2.88,1.63,1.75,1.88,2.63,1.38,2,1.88,0.88,1.5,2.13,1.13,1.13,0.63,1.25,1.13,1,1,0.88,0.75,0.38,0.88,0.38,0.75,0.63,0.38,0.75,0.5,0.38,0.5,0.13,0.63,0.38,0.5,0.25,0.38,0.25,0.25,0.25,0.38,0.38,0.5,0.25,0.13,0.63,0.5,0.63,0,0.13,0.25,0.5,0.38,0.13,0.63,0,0.25,0.5,0.5,0.38,0.5,0,0,0.13,0.25,0.25,0.75,0.13,0.5,0.25,0,0,0.13,0.13,0,0,0.25,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
 };
 
-// Volume / handle-time + composition summary derived from the same DATS export (aggregate only):
+// Volume / handle-time + composition summary derived from the same agency export (aggregate only):
 // average inbound calls per weekday, average handle time (minutes), the ACD vs non-ACD split, and
 // the busiest routing queues. Used for the "Call data at a glance" panel.
 const summary = {
@@ -100,10 +100,10 @@ const summary = {
   aht: 1.77,
   composition: { acd: 28201, nonAcd: 2047 },
   queues: [
-    { name: "DATS Cancellations", calls: 15801 },
-    { name: "DATS Booking", calls: 11981 },
-    { name: "DATS Subscriptions", calls: 209 },
-    { name: "DATS Registration", calls: 98 },
+    { name: "Cancellations", calls: 15801 },
+    { name: "Booking", calls: 11981 },
+    { name: "Subscriptions", calls: 209 },
+    { name: "Registration", calls: 98 },
   ],
 };
 
