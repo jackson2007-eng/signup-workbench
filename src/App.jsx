@@ -3461,19 +3461,25 @@ export default function App({ onHome }) {
               SIGNUP WORKBENCH
             </div>
           </div>
-          <div style={{ marginLeft: "auto", fontFamily: "'Barlow Condensed', sans-serif", fontSize: 22, fontWeight: 600 }}>
-            <span style={{ fontSize: 11, verticalAlign: "middle", padding: "2px 7px", marginRight: 8, borderRadius: 2, background: demSource === "sketched" ? demandAmber : demSource === "uploaded" ? supplyTeal : sampleGray, color: "#fff", letterSpacing: ".06em" }}>
-              {demSource === "sketched" ? "SKETCHED DEMAND" : demSource === "uploaded" ? "UPLOADED DEMAND" : "SAMPLE DATA"}
-            </span>
-            Weekly coverage score{" "}
-            <span style={{ color: eng.weekScore >= 0.9 ? supplyTeal : demandAmber }}>
-              {(eng.weekScore * 100).toFixed(1)}%
-            </span>
-            {changedCount > 0 && (
-              <span style={{ fontSize: 14, color: weekDelta >= 0 ? supplyTeal : gapRed }}>
-                {" "}({weekDelta >= 0 ? "+" : ""}{weekDelta.toFixed(2)} vs signed)
+          <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+            <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"
+              style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".04em", padding: "2px 8px", background: "none", border: "1px solid var(--border-input)", borderRadius: 2, color: "var(--muted)", cursor: "pointer" }}>
+              {theme === "dark" ? "☀ Light" : "☾ Dark"}
+            </button>
+            <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 22, fontWeight: 600 }}>
+              <span style={{ fontSize: 11, verticalAlign: "middle", padding: "2px 7px", marginRight: 8, borderRadius: 2, background: demSource === "sketched" ? demandAmber : demSource === "uploaded" ? supplyTeal : sampleGray, color: "#fff", letterSpacing: ".06em" }}>
+                {demSource === "sketched" ? "SKETCHED DEMAND" : demSource === "uploaded" ? "UPLOADED DEMAND" : "SAMPLE DATA"}
               </span>
-            )}
+              Weekly coverage score{" "}
+              <span style={{ color: eng.weekScore >= 0.9 ? supplyTeal : demandAmber }}>
+                {(eng.weekScore * 100).toFixed(1)}%
+              </span>
+              {changedCount > 0 && (
+                <span style={{ fontSize: 14, color: weekDelta >= 0 ? supplyTeal : gapRed }}>
+                  {" "}({weekDelta >= 0 ? "+" : ""}{weekDelta.toFixed(2)} vs signed)
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
@@ -3482,9 +3488,6 @@ export default function App({ onHome }) {
           <button style={{ ...nudgeBtn, borderColor: supplyTeal, color: supplyTeal, fontWeight: 700, marginRight: "auto" }}
             onClick={() => setTourStep(0)}>
             ✦ Take a tour
-          </button>
-          <button style={nudgeBtn} onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode">
-            {theme === "dark" ? "☀ Light" : "☾ Dark"}
           </button>
           <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={exportBoard}>Export Completed Signup</button>
           <button style={nudgeBtn} onClick={saveProject}>Save project</button>
