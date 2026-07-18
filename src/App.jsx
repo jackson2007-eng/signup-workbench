@@ -2116,7 +2116,7 @@ function aggregateCoverageRows(rows, bucketMin) {
 
 function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity, avgCycleTime = 0, demandShare = 100, height = 320, selBand,
   supplyName = "Supply", targetName = "Demand-aligned target", unitLabel = "events", minName = "min", sugTooltip = true, extraSeries = null,
-  onPointClick = null, onDutyCounts = null, slim = false, aggregateMin = 5 }) {
+  onPointClick = null, onDutyCounts = null, slim = false, aggregateMin = 5, showTripBar = false }) {
   const data = useMemo(() => {
     const bk = RAW.bookout[day];
     const bkMap = {};
@@ -2183,7 +2183,19 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
     }
     return rows;
   }, [P, day, avgCycleTime, demandShare, fleetCap, extraSeries, onDutyCounts]);
-  const displayData = useMemo(() => aggregateCoverageRows(data, aggregateMin), [data, aggregateMin]);
+  const aggregatedData = useMemo(() => aggregateCoverageRows(data, aggregateMin), [data, aggregateMin]);
+  // Trip volume (raw event counts, summed per bucket) lives on a completely different scale
+  // than the vehicle-level series — plotting it unscaled would blow out the y-axis and squash
+  // everything else flat. Rescaled here so its peak sits at ~85% of the tallest vehicle value,
+  // purely for shape comparison: a light backdrop showing where and how much demand volume
+  // grows, not a value meant to be read against the vehicle axis.
+  const displayData = useMemo(() => {
+    if (!showTripBar) return aggregatedData;
+    const maxVeh = Math.max(1, minVeh, fleetCap || 0, ...aggregatedData.map((r) => Math.max(r.target || 0, r.sup || 0)));
+    const maxEvents = Math.max(1, ...aggregatedData.map((r) => r.events || 0));
+    const scale = (maxVeh * 0.85) / maxEvents;
+    return aggregatedData.map((r) => ({ ...r, tripBar: Math.round(r.events * scale * 10) / 10 }));
+  }, [aggregatedData, showTripBar, minVeh, fleetCap]);
   // ~10 visible x-axis labels regardless of how many buckets that resolution produces
   const xInterval = Math.max(0, Math.ceil(displayData.length / 10) - 1);
   return (
@@ -2228,6 +2240,9 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
           }}
           contentStyle={{ fontSize: 12, border: "1px solid var(--border-light)" }} />
         <Legend wrapperStyle={{ fontSize: 12 }} />
+        {showTripBar && (
+          <Area type="stepAfter" dataKey="tripBar" name="Trip volume (this period)" stroke="none" fill={demandAmber} fillOpacity={0.28} tooltipType="none" isAnimationActive={false} />
+        )}
         <Area type="stepAfter" dataKey="target" name={targetName} stroke={targetInk} strokeWidth={1.5} fill="#233746" fillOpacity={0.07} tooltipType={slim ? "none" : undefined} />
         <Area type="stepAfter" dataKey="gap" name="Gap" stroke="none" fill={gapRed} fillOpacity={0.22} legendType="none" />
         <Area type="stepAfter" dataKey="covered" name="Aligned" stroke="none" fill={supplyTeal} fillOpacity={0.16} legendType="none" />
@@ -4686,7 +4701,7 @@ export default function App({ onHome }) {
               </div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={false} showProductivity={false} slim avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={340}
                 onDutyCounts={onDutyCounts} onPointClick={focusRun}
-                extraSeries={null} aggregateMin={coverageResolution} />
+                extraSeries={null} aggregateMin={coverageResolution} showTripBar />
               {ganttTimeFilter != null && (
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "var(--tint-teal-d)", border: `1px solid ${supplyTeal}`, padding: "8px 12px", margin: "6px 10px 0", fontSize: 13 }}>
                   <b>{fmt(ganttTimeFilter)} ({day}):</b>
