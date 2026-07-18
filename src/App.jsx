@@ -790,6 +790,25 @@ for (let m = -120; m <= 120; m += 5) if (m !== 0) SLIDES.push(m);
 const BRK_SLIDES = [];
 for (let m = -90; m <= 90; m += 5) if (m !== 0) BRK_SLIDES.push(m);
 
+// Schedule-stability penalty: `weight` points per hour a candidate time sits from its
+// origin, so near-equal options resolve to "keep it where it is" while genuine coverage
+// gains still override it. Callers on retimeBoard's own raw-objective scale pass
+// glob.scheduleStability directly; callers on the tiny week-fraction-normalized objective
+// (findSuggestions/refinePerDay/the optimizer monitor) must pre-scale the weight — see
+// FS_STAB_SCALE/RPD_STAB_SCALE/MON_STAB_SCALE — or the penalty swamps the real deltas.
+function stabilityPenalty(candS, origS, weight) {
+  return weight ? (Math.abs(candS - origS) / 60) * weight : 0;
+}
+// Calibrated empirically against the shipped sample board: findSuggestions' displayed delta is
+// s.delta*100 (see the Suggestions tab render), so a "+0.21" suggestion is a raw delta of 0.0021
+// — real deltas on that board run roughly 0.001-0.002, not the larger figure first assumed here.
+// These constants keep a 100-min slide's penalty at default stability (3) around a third of a
+// typical real delta (discourages big near-ties without blocking a clearly-better big move),
+// while a 5-min move's penalty stays negligible against the 0.0004 filter threshold.
+const FS_STAB_SCALE = 0.00002;    // findSuggestions (delta filter threshold 0.0004)
+const RPD_STAB_SCALE = 0.0000006; // refinePerDay (delta filter threshold 1e-6; see PROJECT_NOTES §5.6)
+const MON_STAB_SCALE = 0.00002;   // optimizer monitor accept-if-better (same objective family as findSuggestions)
+
 function startsPerSlot(board) {
   const starts = {};
   for (const d of DAYS) starts[d] = new Array(N).fill(0);
@@ -800,7 +819,9 @@ function startsPerSlot(board) {
   return starts;
 }
 
-function findSuggestions(board, eng, DEM, rules, glob, spans = null) {
+function findSuggestions(board, eng, DEM, rules, glob, spans = null, original = null) {
+  const origMap = new Map((original || board).map((s) => [s.id, s]));
+  const stabWeight = (glob.scheduleStability || 0) * FS_STAB_SCALE;
   const starts = startsPerSlot(board);
   const maxPull = glob.maxPullout || 0;
   const pcov = glob.coveragePriority > 0 ? glob.coveragePriority : 0;
@@ -827,6 +848,7 @@ function findSuggestions(board, eng, DEM, rules, glob, spans = null) {
   }
   const out = [];
   for (const seg of board) {
+    const orig = origMap.get(seg.id) || seg;
     const baseIssues = validateSeg(seg, rules, glob).length;
     const oldC = segContrib(seg);
     const tryCand = (cand, label) => {
@@ -867,7 +889,9 @@ function findSuggestions(board, eng, DEM, rules, glob, spans = null) {
         if (fleetBad) return;
         delta += term - termBase[d];
       }
-      if (delta > 0.0004) out.push({ id: seg.id, shift: seg.shift, run: seg.run, type: seg.type, label, delta, payload: { s: cand.s, e: cand.e, b: cand.b } });
+      const moveMin = cand.s !== seg.s ? Math.abs(cand.s - orig.s) : Math.abs(cand.b[0] - (orig.b ? orig.b[0] : cand.b[0]));
+      const netDelta = delta - (moveMin / 60) * stabWeight;
+      if (netDelta > 0.0004) out.push({ id: seg.id, shift: seg.shift, run: seg.run, type: seg.type, label, delta: netDelta, moveMin, payload: { s: cand.s, e: cand.e, b: cand.b } });
     };
     for (const m of SLIDES) {
       const cand = { ...seg, s: seg.s + m, e: seg.e + m, b: seg.b ? [seg.b[0] + m, seg.b[1] + m] : null };
@@ -1370,15 +1394,19 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT, opts 
   return { segs, retimed, kept: kept + passShifts.size, evaluated, mix, packages: pkgs.length + passShifts.size };
 }
 
-function optimizeToConvergence(board0, engine0Args, rules, glob, maxIter = 25) {
+function optimizeToConvergence(board0, engine0Args, rules, glob, maxIter = 25, original = null) {
   // engine0Args = (DEM, includePT, minVeh, spans, maxFleet)
   const [DEM, includePT, minVeh, spans, maxFleet] = engine0Args;
   let board = board0.map((s) => ({ ...s, b: s.b ? [...s.b] : null, days: [...s.days] }));
+  // fixed anchor for the whole run: board's segment objects are mutated in place below, so this
+  // must be its own clone, not the same references — otherwise the schedule-stability penalty
+  // would always compare a move against itself instead of bounding cumulative drift across iterations
+  const anchor = original || board.map((s) => ({ ...s, b: s.b ? [...s.b] : null }));
   let applied = 0, iter = 0, evaluated = 0;
   while (iter < maxIter) {
     iter++;
     const eng = computeEngine(DEM, buildSupply(board), includePT, minVeh, spans, maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob);
-    const sugs = findSuggestions(board, eng, DEM, rules, glob, spans);
+    const sugs = findSuggestions(board, eng, DEM, rules, glob, spans, anchor);
     evaluated += sugs.evaluated || 0;
     if (!sugs.length) break;
     const byId = new Map(board.map((s) => [s.id, s]));
@@ -1392,15 +1420,19 @@ function optimizeToConvergence(board0, engine0Args, rules, glob, maxIter = 25) {
   return { board, applied, iterations: iter, evaluated };
 }
 
-function deepOptimize(board0, engineArgs, rules, glob) {
+function deepOptimize(board0, engineArgs, rules, glob, original = null) {
   let board = board0;
+  // anchored to where the whole run started (or an explicit external original, e.g. the board
+  // the scheduler had loaded before clicking "Run Optimizer") — every round below reuses this
+  // same fixed reference rather than each round's own evolving board
+  const anchor = original || board0.map((s) => ({ ...s, b: s.b ? [...s.b] : null, days: [...s.days] }));
   let moves = 0, evaluated = 0, created = 0, passes = 0;
   const [DEM, includePT, minVeh, spans, maxFleet] = engineArgs;
   for (let round = 0; round < 4; round++) {
     passes++;
-    const r1 = optimizeToConvergence(board, engineArgs, rules, glob);
+    const r1 = optimizeToConvergence(board, engineArgs, rules, glob, 25, anchor);
     board = r1.board; moves += r1.applied; evaluated += r1.evaluated;
-    const r2 = refinePerDay(board, rules, glob, DEM, includePT, minVeh, spans);
+    const r2 = refinePerDay(board, rules, glob, DEM, includePT, minVeh, spans, anchor);
     board = r2.board; moves += r2.moves; created += r2.created; evaluated += r2.evaluated;
     if (r1.applied + r2.moves === 0) break;
   }
@@ -1573,8 +1605,13 @@ function autoPackage(board, rules, glob) {
 }
 
 /* ---------- per-day refinement ---------- */
-function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans) {
+function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans, original = null) {
   let board = board0.map(cloneSeg);
+  // origin keyed by shift:day (not segment id) since a day can split off into a brand-new
+  // segment id mid-sweep below — the shift number is what stays stable across that split
+  const origByShiftDay = new Map();
+  for (const sg of (original || board0)) for (const d of sg.days) origByShiftDay.set(`${sg.shift}:${d}`, sg.s);
+  const stabWeight = (glob.scheduleStability || 0) * RPD_STAB_SCALE;
   const maxVar = Math.max(glob.maxStartVarWeekday || 0, glob.maxStartVarWeekend || 0, glob.maxStartVarCross || 0) || 60;
   const maxPull = glob.maxPullout || 0;
   let created = 0, moves = 0, evaluated = 0;
@@ -1655,7 +1692,9 @@ function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans) {
         }
         if (fleetBad) continue;
         const delta = t - term[d];
-        if (delta > bestDelta) { bestDelta = delta; bestM = m; bestTerm = t; }
+        const origS = origByShiftDay.get(`${seg.shift}:${d}`) ?? seg.s;
+        const netDelta = delta - (Math.abs(s2 - origS) / 60) * stabWeight;
+        if (netDelta > bestDelta) { bestDelta = netDelta; bestM = m; bestTerm = t; }
       }
       if (bestM === 0) continue;
       // apply live
@@ -2261,6 +2300,7 @@ export default function App({ onHome }) {
         const g = generateBoard(cfg.glob.min10 || 0, cfg.buildN, cfg.rules, cfg.glob, cfg.DEM, cfg.spans, cfg.glob.minVeh, cfg.includePT, cfg.typeSequence, cfg.startShiftNumber, o, cfg.ptRules, cfg.ptCount);
         segs = g.segs; ev = g.evaluated;
       } else {
+        o.stability = cfg.glob.scheduleStability;
         const r = retimeBoard(cfg.baseline, cfg.rules, cfg.glob, cfg.DEM, cfg.spans, cfg.glob.minVeh, cfg.includePT, o);
         segs = r.segs; ev = r.evaluated;
       }
@@ -2270,7 +2310,7 @@ export default function App({ onHome }) {
       const k = Math.min(shifts.length, 4 + Math.floor(rng() * 9));
       const subset = new Set();
       while (subset.size < k) subset.add(shifts[Math.floor(rng() * shifts.length)]);
-      const r = retimeBoard(st.best, cfg.rules, cfg.glob, cfg.DEM, cfg.spans, cfg.glob.minVeh, cfg.includePT, { rng, noise: 2, subsetShifts: subset });
+      const r = retimeBoard(st.best, cfg.rules, cfg.glob, cfg.DEM, cfg.spans, cfg.glob.minVeh, cfg.includePT, { rng, noise: 2, subsetShifts: subset, stability: cfg.glob.scheduleStability });
       segs = r.segs; ev = r.evaluated;
     }
     st.iter++;
@@ -2278,7 +2318,11 @@ export default function App({ onHome }) {
     const sc = st.scoreFn(segs); // { obj, cov }
     const tSec = (performance.now() - st.startedAt) / 1000;
     if (cfg.mode === "generate" && st.baselineScore == null) st.baselineScore = sc.cov; // reference = the plain single-shot Generate (coverage)
-    if (sc.obj > st.bestObj + 1e-12) { // accept on objective; display coverage
+    // accept on objective net of schedule-stability cost (how far this candidate drifted from
+    // the board the scheduler actually loaded, cfg.baseline) so a restart's wild reshuffle only
+    // becomes the new best if its coverage gain is worth the accumulated disruption — not just
+    // better than the previous best's raw objective, which could itself already have drifted.
+    if (sc.obj - st.stabilityCost(segs) > st.bestObj - st.stabilityCost(st.best) + 1e-12) { // accept on objective; display coverage
       st.best = segs;
       st.bestObj = sc.obj;
       st.bestScore = sc.cov;
@@ -2327,8 +2371,20 @@ export default function App({ onHome }) {
       return { obj: e.weekObjective, cov: e.weekScore };
     };
     const baseline = mode === "retime" ? scoreFn(cfg.baseline) : null;
+    // schedule-stability cost of a candidate board: mean hours each package's report time has
+    // moved from its position in cfg.baseline (the board the scheduler actually had loaded when
+    // Run Optimizer was clicked), so accept-if-better weighs coverage gain against disruption
+    // from where the run truly started — not just against the previous best, which could itself
+    // already have drifted. Mean, not sum, so board size doesn't change the penalty's weight.
+    const stabilityCost = (segs) => {
+      if (!segs) return 0;
+      const orig = new Map(cfg.baseline.map((s) => [s.shift, s.s]));
+      const hrs = segs.map((s) => Math.abs(s.s - (orig.get(s.shift) ?? s.s)) / 60);
+      const mean = hrs.length ? hrs.reduce((a, b) => a + b, 0) / hrs.length : 0;
+      return mean * (cfg.glob.scheduleStability || 0) * MON_STAB_SCALE;
+    };
     optRef.current = {
-      abort: false, cfg, scoreFn,
+      abort: false, cfg, scoreFn, stabilityCost,
       // retime mode seeds the loaded signup itself as the incumbent — the search can only
       // ever improve on what's already in hand, never hand back something worse
       best: mode === "retime" ? cfg.baseline : null,
@@ -2354,8 +2410,8 @@ export default function App({ onHome }) {
       // their days (bid-recognizable) via whole-segment slides only. Applies in both modes.
       const engineArgs = [st.cfg.DEM, st.cfg.includePT, st.cfg.glob.minVeh, st.cfg.spans, st.cfg.glob.maxFleet];
       const polished = st.cfg.fitEachDay
-        ? deepOptimize(st.best, engineArgs, st.cfg.allRules, st.cfg.glob).board
-        : optimizeToConvergence(st.best, engineArgs, st.cfg.allRules, st.cfg.glob).board;
+        ? deepOptimize(st.best, engineArgs, st.cfg.allRules, st.cfg.glob, st.cfg.baseline).board
+        : optimizeToConvergence(st.best, engineArgs, st.cfg.allRules, st.cfg.glob, 25, st.cfg.baseline).board;
       const pScore = st.scoreFn(polished); // { obj, cov }
       if (pScore.obj >= st.bestObj) { st.best = polished; st.bestObj = pScore.obj; st.bestScore = pScore.cov; }
       const tSec = (performance.now() - st.startedAt) / 1000;
@@ -2683,6 +2739,7 @@ export default function App({ onHome }) {
           if (g.recycleCount == null) g.recycleCount = 15;
           if (g.occupancyTarget == null) g.occupancyTarget = false;
           if (g.min10 == null) g.min10 = 0;
+          if (g.scheduleStability == null) g.scheduleStability = 3;
           setGlob(g);
         }
         if (p.spans) setSpans(p.spans);
@@ -4081,7 +4138,7 @@ export default function App({ onHome }) {
                   onClick={() => {
                     setRetimeBusy(true);
                     setTimeout(() => {
-                      const r = retimeBoard(baselineBoard, rules, glob, DEM, spans, glob.minVeh, includePT);
+                      const r = retimeBoard(baselineBoard, rules, glob, DEM, spans, glob.minVeh, includePT, { stability: glob.scheduleStability });
                       const score = computeEngine(DEM, buildSupply(r.segs), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob).weekScore;
                       const baselineScore = computeEngine(DEM, buildSupply(baselineBoard), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob).weekScore;
                       setRetimeResult({ ...r, score, baselineScore });
@@ -5393,10 +5450,13 @@ export default function App({ onHome }) {
                   <NumField value={glob.coveragePriority ?? 0} step={0.5} onCommit={(v) => setGlob((g) => ({ ...g, coveragePriority: Math.min(4, Math.max(0, Math.round(v * 2) / 2)) }))} />
                   <span>Off-peak weighting (%)</span>
                   <NumField value={glob.offPeakBias ?? 0} step={5} onCommit={(v) => setGlob((g) => ({ ...g, offPeakBias: Math.min(60, Math.max(0, Math.round(v))) }))} />
+                  <span>Schedule stability</span>
+                  <NumField value={glob.scheduleStability ?? 3} step={0.5} onCommit={(v) => setGlob((g) => ({ ...g, scheduleStability: Math.max(0, Math.round(v * 2) / 2) }))} />
                 </div>
                 <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10, lineHeight: 1.6 }}>
                   <b>Coverage priority</b> spreads resources across busy times: 0 sends everything to the single biggest gap first; higher (0.5–2) spreads resources more evenly across all under-served times before deepening any one gap.<br /><br />
-                  <b>Off-peak weighting</b> gives quiet times of day a bit more service than raw demand alone, since off-peak trips share rides less. 0 = follow demand exactly; higher % = flatter, more even coverage. Only compare scores between signups using the same weighting.
+                  <b>Off-peak weighting</b> gives quiet times of day a bit more service than raw demand alone, since off-peak trips share rides less. 0 = follow demand exactly; higher % = flatter, more even coverage. Only compare scores between signups using the same weighting.<br /><br />
+                  <b>Schedule stability</b> affects Suggestions, Deep optimize, Retime, and the Optimization monitor: 0 chases every coverage point regardless of disruption; higher = a stronger pull to keep shifts where they already are, only moving one when the coverage gain is worth it.
                 </div>
               </div>
 
