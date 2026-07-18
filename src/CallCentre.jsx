@@ -2,8 +2,10 @@ import React, { useState, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import {
   T0, T1, N, SLOT, DAYS, WEEKEND_DAYS, fmt, parseHM, cloneSeg,
-  buildSupply, computeEngine, generateBoard, validateSeg, autofixSeg,
+  buildSupply, computeEngine, generateBoard, retimeBoard, validateSeg, autofixSeg,
   TimeField, NumField, Nudge, Stat, CoverageChart, Sketcher,
+  CoveragePriorityShapePreview, OffPeakShapePreview, ScheduleStabilityPreview,
+  COV_PRIORITY_VALUES, STABILITY_VALUES, useDebouncedValue, COVERAGE_RESOLUTIONS,
 } from "./App.jsx";
 import { CALL_SAMPLE } from "./callSampleData.js";
 
@@ -180,6 +182,7 @@ export default function CallCentre({ onHome }) {
   const [peakCalls, setPeakCalls] = useState(13);
   const [hist, setHist] = useState([]);
   const [future, setFuture] = useState([]);
+  const [coverageResolution, setCoverageResolution] = useState(5); // minutes per chart bucket
   const fileRef = useRef(null);
 
   const nextId = useRef(Math.max(0, ...CALL_SAMPLE.board.map((s) => s.id || 0)) + 1);
@@ -188,10 +191,43 @@ export default function CallCentre({ onHome }) {
   const DEM = calls;
   const ftCov = useMemo(() => buildSupply(board), [board]);
   const eng = useMemo(
-    () => computeEngine(DEM, ftCov, false, glob.minVeh, spans, 0, 0, 0, 0, 0, glob),
+    () => computeEngine(DEM, ftCov, false, glob.minVeh, spans, 0, glob.offPeakBias, glob.coveragePriority, 0, 0, glob),
     [DEM, ftCov, glob, spans]
   );
   const P = eng.perDay[day];
+
+  // Coverage priority / schedule stability live previews (Rules tab) — same precompute-and-
+  // lookup pattern as the operator tool: every legal slider position is a real retimeBoard()
+  // result, computed once when the Rules tab is open and the other settings have settled, then
+  // looked up instantly as the slider moves. See src/App.jsx's "Scheduling algorithm" card for
+  // the original build notes.
+  const rulesCtxKey = JSON.stringify([glob.offPeakBias, glob.scheduleStability, glob.coveragePriority, glob.minVeh, glob.maxPullout]);
+  const debouncedRulesCtxKey = useDebouncedValue(rulesCtxKey, 350);
+  const covPreviewCache = useMemo(() => {
+    if (tab !== "rules") return null;
+    const out = {};
+    for (const p of COV_PRIORITY_VALUES) {
+      const g = { ...glob, coveragePriority: p };
+      const r = retimeBoard(board, rules, g, DEM, spans, g.minVeh, false, { stability: g.scheduleStability });
+      out[p] = buildSupply(r.segs);
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, board, rules, DEM, spans, debouncedRulesCtxKey]);
+  const stabPreviewCache = useMemo(() => {
+    if (tab !== "rules") return null;
+    const origByShift = new Map(board.map((sg) => [sg.shift, sg.s]));
+    const out = {};
+    for (const s of STABILITY_VALUES) {
+      const g = { ...glob, scheduleStability: s };
+      const r = retimeBoard(board, rules, g, DEM, spans, g.minVeh, false, { stability: s });
+      const seen = new Set();
+      out[s] = r.segs.filter((sg) => origByShift.has(sg.shift) && !seen.has(sg.shift) && seen.add(sg.shift))
+        .map((sg) => ({ origS: origByShift.get(sg.shift), moveMin: sg.s - origByShift.get(sg.shift) }));
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, board, rules, DEM, spans, debouncedRulesCtxKey]);
 
   // Erlang C agents required for the selected day, from the active-calls (offered-load) curve.
   const reqCurve = useMemo(
@@ -405,7 +441,7 @@ export default function CallCentre({ onHome }) {
           </div>
         )}
 
-        {tab === "rules" && <RulesTab {...{ rules, setRule, glob, setGlob, spans, setSpans, tColor }} />}
+        {tab === "rules" && <RulesTab {...{ rules, setRule, glob, setGlob, spans, setSpans, tColor, board, day, setDay, P, covPreviewCache, stabPreviewCache }} />}
         {tab === "demand" && <DemandTab {...{ day, calls, arrivals, showArrivals, setShowArrivals, demSource, uploadInfo, callSummary, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }} />}
         {tab === "build" && <BuildTab {...{ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor }} />}
         {tab === "coverage" && (
@@ -427,10 +463,23 @@ export default function CallCentre({ onHome }) {
               <Stat label="Rule flags" value={flagCount} tone={flagCount ? gapRed : supplyTeal} />
             </div>
             <div style={cardStyle}>
-              <div style={hTitle}>Agents vs active calls — {day}</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6, marginBottom: 4 }}>
+                <div style={hTitle}>Agents vs active calls — {day}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 11, color: sampleGray }}>Chart resolution</span>
+                  <input type="range" min={0} max={COVERAGE_RESOLUTIONS.length - 1} step={1}
+                    value={COVERAGE_RESOLUTIONS.indexOf(coverageResolution)}
+                    onChange={(e) => setCoverageResolution(COVERAGE_RESOLUTIONS[Number(e.target.value)])}
+                    style={{ width: 110, accentColor: supplyTeal }} />
+                  <span style={{ fontSize: 11, color: sampleGray, minWidth: 60 }}>
+                    {coverageResolution < 60 ? `${coverageResolution} min avg` : "1 hr avg"}
+                  </span>
+                </div>
+              </div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={0} showBookout={false} showProductivity={false} demandShare={100}
                 supplyName="Agents on shift" targetName="Demand-aligned staffing" unitLabel="active calls" minName="floor" sugTooltip={false}
-                extraSeries={peakReq > 0 ? [{ key: "req", name: "Agents required (Erlang)", color: "#B0455E", values: reqCurve, dash: "5 3" }] : null} />
+                extraSeries={peakReq > 0 ? [{ key: "req", name: "Agents required (Erlang)", color: "#B0455E", values: reqCurve, dash: "5 3" }] : null}
+                aggregateMin={coverageResolution} showTripBar />
               <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 6 }}>
                 Teal = agents on shift; shaded target = the demand-aligned agent shape (scale-free coverage of active calls). Amber floor line = minimum agents. Dashed red = agents an Erlang C model needs to answer {glob.slTargetPct > 1 ? glob.slTargetPct : glob.slTargetPct * 100}% of calls within {glob.slTargetSec}s (from active calls + handle time in Rules) — an absolute headcount check the scale-free coverage can't give.
               </div>
@@ -446,7 +495,7 @@ export default function CallCentre({ onHome }) {
 }
 
 /* ================= RULES ================= */
-function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor }) {
+function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, board, day, setDay, P, covPreviewCache, stabPreviewCache }) {
   const setG = (k, v) => setGlob((g) => ({ ...g, [k]: v }));
   const setGArr = (k, i, v) => setGlob((g) => ({ ...g, [k]: g[k].map((x, j) => (j === i ? v : x)) }));
   return (
@@ -520,6 +569,44 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor }) {
             <span>…within (seconds)</span><NumField value={glob.slTargetSec ?? 30} step={5} onCommit={(v) => setG("slTargetSec", Math.max(1, Math.round(v)))} />
           </div>
           <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>Drives the "agents required" line on Coverage — the Erlang C headcount to answer the target share of calls in time, given the active-calls load and handle time. Handle time auto-fills from uploaded call data.</div>
+        </div>
+
+        <div style={cardStyle}>
+          <div style={hTitle}>Scheduling algorithm</div>
+          <div style={{ fontSize: 12, color: sampleGray, marginBottom: 10 }}>
+            How the schedule generator and coverage score decide between candidate agent placements — not a hard limit, a tuning of the search itself.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "10px 12px", alignItems: "center", fontSize: 13 }}>
+            <span>Coverage priority</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input type="range" min={0} max={4} step={0.5} value={glob.coveragePriority ?? 0}
+                onChange={(e) => setG("coveragePriority", Number(e.target.value))}
+                style={{ flex: 1, accentColor: supplyTeal }} />
+              <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.coveragePriority ?? 0}</span>
+            </div>
+            <span>Off-peak weighting (%)</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input type="range" min={0} max={60} step={5} value={glob.offPeakBias ?? 0}
+                onChange={(e) => setG("offPeakBias", Number(e.target.value))}
+                style={{ flex: 1, accentColor: supplyTeal }} />
+              <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.offPeakBias ?? 0}%</span>
+            </div>
+            <span>Schedule stability</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input type="range" min={0} max={10} step={0.5} value={glob.scheduleStability ?? 3}
+                onChange={(e) => setG("scheduleStability", Number(e.target.value))}
+                style={{ flex: 1, accentColor: supplyTeal }} />
+              <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.scheduleStability ?? 3}</span>
+            </div>
+          </div>
+          <CoveragePriorityShapePreview P={P} day={day} setDay={setDay} coveragePriority={glob.coveragePriority ?? 0} previewCache={covPreviewCache} />
+          <OffPeakShapePreview P={P} day={day} setDay={setDay} />
+          <ScheduleStabilityPreview board={board} scheduleStability={glob.scheduleStability ?? 3} previewCache={stabPreviewCache} />
+          <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 10, lineHeight: 1.6 }}>
+            <b>Coverage priority</b> spreads agents across busy times: 0 sends everything to the single biggest gap first; higher (0.5–2) spreads agents more evenly across all under-served times before deepening any one gap.<br /><br />
+            <b>Off-peak weighting</b> gives quiet times of day a bit more staffing than raw call volume alone. 0 = follow call volume exactly; higher % = flatter, more even coverage.<br /><br />
+            <b>Schedule stability</b> affects how strongly the generator favors keeping shifts close to where they already sit: 0 chases every coverage point regardless of disruption; higher = a stronger pull to keep shifts in place, only moving one when the coverage gain is worth it.
+          </div>
         </div>
       </div>
     </div>

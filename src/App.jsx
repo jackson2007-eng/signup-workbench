@@ -6301,7 +6301,11 @@ export default function App({ onHome }) {
 // one-file change; the operator tool above is unaffected.
 export {
   T0, T1, N, SLOT, DAYS, WEEKEND_DAYS, fmt, parseHM, cloneSeg,
-  buildSupply, computeEngine, buildCandidates, generateBoard,
+  buildSupply, computeEngine, buildCandidates, generateBoard, retimeBoard,
   validateSeg, autofixSeg, packageInfo, startVarianceIssues, segContrib,
   TimeField, NumField, Nudge, WeekStrip, Stat, CoverageChart, Sketcher, ActualCurve,
+  ShapePreviewChart, ShapePreviewFrame, DeltaAreaChart, MovementScatterChart,
+  CoveragePriorityShapePreview, OffPeakShapePreview, ScheduleStabilityPreview,
+  COV_PRIORITY_VALUES, STABILITY_VALUES, useDebouncedValue,
+  aggregateCoverageRows, COVERAGE_RESOLUTIONS,
 };
