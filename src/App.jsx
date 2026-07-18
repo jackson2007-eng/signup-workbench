@@ -5463,6 +5463,17 @@ export default function App({ onHome }) {
                   <NumField value={glob.maxPullout} onCommit={(v) => setGlob((g) => ({ ...g, maxPullout: v }))} />
                   <span>Auto-generated shift series (starting number)</span>
                   <NumField value={glob.shiftSeriesBase} onCommit={(v) => setGlob((g) => ({ ...g, shiftSeriesBase: Math.round(v) }))} />
+                </div>
+              </div>
+
+              <div data-tour="rules-algorithm" style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
+                <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
+                  Scheduling algorithm
+                </div>
+                <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
+                  How the Suggestions, Deep optimize, Retime, and Optimization monitor tools decide between candidate moves — not a hard limit, a tuning of the search itself.
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "10px 12px", alignItems: "center", fontSize: 13 }}>
                   <span>Coverage priority</span>
                   <NumField value={glob.coveragePriority ?? 0} step={0.5} onCommit={(v) => setGlob((g) => ({ ...g, coveragePriority: Math.min(4, Math.max(0, Math.round(v * 2) / 2)) }))} />
                   <span>Off-peak weighting (%)</span>
