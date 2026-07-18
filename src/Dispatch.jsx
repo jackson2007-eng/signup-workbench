@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 import {
   T0, T1, N, SLOT, DAYS, fmt, parseHM, cloneSeg,
@@ -22,14 +22,14 @@ import { DISPATCH_SAMPLE } from "./dispatchSampleData.js";
    computeEngine/generateBoard — that flag internally reads App.jsx's own hardcoded RAW.pt sample
    data, which must never leak into this module. */
 
-const ink = "#182430", paper = "#F4F6F7", card = "#FFFFFF",
-  supplyTeal = "#0F7B7A", demandAmber = "#D98324", gapRed = "#C0392B",
-  sampleGray = "#5B6B75", targetInk = "#233746";
+const ink = "var(--chrome)", text = "var(--text)", paper = "var(--paper)", card = "var(--card)",
+  supplyTeal = "var(--supply-teal)", demandAmber = "var(--demand-amber)", gapRed = "var(--gap-red)",
+  sampleGray = "var(--sample-gray)", targetInk = "var(--target-ink)";
 const DEFAULT_TCOLOR = "#4B5D67";
 
-const nudgeBtn = { fontFamily: "'Barlow Condensed', sans-serif", fontSize: 13, fontWeight: 600, padding: "5px 10px", background: "#fff", border: "1px solid #CBD5DA", color: ink, cursor: "pointer", borderRadius: 2 };
+const nudgeBtn = { fontFamily: "'Barlow Condensed', sans-serif", fontSize: 13, fontWeight: 600, padding: "5px 10px", background: card, border: "1px solid var(--border-input)", color: text, cursor: "pointer", borderRadius: 2 };
 const primaryBtn = { ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal };
-const cardStyle = { background: card, border: "1px solid #E2E8EA", padding: "14px 16px", marginBottom: 14 };
+const cardStyle = { background: card, border: "1px solid var(--border)", padding: "14px 16px", marginBottom: 14 };
 const hTitle = { fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, marginBottom: 10 };
 const DOW = { Sunday: "SU", Monday: "MO", Tuesday: "TU", Wednesday: "WE", Thursday: "TH", Friday: "FR", Saturday: "SA" };
 
@@ -96,6 +96,15 @@ const NAV = [
 ];
 
 export default function Dispatch({ onHome }) {
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem("theme");
+    if (saved === "light" || saved === "dark") return saved;
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
+  useEffect(() => {
+    localStorage.setItem("theme", theme);
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
   const [board, setBoard] = useState(() => DISPATCH_SAMPLE.board.map(cloneSeg));
   const [rules, setRules] = useState(() => clone(DISPATCH_SAMPLE.rules));
   const [ptRules, setPtRules] = useState(() => clone(DISPATCH_SAMPLE.ptRules));
@@ -473,19 +482,41 @@ export default function Dispatch({ onHome }) {
   const weekPct = (eng.weekScore * 100).toFixed(1);
 
   return (
-    <div style={{ minHeight: "100vh", background: paper, color: ink, fontFamily: "'Inter', system-ui, sans-serif" }}>
+    <div data-theme={theme} style={{ minHeight: "100vh", background: paper, color: text, fontFamily: "'Inter', system-ui, sans-serif" }}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&display=swap');
         * { box-sizing: border-box; }
-        .dsnav { cursor:pointer; padding:9px 16px; font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:15px; letter-spacing:.03em; border-bottom:3px solid transparent; color:#5B6B75; }
-        .dsnav.on { color:${ink}; border-bottom-color:${demandAmber}; }
-        .dsrow { display:flex; align-items:center; height:30px; border-bottom:1px solid #F0F4F5; user-select:none; }
-        .dsrow:hover { background:#F7FAFA; }
+        :root {
+          --paper: #F4F6F7; --card: #FFFFFF; --chrome: #182430; --text: #182430;
+          --demand-amber: #D98324; --target-ink: #233746; --supply-teal: #0F7B7A;
+          --gap-red: #C0392B; --bookout-violet: #6C5B9E; --sample-gray: #5B6B75;
+          --required-pink: #B0455E; --border: #E2E8EA; --border-light: #D7DFE2; --border-input: #CBD5DA;
+          --muted: #5B6B75; --muted-light: #8899A3; --text-mid: #41525C;
+          --row-border: #E7EDEF; --track-bg: #F0F4F5; --row-hover: #F7FAFA;
+          --tint-neutral: #FBFCFC; --tint-neutral-b: #EEF4F5; --tint-teal-b: #EEF6F6;
+          --tint-red-a: #FBEDEB; --tint-red-b: #FDF6F5; --chart-border: #EBF0F2;
+        }
+        [data-theme="dark"] {
+          --paper: #12181D; --card: #1B242B; --chrome: #0B1014; --text: #E7ECEF;
+          --demand-amber: #E8A552; --target-ink: #8CA3B8; --supply-teal: #2FB3AC;
+          --gap-red: #E27A70; --bookout-violet: #A594D1; --sample-gray: #8B9AA5;
+          --required-pink: #D97C93; --border: #2A343C; --border-light: #333F47; --border-input: #3A454D;
+          --muted: #93A2AC; --muted-light: #6B7882; --text-mid: #A9B6BF;
+          --row-border: #263038; --track-bg: #202A31; --row-hover: #202A31;
+          --tint-neutral: #1B242B; --tint-neutral-b: #1C262B; --tint-teal-b: #172227;
+          --tint-red-a: #2E1714; --tint-red-b: #2A1613; --chart-border: #263038;
+        }
+        body { background: var(--paper); }
+        .dsnav { cursor:pointer; padding:9px 16px; font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:15px; letter-spacing:.03em; border-bottom:3px solid transparent; color:var(--sample-gray); }
+        .dsnav.on { color:${text}; border-bottom-color:${demandAmber}; }
+        .dsrow { display:flex; align-items:center; height:30px; border-bottom:1px solid var(--row-border); user-select:none; }
+        .dsrow:hover { background:var(--row-hover); }
         .gbar { position:absolute; border-radius:2px; cursor:grab; touch-action:pan-y; }
         .gbrk { position:absolute; background:repeating-linear-gradient(45deg,#fff,#fff 3px,#AEBAC0 3px,#AEBAC0 6px); border-left:1px solid rgba(0,0,0,.35); border-right:1px solid rgba(0,0,0,.35); cursor:grab; touch-action:pan-y; z-index:1; }
         .gbar.lifted, .gbrk.lifted { transform:scaleY(1.35); box-shadow:0 2px 6px rgba(0,0,0,.35); z-index:2; cursor:grabbing; }
         .ghandle { position:absolute; top:0; bottom:0; width:7px; cursor:col-resize; touch-action:pan-y; z-index:3; }
-        input[type=text], input[type=number] { background:#fff; color:${ink}; }
-        table.rt th { font-size:11px; color:#5B6B75; text-align:left; font-weight:600; padding:4px 8px; }
+        input[type=text], input[type=number] { background:${card}; color:${text}; border:1px solid var(--border-input); }
+        select { background:${card}; color:${text}; border:1px solid var(--border-input); }
+        table.rt th { font-size:11px; color:var(--sample-gray); text-align:left; font-weight:600; padding:4px 8px; }
         table.rt td { padding:3px 8px; }
       `}</style>
 
@@ -495,17 +526,21 @@ export default function Dispatch({ onHome }) {
           <div onClick={onHome} style={{ cursor: "pointer", fontFamily: "'Barlow Condensed', sans-serif", fontSize: 12, fontWeight: 600, letterSpacing: ".1em", color: sampleGray }}>‹ TRANSIT OPERATIONS TOOLKIT</div>
           <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 22, fontWeight: 700 }}>DISPATCH DESKS</div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <div style={{ fontSize: 12, color: sampleGray }}>Weekly coverage <b style={{ color: ink, fontSize: 15 }}>{weekPct}%</b></div>
+            <div style={{ fontSize: 12, color: sampleGray }}>Weekly coverage <b style={{ color: text, fontSize: 15 }}>{weekPct}%</b></div>
             <button style={primaryBtn} onClick={exportSchedule}>Export Schedule</button>
             <button style={nudgeBtn} onClick={saveProject}>Save project</button>
             <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Load project</button>
             <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }}
               onChange={(e) => { if (e.target.files && e.target.files[0]) loadProject(e.target.files[0]); e.target.value = ""; }} />
+            <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"
+              style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".04em", padding: "5px 8px", background: "none", border: "1px solid var(--border-input)", borderRadius: 2, color: sampleGray, cursor: "pointer" }}>
+              {theme === "dark" ? "☀ Light" : "☾ Dark"}
+            </button>
           </div>
         </div>
 
         {/* nav */}
-        <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #E2E8EA", marginBottom: 16, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap" }}>
           {NAV.map((n) => (
             <div key={n.key} className={"dsnav" + (tab === n.key ? " on" : "")} onClick={() => setTab(n.key)}>{n.label}</div>
           ))}
@@ -518,7 +553,7 @@ export default function Dispatch({ onHome }) {
               const p = eng.perDay[d];
               const on = d === day;
               return (
-                <div key={d} onClick={() => setDay(d)} style={{ cursor: "pointer", textAlign: "center", padding: "6px 4px", background: on ? ink : card, color: on ? "#fff" : ink, border: "1px solid #E2E8EA" }}>
+                <div key={d} onClick={() => setDay(d)} style={{ cursor: "pointer", textAlign: "center", padding: "6px 4px", background: on ? ink : card, color: on ? "#fff" : text, border: "1px solid var(--border)" }}>
                   <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 600, fontSize: 13 }}>{d.slice(0, 3).toUpperCase()}</div>
                   <div style={{ fontSize: 10, opacity: .8 }}>cov {(p.dayScore * 100).toFixed(0)}%</div>
                 </div>
@@ -539,7 +574,7 @@ export default function Dispatch({ onHome }) {
         {tab === "coverage" && (
           <div>
             {P.floorViol.length > 0 && (
-              <div style={{ background: "var(--tint-red-a, #FBEDEB)", border: `1px solid ${gapRed}`, padding: "8px 12px", marginBottom: 12, fontSize: 12.5 }}>
+              <div style={{ background: "var(--tint-red-a)", border: `1px solid ${gapRed}`, padding: "8px 12px", marginBottom: 12, fontSize: 12.5 }}>
                 <b>Minimum dispatchers ({day}):</b>{" "}
                 {P.floorViol.map((v, i) => (
                   <span key={i}>{fmt(SLOT(v.from))}–{fmt(SLOT(v.to) + 5)} drops to {v.min} (floor {glob.minVeh}){i < P.floorViol.length - 1 ? "; " : ""}</span>
@@ -551,7 +586,7 @@ export default function Dispatch({ onHome }) {
               <Stat label={`${day} coverage`} value={`${(P.dayScore * 100).toFixed(1)}%`} tone={supplyTeal} />
               <Stat label="Week coverage" value={`${weekPct}%`} tone={targetInk} />
               <Stat label="Operators working (peak)" value={Math.round(Math.max(...(operators[day] || [0])))} tone={demandAmber} />
-              <Stat label="Dispatchers required (peak)" value={peakReq} tone="#B0455E" sub={`1 per ${glob.ratioPerDispatcher} operators`} />
+              <Stat label="Dispatchers required (peak)" value={peakReq} tone="var(--required-pink)" sub={`1 per ${glob.ratioPerDispatcher} operators`} />
               <Stat label="Rule flags" value={flagCount} tone={flagCount ? gapRed : supplyTeal} />
             </div>
             <div style={cardStyle}>
@@ -570,7 +605,7 @@ export default function Dispatch({ onHome }) {
               </div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={0} showBookout={false} showProductivity={false} demandShare={100}
                 supplyName="Dispatchers on shift" targetName="Demand-aligned staffing" unitLabel="operators working" minName="floor" sugTooltip={false}
-                extraSeries={peakReq > 0 ? [{ key: "req", name: "Dispatchers required (ratio)", color: "#B0455E", values: reqCurve, dash: "5 3" }] : null}
+                extraSeries={peakReq > 0 ? [{ key: "req", name: "Dispatchers required (ratio)", color: "var(--required-pink)", values: reqCurve, dash: "5 3" }] : null}
                 aggregateMin={coverageResolution} showTripBar />
               <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 6 }}>
                 Teal = dispatchers on shift; shaded target = the demand-aligned dispatcher shape (scale-free coverage of concurrent operators working). Amber floor line = minimum dispatchers. Dashed red = dispatchers a simple capacity ratio needs (1 per {glob.ratioPerDispatcher} concurrent operators, floor {glob.minOnDuty}) — an absolute headcount check the scale-free coverage can't give.
@@ -606,7 +641,7 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, ptRu
             </tr></thead>
             <tbody>
               {Object.entries(rules).map(([t, R]) => (
-                <tr key={t} style={{ borderTop: "1px solid #EEF2F3" }}>
+                <tr key={t} style={{ borderTop: "1px solid var(--border-light)" }}>
                   <td><span style={{ display: "inline-block", width: 10, height: 10, background: tColor(t), marginRight: 6, borderRadius: 2 }} />{t}</td>
                   <td><TimeField value={R.s[0]} onCommit={(v) => setRule(t, "s", 0, v)} /></td>
                   <td><TimeField value={R.s[1]} onCommit={(v) => setRule(t, "s", 1, v)} /></td>
@@ -721,7 +756,7 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, ptRu
                 <thead>
                   <tr>
                     {["Type", "Earliest start", "Latest start", "Earliest end", "Latest end", "Min spread (h)", "Max spread (h)", "Work (h)", "Break", "Available days", "In use", ""].map((h) => (
-                      <th key={h} style={{ padding: "4px 8px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".06em", color: sampleGray, textAlign: "left", borderBottom: "1px solid #E2E8EA" }}>{h}</th>
+                      <th key={h} style={{ padding: "4px 8px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".06em", color: sampleGray, textAlign: "left", borderBottom: "1px solid var(--border)" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -754,14 +789,14 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, ptRu
                                 <button key={d} title={d}
                                   onClick={() => upd({ days: on ? days.filter((x) => x !== d) : [...days, d] })}
                                   style={{ padding: "2px 5px", fontSize: 10.5, fontWeight: 600, borderRadius: 2, cursor: "pointer",
-                                    border: `1px solid ${on ? supplyTeal : "#C7D2D6"}`, background: on ? supplyTeal : "#fff", color: on ? "#fff" : sampleGray }}>
+                                    border: `1px solid ${on ? supplyTeal : "var(--border-input)"}`, background: on ? supplyTeal : card, color: on ? "#fff" : sampleGray }}>
                                   {d.slice(0, 2)}
                                 </button>
                               );
                             })}
                           </div>
                         </td>
-                        <td style={{ padding: "3px 8px", fontSize: 12, color: inUse ? ink : sampleGray }}>{inUse}</td>
+                        <td style={{ padding: "3px 8px", fontSize: 12, color: inUse ? text : sampleGray }}>{inUse}</td>
                         <td style={{ padding: "3px 6px" }}>
                           <button style={{ ...nudgeBtn, padding: "3px 8px", fontSize: 12, color: gapRed, borderColor: gapRed }}
                             title={inUse > 0 ? `${inUse} shift${inUse === 1 ? "" : "s"} use this type — they'll be flagged until retyped` : "Remove this type"}
@@ -785,7 +820,7 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, ptRu
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
               <input placeholder="New part-time code (e.g. DSPT-EVE)" value={newPtType}
                 onChange={(e) => setNewPtType(e.target.value.toUpperCase().slice(0, 8))}
-                style={{ padding: "6px 8px", border: "1px solid #B9C6CC", borderRadius: 2, fontSize: 13, width: 210, background: "#fff", color: ink }} />
+                style={{ padding: "6px 8px", border: "1px solid var(--border-input)", borderRadius: 2, fontSize: 13, width: 210, background: card, color: text }} />
               <button style={nudgeBtn} disabled={!newPtType || !!allRules[newPtType]}
                 onClick={() => {
                   if (!newPtType || allRules[newPtType]) return;
@@ -812,7 +847,7 @@ function DemandTab({ day, operators, demSource, uploadInfo, sketchRaw, setSketch
       <div style={cardStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
           <div style={hTitle}>Operators working — {day}</div>
-          <span style={{ fontSize: 11, padding: "2px 8px", background: "#EEF4F5", border: "1px solid #D7E1E4", color: sampleGray }}>{srcLabel}</span>
+          <span style={{ fontSize: 11, padding: "2px 8px", background: "var(--tint-neutral-b)", border: "1px solid var(--border-light)", color: sampleGray }}>{srcLabel}</span>
           <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
             <button style={nudgeBtn} onClick={useSample}>Use sample</button>
             <button style={nudgeBtn} onClick={downloadTemplate}>Download template</button>
@@ -825,7 +860,7 @@ function DemandTab({ day, operators, demSource, uploadInfo, sketchRaw, setSketch
           </div>
         </div>
         {uploadInfo && (
-          <div style={{ background: "#EEF4F5", border: "1px solid #CFE0E2", padding: "7px 11px", marginBottom: 8, fontSize: 12, color: "#2C4A4A" }}>{uploadInfo}</div>
+          <div style={{ background: "var(--tint-neutral-b)", border: "1px solid var(--border-light)", padding: "7px 11px", marginBottom: 8, fontSize: 12, color: text }}>{uploadInfo}</div>
         )}
         <OperatorsCurveChart ev={operators[day]} day={day} />
         <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 6 }}>
@@ -872,7 +907,7 @@ function BuildTab({ nDispatchers, setNDispatchers, generate, buildResult, distin
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {Object.entries(buildResult.mix).map(([t, n]) => (
-              <span key={t} style={{ fontSize: 12, padding: "3px 9px", background: "#fff", border: `1px solid ${tColor(t)}`, color: tColor(t), borderRadius: 2 }}>{t}: {n}</span>
+              <span key={t} style={{ fontSize: 12, padding: "3px 9px", background: card, border: `1px solid ${tColor(t)}`, color: tColor(t), borderRadius: 2 }}>{t}: {n}</span>
             ))}
           </div>
           <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>Open the SCHEDULE tab to edit, or COVERAGE to see the fit. Generating again replaces the current schedule (undo available in SCHEDULE).</div>
@@ -911,7 +946,7 @@ function ScheduleTab({
       </div>
 
       {selSeg && (
-        <div style={{ ...cardStyle, border: `1px solid ${selIssues.length ? gapRed : "#E2E8EA"}` }}>
+        <div style={{ ...cardStyle, border: `1px solid ${selIssues.length ? gapRed : "var(--border)"}` }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 700 }}>Shift {selSeg.shift}</div>
             <select value={selSeg.type} onChange={(e) => patchSel({ type: e.target.value })}>
@@ -938,16 +973,16 @@ function ScheduleTab({
           <div style={{ display: "flex", gap: 4, marginTop: 12, flexWrap: "wrap" }}>
             {DAYS.map((d) => {
               const on = selSeg.days.includes(d);
-              return <button key={d} onClick={() => toggleDay(d)} style={{ ...nudgeBtn, background: on ? supplyTeal : "#fff", color: on ? "#fff" : "#B9C6CC", borderColor: on ? supplyTeal : "#CBD5DA" }}>{d.slice(0, 3)}</button>;
+              return <button key={d} onClick={() => toggleDay(d)} style={{ ...nudgeBtn, background: on ? supplyTeal : card, color: on ? "#fff" : "var(--muted-light)", borderColor: on ? supplyTeal : "var(--border-input)" }}>{d.slice(0, 3)}</button>;
             })}
           </div>
           {selIssues.length > 0 && (
-            <div style={{ marginTop: 10, borderLeft: `3px solid ${gapRed}`, background: "#FDF6F5", padding: "6px 10px" }}>
+            <div style={{ marginTop: 10, borderLeft: `3px solid ${gapRed}`, background: "var(--tint-red-b)", padding: "6px 10px" }}>
               {selIssues.map((iss, i) => <div key={i} style={{ fontSize: 12.5, color: gapRed }}>⚠ {iss}</div>)}
             </div>
           )}
           {selSuggestions.length > 0 && (
-            <div style={{ marginTop: 10, borderLeft: `3px solid ${supplyTeal}`, background: "#EEF6F6", padding: "8px 10px" }}>
+            <div style={{ marginTop: 10, borderLeft: `3px solid ${supplyTeal}`, background: "var(--tint-teal-b)", padding: "8px 10px" }}>
               <div style={{ fontSize: 12, color: sampleGray, marginBottom: 6 }}>Best available moves for this run:</div>
               {selSuggestions.slice(0, 3).map((s, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginTop: i ? 4 : 0 }}>
@@ -981,7 +1016,7 @@ function ScheduleTab({
               <div style={{ width: 108, fontSize: 9.5, color: sampleGray, display: "flex", alignItems: "flex-end", lineHeight: 1.1 }}>
                 sign-ins{cap > 0 ? ` /5m (cap ${cap})` : " /5m"}
               </div>
-              <div style={{ position: "relative", flex: 1, height: 22, borderBottom: "1px solid #E2E8EA" }}
+              <div style={{ position: "relative", flex: 1, height: 22, borderBottom: "1px solid var(--border)" }}
                 title={`Shifts signing in per 5-minute slot on ${day}. Peak ${peak}${cap > 0 ? `; ${overSlots} slot${overSlots === 1 ? "" : "s"} over the ${cap} cap` : ""}.`}>
                 {dayStarts.map((n, i) => n > 0 && (
                   <div key={i} style={{
@@ -1012,15 +1047,15 @@ function ScheduleTab({
                 onPointerUp={(ev) => onGanttPointerUp(ev, sg)}
                 onPointerCancel={(ev) => onGanttPointerUp(ev, sg)}
                 style={{ opacity: covers ? 1 : 0.45, outline: isSel ? `2px solid ${ink}` : "none" }}>
-                <div style={{ width: 108, fontSize: 12, fontWeight: isSel ? 700 : 500, color: bad ? gapRed : ink, paddingLeft: 4 }}>
+                <div style={{ width: 108, fontSize: 12, fontWeight: isSel ? 700 : 500, color: bad ? gapRed : text, paddingLeft: 4 }}>
                   {sg.shift} · {sg.type}
                   {ganttSort === "improve" && improveDeltas && improveDeltas.get(sg.shift) > 0 && (
                     <span style={{ marginLeft: 5, fontSize: 10, color: supplyTeal, fontWeight: 700 }}>+{(improveDeltas.get(sg.shift) * 100).toFixed(2)}</span>
                   )}
                 </div>
-                <div className="gtrack" style={{ position: "relative", flex: 1, height: 18, background: "#F4F7F8", borderRadius: 2 }}
+                <div className="gtrack" style={{ position: "relative", flex: 1, height: 18, background: "var(--track-bg)", borderRadius: 2 }}
                   title={isDrag ? undefined : `${fmt(sg.s)}–${fmt(sg.e)} · ${workHrs}h working${sg.b ? ` · ${brkMin}m break (${fmt(sg.b[0])}–${fmt(sg.b[1])})` : ""}`}>
-                  {[360, 600, 840, 1080, 1320].map((m) => <div key={m} style={{ position: "absolute", left: `${pct(m)}%`, top: 0, bottom: 0, width: 1, background: "#E2E8EA" }} />)}
+                  {[360, 600, 840, 1080, 1320].map((m) => <div key={m} style={{ position: "absolute", left: `${pct(m)}%`, top: 0, bottom: 0, width: 1, background: "var(--border)" }} />)}
                   <div className={"gbar" + (isDrag ? " lifted" : "")} data-dragmode="move" style={{
                     position: "absolute", top: 2, bottom: 2, left: `${barL}%`, width: `${barR - barL}%`,
                     background: tColor(sg.type), borderRadius: 2, outline: bad ? `2px solid ${gapRed}` : "none",
@@ -1084,14 +1119,14 @@ function OperatorsCurveChart({ ev, day }) {
   const peakI = ev.indexOf(Math.max(...ev));
   const peakLeft = peakI > N * 0.75;
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: "#FBFCFC", border: "1px solid #E2E8EA", borderRadius: 2 }}>
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: "var(--tint-neutral)", border: "1px solid var(--border)", borderRadius: 2 }}>
       {[6, 9, 12, 15, 18, 21, 24].map((h) => {
         const i = Math.round((h * 60 - T0) / 5);
         if (i < 0 || i >= N) return null;
         return (
           <g key={h}>
-            <line x1={x(i)} y1={8} x2={x(i)} y2={H - PADB} stroke="#EBF0F2" />
-            <text x={x(i)} y={H - 7} fontSize={11} fill="#8899A3" textAnchor="middle">{h}:00</text>
+            <line x1={x(i)} y1={8} x2={x(i)} y2={H - PADB} stroke="var(--chart-border)" />
+            <text x={x(i)} y={H - 7} fontSize={11} fill="var(--muted-light)" textAnchor="middle">{h}:00</text>
           </g>
         );
       })}
@@ -1099,18 +1134,18 @@ function OperatorsCurveChart({ ev, day }) {
         const v = maxV * p / 100;
         return (
           <g key={p}>
-            <line x1={PADL} y1={y(v)} x2={W - 8} y2={y(v)} stroke="#F0F4F5" />
-            <text x={PADL - 4} y={y(v) + 3.5} fontSize={10} fill="#8899A3" textAnchor="end">{v >= 20 ? Math.round(v) : v.toFixed(1)}</text>
+            <line x1={PADL} y1={y(v)} x2={W - 8} y2={y(v)} stroke="var(--track-bg)" />
+            <text x={PADL - 4} y={y(v) + 3.5} fontSize={10} fill="var(--muted-light)" textAnchor="end">{v >= 20 ? Math.round(v) : v.toFixed(1)}</text>
           </g>
         );
       })}
       <path d={area} fill={demandAmber} fillOpacity={0.14} />
       <path d={path} fill="none" stroke={demandAmber} strokeWidth={2.5} strokeLinejoin="round" />
-      <circle cx={x(peakI)} cy={y(ev[peakI])} r={5} fill="#C0392B" stroke="#fff" strokeWidth={1.2} />
-      <text x={x(peakI) + (peakLeft ? -9 : 9)} y={y(ev[peakI]) - 6} fontSize={11} fontWeight={700} fill="#C0392B" textAnchor={peakLeft ? "end" : "start"}>
+      <circle cx={x(peakI)} cy={y(ev[peakI])} r={5} fill={gapRed} stroke="var(--card)" strokeWidth={1.2} />
+      <text x={x(peakI) + (peakLeft ? -9 : 9)} y={y(ev[peakI]) - 6} fontSize={11} fontWeight={700} fill={gapRed} textAnchor={peakLeft ? "end" : "start"}>
         {ev[peakI].toFixed(1)} concurrent
       </text>
-      <text x={PADL} y={16} fontSize={11} fill="#5B6B75">Operators working — {day} · concurrent field operators per 5-minute slot</text>
+      <text x={PADL} y={16} fontSize={11} fill={sampleGray}>Operators working — {day} · concurrent field operators per 5-minute slot</text>
     </svg>
   );
 }

@@ -1,7 +1,8 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 
-const ink = "#182430", paper = "#F4F6F7", card = "#FFFFFF",
-  demandAmber = "#D98324", supplyTeal = "#0F7B7A", bookoutViolet = "#6C5B9E", sampleGray = "#5B6B75";
+const ink = "var(--chrome)", text = "var(--text)", paper = "var(--paper)", card = "var(--card)",
+  demandAmber = "var(--demand-amber)", supplyTeal = "var(--supply-teal)", bookoutViolet = "var(--bookout-violet)",
+  sampleGray = "var(--sample-gray)";
 
 const MODULES = [
   {
@@ -25,27 +26,54 @@ const MODULES = [
 ];
 
 export default function Landing({ navigate }) {
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem("theme");
+    if (saved === "light" || saved === "dark") return saved;
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
+  useEffect(() => {
+    localStorage.setItem("theme", theme);
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
   return (
-    <div style={{ minHeight: "100vh", background: paper, color: ink, fontFamily: "'Inter', system-ui, sans-serif" }}>
+    <div data-theme={theme} style={{ minHeight: "100vh", background: paper, color: text, fontFamily: "'Inter', system-ui, sans-serif" }}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&display=swap');
         * { box-sizing: border-box; }
+        :root {
+          --paper: #F4F6F7; --card: #FFFFFF; --chrome: #182430; --text: #182430;
+          --demand-amber: #D98324; --supply-teal: #0F7B7A; --bookout-violet: #6C5B9E; --sample-gray: #5B6B75;
+          --border: #E2E8EA; --border-light: #E8ECEE; --text-mid: #41525C;
+        }
+        [data-theme="dark"] {
+          --paper: #12181D; --card: #1B242B; --chrome: #0B1014; --text: #E7ECEF;
+          --demand-amber: #E8A552; --supply-teal: #2FB3AC; --bookout-violet: #A594D1; --sample-gray: #8B9AA5;
+          --border: #2A343C; --border-light: #333F47; --text-mid: #A9B6BF;
+        }
+        body { background: var(--paper); }
         .modcard { transition: transform .12s ease, box-shadow .12s ease; }
         .modcard.live { cursor: pointer; }
-        .modcard.live:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(24,36,48,.13); }
+        .modcard.live:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(0,0,0,.25); }
       `}</style>
 
       <div style={{ maxWidth: 1120, margin: "0 auto", padding: "0 20px" }}>
         {/* masthead */}
-        <div style={{ borderBottom: `3px solid ${ink}`, padding: "40px 0 18px", marginBottom: 32 }}>
-          <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 12.5, fontWeight: 600, letterSpacing: ".14em", textTransform: "uppercase", color: sampleGray }}>
-            Transit Operations Toolkit
+        <div style={{ borderBottom: `3px solid ${ink}`, padding: "40px 0 18px", marginBottom: 32, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 20 }}>
+          <div>
+            <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 12.5, fontWeight: 600, letterSpacing: ".14em", textTransform: "uppercase", color: sampleGray }}>
+              Transit Operations Toolkit
+            </div>
+            <div style={{ fontFamily: "'Barlow Condensed', 'Arial Narrow', sans-serif", fontWeight: 700, fontSize: 46, lineHeight: 1.02, marginTop: 4, maxWidth: 780 }}>
+              Shape your workforce to the shape of demand.
+            </div>
+            <div style={{ fontSize: 15.5, color: "var(--text-mid)", marginTop: 12, maxWidth: 680, lineHeight: 1.55 }}>
+              A shared coverage engine that matches staffing to demand — one methodology, purpose-built modules for the different fronts of transit operations. Choose the tool you're here for.
+            </div>
           </div>
-          <div style={{ fontFamily: "'Barlow Condensed', 'Arial Narrow', sans-serif", fontWeight: 700, fontSize: 46, lineHeight: 1.02, marginTop: 4, maxWidth: 780 }}>
-            Shape your workforce to the shape of demand.
-          </div>
-          <div style={{ fontSize: 15.5, color: "#41525C", marginTop: 12, maxWidth: 680, lineHeight: 1.55 }}>
-            A shared coverage engine that matches staffing to demand — one methodology, purpose-built modules for the different fronts of transit operations. Choose the tool you're here for.
-          </div>
+          <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"
+            style={{ flex: "none", fontSize: 11, fontWeight: 600, letterSpacing: ".04em", padding: "2px 8px", background: "none", border: "1px solid var(--border)", borderRadius: 2, color: sampleGray, cursor: "pointer" }}>
+            {theme === "dark" ? "☀ Light" : "☾ Dark"}
+          </button>
         </div>
 
         {/* module grid */}
@@ -56,7 +84,7 @@ export default function Landing({ navigate }) {
               <div key={m.key} className={"modcard" + (live ? " live" : "")}
                 onClick={live ? () => navigate(m.path) : undefined}
                 style={{
-                  background: card, border: `1px solid ${live ? "#E2E8EA" : "#E8ECEE"}`,
+                  background: card, border: `1px solid ${live ? "var(--border)" : "var(--border-light)"}`,
                   borderTop: `4px solid ${m.accent}`, padding: "18px 20px 20px",
                   opacity: live ? 1 : 0.72, display: "flex", flexDirection: "column",
                 }}>
@@ -71,7 +99,7 @@ export default function Landing({ navigate }) {
                 <div style={{ fontFamily: "'Barlow Condensed', 'Arial Narrow', sans-serif", fontWeight: 700, fontSize: 25, lineHeight: 1.08, marginTop: 8 }}>
                   {m.title}
                 </div>
-                <div style={{ fontSize: 13.5, color: "#41525C", lineHeight: 1.5, marginTop: 8, flex: 1 }}>
+                <div style={{ fontSize: 13.5, color: "var(--text-mid)", lineHeight: 1.5, marginTop: 8, flex: 1 }}>
                   {m.body}
                 </div>
                 <div style={{ marginTop: 16, fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 600, fontSize: 15, color: live ? m.accent : sampleGray }}>
@@ -82,7 +110,7 @@ export default function Landing({ navigate }) {
           })}
         </div>
 
-        <div style={{ borderTop: "1px solid #E2E8EA", padding: "16px 0 40px", fontSize: 12, color: sampleGray, lineHeight: 1.55 }}>
+        <div style={{ borderTop: "1px solid var(--border)", padding: "16px 0 40px", fontSize: 12, color: sampleGray, lineHeight: 1.55 }}>
           Each module keeps its own data templates and uploads while sharing one coverage-scoring and optimization engine underneath.
         </div>
       </div>
