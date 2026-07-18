@@ -2070,9 +2070,53 @@ function requirementCurve(P, glob) {
   return { values: vals.map((v) => Math.round(v * 10) / 10), peak: Math.round(Math.max(...vals) * 10) / 10, hours: Math.round(H) };
 }
 
+// Folds N consecutive 5-minute rows into one bucket, for viewing the chart at a coarser
+// resolution than the native grid. Vehicle-level series (target/sup/etc.) are AVERAGED —
+// they're a level at each instant, not a count, so summing them would be meaningless.
+// events is SUMMED instead ("how many trips this hour"), and covered/gap/staging are
+// recomputed from the bucket's averaged target/sup rather than averaging the already-derived
+// per-slot values — averaging a mostly-null "gap" column would overstate an intermittent
+// shortfall as if it applied across the whole bucket, instead of the bucket's true mean.
+const COVERAGE_RESOLUTIONS = [5, 15, 30, 60];
+
+function aggregateCoverageRows(rows, bucketMin) {
+  const bucketSlots = Math.round(bucketMin / 5);
+  if (bucketSlots <= 1) return rows;
+  const avgKeys = ["bookout", "reqPat", "impliedVeh", "onDuty", "cityTrips5", "impRaw"];
+  const passthroughKeys = Object.keys(rows[0] || {}).filter(
+    (k) => !["time", "target", "sup", "covered", "gap", "staging", "events", ...avgKeys].includes(k)
+  );
+  const out = [];
+  for (let i = 0; i < rows.length; i += bucketSlots) {
+    const chunk = rows.slice(i, i + bucketSlots);
+    if (!chunk.length) continue;
+    const avg = (key) => {
+      const vals = chunk.map((r) => r[key]).filter((v) => v != null);
+      return vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 : null;
+    };
+    const eventsSum = Math.round(chunk.reduce((a, r) => a + (r.events || 0), 0) * 10) / 10;
+    const eventsAvg = eventsSum / chunk.length;
+    const tgt = avg("target") || 0;
+    const sup = avg("sup") || 0;
+    const startT = SLOT(i), endT = SLOT(Math.min(rows.length, i + bucketSlots));
+    const row = {
+      time: bucketSlots > 1 ? `${fmt(startT)}–${fmt(endT)}` : chunk[0].time,
+      target: tgt, sup,
+      covered: Math.round(Math.min(tgt, sup) * 10) / 10,
+      gap: tgt - sup > 0.05 ? tgt : null,
+      staging: tgt > 0.05 && eventsAvg < 0.5 ? tgt : null,
+      events: eventsSum,
+    };
+    for (const k of avgKeys) row[k] = avg(k);
+    for (const k of passthroughKeys) row[k] = avg(k);
+    out.push(row);
+  }
+  return out;
+}
+
 function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity, avgCycleTime = 0, demandShare = 100, height = 320, selBand,
   supplyName = "Supply", targetName = "Demand-aligned target", unitLabel = "events", minName = "min", sugTooltip = true, extraSeries = null,
-  onPointClick = null, onDutyCounts = null, slim = false }) {
+  onPointClick = null, onDutyCounts = null, slim = false, aggregateMin = 5 }) {
   const data = useMemo(() => {
     const bk = RAW.bookout[day];
     const bkMap = {};
@@ -2139,13 +2183,21 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
     }
     return rows;
   }, [P, day, avgCycleTime, demandShare, fleetCap, extraSeries, onDutyCounts]);
+  const displayData = useMemo(() => aggregateCoverageRows(data, aggregateMin), [data, aggregateMin]);
+  // ~10 visible x-axis labels regardless of how many buckets that resolution produces
+  const xInterval = Math.max(0, Math.ceil(displayData.length / 10) - 1);
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <ComposedChart data={data} margin={{ top: 5, right: 14, left: -8, bottom: 0 }}
+      <ComposedChart data={displayData} margin={{ top: 5, right: 14, left: -8, bottom: 0 }}
         style={onPointClick ? { cursor: "pointer" } : undefined}
-        onClick={onPointClick ? (st) => { const t = st && st.activeLabel != null ? parseHM(String(st.activeLabel)) : null; if (t != null) onPointClick(t); } : undefined}>
+        onClick={onPointClick ? (st) => {
+          // aggregated labels are "HH:MM–HH:MM" ranges; take the bucket's start time
+          const label = st && st.activeLabel != null ? String(st.activeLabel) : null;
+          const t = label ? parseHM(label.split("–")[0]) : null;
+          if (t != null) onPointClick(t);
+        } : undefined}>
         <CartesianGrid stroke="#EBF0F2" vertical={false} />
-        <XAxis dataKey="time" tick={{ fontSize: 10.5 }} interval={23} tickLine={false} />
+        <XAxis dataKey="time" tick={{ fontSize: 10.5 }} interval={xInterval} tickLine={false} />
         <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
         <Tooltip
           formatter={(v, name, item) => {
@@ -2464,6 +2516,7 @@ export default function App({ onHome }) {
     if (step.tab) setTab(step.tab);
   }, [tourStep]);
   const [day, setDay] = useState("Wednesday");
+  const [coverageResolution, setCoverageResolution] = useState(5); // minutes per chart bucket: 5/15/30/60
   const [includePT, setIncludePT] = useState(false);
   const [totalSigned, setTotalSigned] = useState(100); // default matches the Generate card's package count
   const [board, setBoard] = useState(() => RAW.segments.map(cloneSeg));
@@ -4616,12 +4669,24 @@ export default function App({ onHome }) {
             </div>
 
             <div data-tour="coverage-chart" style={{ background: card, border: "1px solid var(--border)", padding: "14px 4px 4px" }}>
-              <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600, padding: "0 10px 6px" }}>
-                {day} — service hours vs demand-aligned target
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6, padding: "0 10px 6px" }}>
+                <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600 }}>
+                  {day} — service hours vs demand-aligned target
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 11, color: "var(--muted)" }}>Chart resolution</span>
+                  <input type="range" min={0} max={COVERAGE_RESOLUTIONS.length - 1} step={1}
+                    value={COVERAGE_RESOLUTIONS.indexOf(coverageResolution)}
+                    onChange={(e) => setCoverageResolution(COVERAGE_RESOLUTIONS[Number(e.target.value)])}
+                    style={{ width: 110, accentColor: supplyTeal }} />
+                  <span style={{ fontSize: 11, color: "var(--muted)", minWidth: 68 }}>
+                    {coverageResolution < 60 ? `${coverageResolution} min avg` : "1 hr avg"}
+                  </span>
+                </div>
               </div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={false} showProductivity={false} slim avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={340}
                 onDutyCounts={onDutyCounts} onPointClick={focusRun}
-                extraSeries={null} />
+                extraSeries={null} aggregateMin={coverageResolution} />
               {ganttTimeFilter != null && (
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "var(--tint-teal-d)", border: `1px solid ${supplyTeal}`, padding: "8px 12px", margin: "6px 10px 0", fontSize: 13 }}>
                   <b>{fmt(ganttTimeFilter)} ({day}):</b>
