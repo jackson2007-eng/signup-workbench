@@ -816,7 +816,13 @@ function startsPerSlot(board) {
   return starts;
 }
 
-function findSuggestions(board, eng, DEM, rules, glob, spans = null, original = null) {
+// onlySegId scopes the search to one segment (for "best move for this run" in Shift
+// Builder) — same math, just skipping every other segment, and returning up to 5
+// ranked candidates for it instead of one best-per-segment across the whole board.
+// topCap raises the default top-12-across-board limit for callers that want a fuller
+// per-shift ranking (e.g. sorting the Gantt by "room to improve") without changing
+// behavior for existing callers, which never pass it.
+function findSuggestions(board, eng, DEM, rules, glob, spans = null, original = null, onlySegId = null, topCap = 12) {
   const origMap = new Map((original || board).map((s) => [s.id, s]));
   const stability = glob.scheduleStability || 0;
   const starts = startsPerSlot(board);
@@ -845,6 +851,7 @@ function findSuggestions(board, eng, DEM, rules, glob, spans = null, original = 
   }
   const out = [];
   for (const seg of board) {
+    if (onlySegId != null && seg.id !== onlySegId) continue;
     const orig = origMap.get(seg.id) || seg;
     const baseIssues = validateSeg(seg, rules, glob).length;
     const oldC = segContrib(seg);
@@ -903,12 +910,19 @@ function findSuggestions(board, eng, DEM, rules, glob, spans = null, original = 
     }
   }
   out.sort((a, b) => b.delta - a.delta);
-  // keep best move per segment, top 12 overall
+  // onlySegId: return up to 5 ranked candidates for that one segment (no "best per
+  // segment" dedup needed — there's only one). Otherwise keep best move per segment,
+  // top `topCap` overall (12 by default, unchanged for existing callers).
+  if (onlySegId != null) {
+    const top = out.slice(0, 5);
+    top.evaluated = evaluated;
+    return top;
+  }
   const seen = new Set(), top = [];
   for (const s of out) {
     if (seen.has(s.id)) continue;
     seen.add(s.id); top.push(s);
-    if (top.length >= 12) break;
+    if (top.length >= topCap) break;
   }
   top.evaluated = evaluated;
   return top;
@@ -3410,6 +3424,21 @@ export default function App({ onHome }) {
     }
     return set;
   }, [board, allRules, glob]);
+  // Best available single-move score delta per shift (max across its day-variant segments,
+  // if any), for the "Room to improve first" sort. Only computed when that sort is actually
+  // selected — a full-board findSuggestions pass is heavier than the other sort keys, no
+  // reason to pay for it otherwise. topCap raised well past the default 12 so most shifts on
+  // a normal-sized board get a real ranking, not just the global top dozen.
+  const improveDeltas = useMemo(() => {
+    if (ganttSort !== "improve") return null;
+    const sugs = findSuggestions(board, eng, DEM, allRules, glob, spans, null, null, 80);
+    const m = new Map();
+    for (const s of sugs) {
+      const prev = m.get(s.shift);
+      if (prev == null || s.delta > prev) m.set(s.shift, s.delta);
+    }
+    return m;
+  }, [ganttSort, board, eng, DEM, allRules, glob, spans]);
   const daySegs = useMemo(() => {
     const list = board.filter((sg) => sg.days.includes(day));
     if (ganttSort === "time") list.sort((a, b) => (a.s - b.s) || (a.shift - b.shift));
@@ -3418,9 +3447,11 @@ export default function App({ onHome }) {
       ((flaggedShifts.has(b.shift) ? 1 : 0) - (flaggedShifts.has(a.shift) ? 1 : 0)) || (a.shift - b.shift) || (a.s - b.s));
     else if (ganttSort === "type") list.sort((a, b) =>
       (TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type)) || (a.s - b.s) || (a.shift - b.shift));
+    else if (ganttSort === "improve") list.sort((a, b) =>
+      ((improveDeltas && improveDeltas.get(b.shift)) || 0) - ((improveDeltas && improveDeltas.get(a.shift)) || 0) || (a.shift - b.shift) || (a.s - b.s));
     else list.sort((a, b) => (a.shift - b.shift) || (a.s - b.s));
     return list;
-  }, [board, day, ganttSort, flaggedShifts]);
+  }, [board, day, ganttSort, flaggedShifts, improveDeltas]);
 
   const selSeg = selId != null ? board.find((s) => s.id === selId) : null;
   const selShift = selSeg ? selSeg.shift : null;
@@ -3449,6 +3480,22 @@ export default function App({ onHome }) {
         return span(rules[a]) - span(rules[b]);
       });
   }, [sel, selIssues.length, rules, glob]);
+  // Best available single-move candidates for the SELECTED run only (via findSuggestions'
+  // onlySegId scoping) — an in-context "what's the best I could do with this one run"
+  // decision aid, cheap enough (~1 segment's worth of candidates) to recompute on every
+  // board change, including live nudges from patchSel.
+  const selSuggestions = useMemo(() => {
+    if (!sel) return [];
+    return findSuggestions(board, eng, DEM, allRules, glob, spans, null, sel.id);
+  }, [sel, board, eng, DEM, allRules, glob, spans]);
+  // Supply this day would have if the top suggestion were applied, for the before/after
+  // preview — a hypothetical patch, not a real board change.
+  const bestMoveSup = useMemo(() => {
+    if (!sel || !selSuggestions.length) return null;
+    const top = selSuggestions[0];
+    const patched = board.map((s) => (s.id === top.id ? { ...s, ...top.payload } : s));
+    return buildSupply(patched);
+  }, [sel, selSuggestions, board]);
   // A run is "on duty" at minute t if its span covers t (start ≤ t ≤ end), so a run starting or
   // ending exactly at t is included. Per-slot counts feed the coverage-chart tooltip.
   const onDutyCounts = useMemo(() => {
@@ -5027,6 +5074,28 @@ export default function App({ onHome }) {
                     )}
                   </div>
                 )}
+                {selSuggestions.length > 0 && (
+                  <div style={{ marginTop: 10, borderLeft: `3px solid ${supplyTeal}`, background: "var(--tint-teal-b)", padding: "8px 10px" }}>
+                    <div style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 6 }}>Best available moves for this run:</div>
+                    {selSuggestions.slice(0, 3).map((s, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginTop: i ? 4 : 0 }}>
+                        <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 14, fontWeight: 700, color: supplyTeal, width: 52 }}>
+                          +{(s.delta * 100).toFixed(2)}
+                        </span>
+                        <span style={{ fontSize: 12, flex: 1 }}>{s.label}</span>
+                        <button style={{ ...nudgeBtn, padding: "2px 8px" }} onClick={() => patchSel(s.payload)}>Apply</button>
+                      </div>
+                    ))}
+                    {bestMoveSup && (
+                      <div style={{ marginTop: 8 }}>
+                        <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 2 }}>
+                          {day} coverage if you apply the top move — <span style={{ color: supplyTeal }}>teal</span> gains, <span style={{ color: gapRed }}>red</span> loses:
+                        </div>
+                        <DeltaAreaChart delta={bestMoveSup[day].map((v, i) => v - P.sup[i])} demandRef={P.target} height={110} />
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10 }}>This shift's week — tap a day to view it:</div>
                 <WeekStrip segs={selShiftSegs} day={day} onPick={setDay} />
               </div>
@@ -5080,6 +5149,7 @@ export default function App({ onHome }) {
                     <option value="end">End time</option>
                     <option value="type">Type, then time</option>
                     <option value="flags">Flagged first{flaggedShifts.size > 0 ? ` (${flaggedShifts.size})` : ""}</option>
+                    <option value="improve">Room to improve first</option>
                   </select>
                 </label>
                 <div style={{ marginLeft: "auto", fontSize: 11, color: "var(--muted)" }}>{fmt(T0)} — {fmt(T1)}</div>
@@ -5134,6 +5204,11 @@ export default function App({ onHome }) {
                       onPointerCancel={(ev) => onGanttPointerUp(ev, sg)}>
                       <div className="glabel" style={{ fontWeight: isSel ? 700 : 400, color: bad ? gapRed : undefined }}>
                         {sg.shift} {sg.type}
+                        {ganttSort === "improve" && improveDeltas && improveDeltas.get(sg.shift) > 0 && (
+                          <span style={{ marginLeft: 5, fontSize: 10, color: supplyTeal, fontWeight: 700 }}>
+                            +{(improveDeltas.get(sg.shift) * 100).toFixed(2)}
+                          </span>
+                        )}
                       </div>
                       <div className="gtrack" title={isDrag ? undefined : barTitle}>
                         {[360, 600, 840, 1080, 1320].map((m) => (
@@ -5173,6 +5248,25 @@ export default function App({ onHome }) {
                         {isDrag && (() => {
                           const dScore = (P.dayScore - dragging.startDayScore) * 100;
                           const flipLeft = barR > 65;
+                          // validateSeg only covers classification/break rules — a drag can just as
+                          // easily land on a stagger-crowded slot or break the shift's own report-time
+                          // variance cap, neither of which validateSeg knows about. Both are cheap to
+                          // check fresh here since this only runs for the one row actively being dragged.
+                          const staggerIssue = (() => {
+                            if (!glob.maxPullout) return null;
+                            const k = Math.floor((sg.s - T0) / 5);
+                            if (k < 0 || k >= N) return null;
+                            const count = board.filter((o) => o.id !== sg.id && o.days.includes(day) && Math.floor((o.s - T0) / 5) === k).length + 1;
+                            return count > glob.maxPullout ? `${count} sign-ins at ${fmt(sg.s)} (max ${glob.maxPullout})` : null;
+                          })();
+                          const varianceIssue = (() => {
+                            const sibs = board.filter((o) => o.shift === sg.shift && o.id !== sg.id).flatMap((o) => o.days.map((d) => ({ day: d, s: o.s })));
+                            if (!sibs.length) return null;
+                            const dayStarts = [...sibs, ...sg.days.map((d) => ({ day: d, s: sg.s }))];
+                            const vi = startVarianceIssues(dayStarts, glob);
+                            return vi.length ? `${vi[0].kind} report-time variance ${Math.round(vi[0].v)}min (cap ${vi[0].cap}min)` : null;
+                          })();
+                          const allIssues = [...issues, staggerIssue, varianceIssue].filter(Boolean);
                           return (
                             <div style={{
                               position: "absolute", top: 17, zIndex: 30, pointerEvents: "none",
@@ -5186,8 +5280,8 @@ export default function App({ onHome }) {
                               <div style={{ color: dScore >= 0 ? "#7FD1C0" : "#F09E93" }}>
                                 Δ {day} cov {dScore >= 0 ? "+" : ""}{dScore.toFixed(2)}
                               </div>
-                              {issues.length > 0
-                                ? <div style={{ color: "#F09E93" }}>⚠ {issues[0]}{issues.length > 1 ? ` (+${issues.length - 1} more)` : ""}</div>
+                              {allIssues.length > 0
+                                ? <div style={{ color: "#F09E93" }}>⚠ {allIssues[0]}{allIssues.length > 1 ? ` (+${allIssues.length - 1} more)` : ""}</div>
                                 : <div style={{ color: "#7FD1C0" }}>✓ legal</div>}
                               {dragging.days.length > 1 && (
                                 <div style={{ opacity: 0.75 }}>applies {dragging.days.map((d) => d.slice(0, 2).toUpperCase()).join(" ")}</div>
