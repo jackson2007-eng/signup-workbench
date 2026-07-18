@@ -6302,7 +6302,7 @@ export default function App({ onHome }) {
 export {
   T0, T1, N, SLOT, DAYS, WEEKEND_DAYS, fmt, parseHM, cloneSeg,
   buildSupply, computeEngine, buildCandidates, generateBoard, retimeBoard,
-  validateSeg, autofixSeg, packageInfo, startVarianceIssues, segContrib,
+  validateSeg, autofixSeg, packageInfo, startVarianceIssues, segContrib, findSuggestions,
   TimeField, NumField, Nudge, WeekStrip, Stat, CoverageChart, Sketcher, ActualCurve,
   ShapePreviewChart, ShapePreviewFrame, DeltaAreaChart, MovementScatterChart,
   CoveragePriorityShapePreview, OffPeakShapePreview, ScheduleStabilityPreview,

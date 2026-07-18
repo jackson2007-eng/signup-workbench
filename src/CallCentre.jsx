@@ -3,7 +3,8 @@ import * as XLSX from "xlsx";
 import {
   T0, T1, N, SLOT, DAYS, WEEKEND_DAYS, fmt, parseHM, cloneSeg,
   buildSupply, computeEngine, generateBoard, retimeBoard, validateSeg, autofixSeg,
-  TimeField, NumField, Nudge, Stat, CoverageChart, Sketcher,
+  findSuggestions,
+  TimeField, NumField, Nudge, Stat, CoverageChart, Sketcher, DeltaAreaChart,
   CoveragePriorityShapePreview, OffPeakShapePreview, ScheduleStabilityPreview,
   COV_PRIORITY_VALUES, STABILITY_VALUES, useDebouncedValue, COVERAGE_RESOLUTIONS,
 } from "./App.jsx";
@@ -380,6 +381,135 @@ export default function CallCentre({ onHome }) {
 
   const pct = (m) => ((Math.min(m, T1) - T0) / (T1 - T0)) * 100;
 
+  /* ---------- Schedule tab: sort + decision support ----------
+     Same idea as the operator tool's Shift Builder, simplified: every shift here has one
+     time range across all its `days` (no day-variant packages), so there's no "editAllDays"
+     concept to port — every drag or suggestion patches the whole shift, matching patchSel's
+     existing semantics exactly. */
+  const [ganttSort, setGanttSort] = useState("run"); // "run"|"time"|"end"|"type"|"flags"|"improve"
+  const flaggedShifts = useMemo(() => {
+    const set = new Set();
+    for (const sg of board) if (validateSeg(sg, rules, glob).length > 0) set.add(sg.shift);
+    return set;
+  }, [board, rules, glob]);
+  // Best single-move score delta per shift, for "Room to improve first" — only computed
+  // when that sort is actually selected, since a full-board findSuggestions pass is
+  // heavier than the other sort keys.
+  const improveDeltas = useMemo(() => {
+    if (ganttSort !== "improve") return null;
+    const sugs = findSuggestions(board, eng, DEM, rules, glob, spans, null, null, 80);
+    const m = new Map();
+    for (const s of sugs) { const prev = m.get(s.shift); if (prev == null || s.delta > prev) m.set(s.shift, s.delta); }
+    return m;
+  }, [ganttSort, board, eng, DEM, rules, glob, spans]);
+  const sortedRows = useMemo(() => {
+    const list = [...board];
+    if (ganttSort === "time") list.sort((a, b) => (a.s - b.s) || (a.shift - b.shift));
+    else if (ganttSort === "end") list.sort((a, b) => (a.e - b.e) || (a.shift - b.shift));
+    else if (ganttSort === "type") list.sort((a, b) => (a.type < b.type ? -1 : a.type > b.type ? 1 : 0) || (a.s - b.s) || (a.shift - b.shift));
+    else if (ganttSort === "flags") list.sort((a, b) =>
+      ((flaggedShifts.has(b.shift) ? 1 : 0) - (flaggedShifts.has(a.shift) ? 1 : 0)) || (a.shift - b.shift));
+    else if (ganttSort === "improve") list.sort((a, b) =>
+      ((improveDeltas && improveDeltas.get(b.shift)) || 0) - ((improveDeltas && improveDeltas.get(a.shift)) || 0) || (a.shift - b.shift));
+    else list.sort((a, b) => a.shift - b.shift);
+    return list;
+  }, [board, ganttSort, flaggedShifts, improveDeltas]);
+  // Best available single-move candidates for the selected shift — an in-context "what's
+  // the best I could do with this one run" decision aid.
+  const selSuggestions = useMemo(() => {
+    if (!selSeg) return [];
+    return findSuggestions(board, eng, DEM, rules, glob, spans, null, selSeg.id);
+  }, [selSeg, board, eng, DEM, rules, glob, spans]);
+  const bestMoveSup = useMemo(() => {
+    if (!selSeg || !selSuggestions.length) return null;
+    const top = selSuggestions[0];
+    const patched = board.map((s) => (s.id === top.id ? { ...s, ...top.payload } : s));
+    return buildSupply(patched);
+  }, [selSeg, selSuggestions, board]);
+  // Sign-ins per 5-minute slot on the viewed day (garage-stagger view).
+  const dayStarts = useMemo(() => {
+    const c = new Array(N).fill(0);
+    for (const sg of board) {
+      if (!sg.days.includes(day)) continue;
+      const k = Math.floor((sg.s - T0) / 5);
+      if (k >= 0 && k < N) c[k]++;
+    }
+    return c;
+  }, [board, day]);
+
+  /* ---------- gantt drag (Schedule tab) ----------
+     Direct manipulation on the schedule bars: slide a whole shift, slide its break, or
+     resize either by the edges. Geometry-only clamps here — rule legality stays advisory
+     via validateSeg, shown live in the readout, never blocked. One drag commits exactly one
+     undo entry: the pre-drag board is pushed to history the moment the pointer passes the
+     click threshold, then setBoard is called directly for every quantized step after that. */
+  const dragRef = useRef(null);
+  const [dragging, setDragging] = useState(null); // { id, mode, startDayScore } | null
+  const DRAG_THRESHOLD_PX = 4;
+  const clampDragDelta = (o, mode, d) => {
+    switch (mode) {
+      case "move": return d;
+      case "seg-start": return Math.min(d, (o.b ? Math.min(o.b[0], o.e - 5) : o.e - 5) - o.s);
+      case "seg-end": return Math.max(d, (o.b ? Math.max(o.b[1], o.s + 5) : o.s + 5) - o.e);
+      case "break-move": return Math.max(o.s - o.b[0], Math.min(d, o.e - o.b[1]));
+      case "break-start": return Math.max(o.s - o.b[0], Math.min(d, o.b[1] - 5 - o.b[0]));
+      case "break-end": return Math.max(o.b[0] + 5 - o.b[1], Math.min(d, o.e - o.b[1]));
+      default: return 0;
+    }
+  };
+  const dragPatch = (o, mode, d) => {
+    switch (mode) {
+      case "move": return { s: o.s + d, e: o.e + d, b: o.b ? [o.b[0] + d, o.b[1] + d] : null };
+      case "seg-start": return { s: o.s + d };
+      case "seg-end": return { e: o.e + d };
+      case "break-move": return { b: [o.b[0] + d, o.b[1] + d] };
+      case "break-start": return { b: [o.b[0] + d, o.b[1]] };
+      case "break-end": return { b: [o.b[0], o.b[1] + d] };
+      default: return {};
+    }
+  };
+  const onGanttPointerDown = (ev, sg) => {
+    if (ev.pointerType === "mouse" && ev.button !== 0) return;
+    setDragging((cur) => (cur ? null : cur)); // self-heal a leaked drag from a lost pointerup
+    const mode = ev.target && ev.target.dataset ? ev.target.dataset.dragmode || null : null;
+    if (!mode) return; // press on row background/label does nothing
+    const track = ev.currentTarget.querySelector(".gtrack");
+    if (!track) return;
+    const pxPerMin = track.getBoundingClientRect().width / (T1 - T0);
+    if (!(pxPerMin > 0)) return;
+    dragRef.current = {
+      sgId: sg.id, mode, orig: cloneSeg(sg),
+      startX: ev.clientX, pxPerMin, lastDelta: 0, active: false,
+      boardSnapshot: board, startDayScore: P.dayScore,
+    };
+    try { ev.currentTarget.setPointerCapture(ev.pointerId); } catch { /* pointer capture unsupported */ }
+  };
+  const onGanttPointerMove = (ev) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const dx = ev.clientX - d.startX;
+    if (!d.active) {
+      if (!d.mode || Math.abs(dx) < DRAG_THRESHOLD_PX) return;
+      d.active = true;
+      setHist((h) => [...h.slice(-40), d.boardSnapshot]);
+      setFuture([]);
+      setDragging({ id: d.sgId, mode: d.mode, startDayScore: d.startDayScore });
+    }
+    const dMin = clampDragDelta(d.orig, d.mode, Math.round(dx / d.pxPerMin / 5) * 5);
+    if (dMin === d.lastDelta) return;
+    d.lastDelta = dMin;
+    const patch = dragPatch(d.orig, d.mode, dMin);
+    setBoard((b) => b.map((s) => (s.id === d.sgId ? { ...cloneSeg(s), ...patch } : s)));
+  };
+  const onGanttPointerUp = (ev, sg) => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    setDragging((cur) => (cur ? null : cur)); // unconditional — never leave a lifted bar behind
+    if (!d) return;
+    try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch { /* not captured */ }
+    if (!d.active) setSelId(sg.id); // never crossed the threshold — behaves as the plain click it was
+  };
+
   /* ---------- rules editing ---------- */
   const setRule = (t, field, idx, val) => setRules((rs) => {
     const R = { ...rs[t] };
@@ -396,8 +526,12 @@ export default function CallCentre({ onHome }) {
         * { box-sizing: border-box; }
         .ccnav { cursor:pointer; padding:9px 16px; font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:15px; letter-spacing:.03em; border-bottom:3px solid transparent; color:#5B6B75; }
         .ccnav.on { color:${ink}; border-bottom-color:${supplyTeal}; }
-        .ccrow { display:flex; align-items:center; height:30px; border-bottom:1px solid #F0F4F5; cursor:pointer; }
+        .ccrow { display:flex; align-items:center; height:30px; border-bottom:1px solid #F0F4F5; user-select:none; }
         .ccrow:hover { background:#F7FAFA; }
+        .gbar { position:absolute; border-radius:2px; cursor:grab; touch-action:pan-y; }
+        .gbrk { position:absolute; background:repeating-linear-gradient(45deg,#fff,#fff 3px,#AEBAC0 3px,#AEBAC0 6px); border-left:1px solid rgba(0,0,0,.35); border-right:1px solid rgba(0,0,0,.35); cursor:grab; touch-action:pan-y; z-index:1; }
+        .gbar.lifted, .gbrk.lifted { transform:scaleY(1.35); box-shadow:0 2px 6px rgba(0,0,0,.35); z-index:2; cursor:grabbing; }
+        .ghandle { position:absolute; top:0; bottom:0; width:7px; cursor:col-resize; touch-action:pan-y; z-index:3; }
         input[type=text], input[type=number] { background:#fff; color:${ink}; }
         table.rt th { font-size:11px; color:#5B6B75; text-align:left; font-weight:600; padding:4px 8px; }
         table.rt td { padding:3px 8px; }
@@ -487,7 +621,12 @@ export default function CallCentre({ onHome }) {
           </div>
         )}
         {tab === "schedule" && (
-          <ScheduleTab {...{ board, day, setDay, selSeg, selId, setSelId, selIssues, patchSel, addShift, dupSel, removeSel, fixSel, toggleDay, toggleBreak, rules, glob, tColor, pct, undo, redo, hist, future }} />
+          <ScheduleTab {...{
+            board, sortedRows, day, setDay, selSeg, selId, setSelId, selIssues, patchSel, addShift, dupSel, removeSel, fixSel, toggleDay, toggleBreak,
+            rules, glob, tColor, pct, undo, redo, hist, future,
+            ganttSort, setGanttSort, flaggedShifts, improveDeltas, selSuggestions, bestMoveSup, dayStarts, P,
+            dragging, onGanttPointerDown, onGanttPointerMove, onGanttPointerUp,
+          }} />
         )}
       </div>
     </div>
@@ -698,14 +837,30 @@ function BuildTab({ nAgents, setNAgents, generate, buildResult, distinctShifts, 
 }
 
 /* ================= SCHEDULE ================= */
-function ScheduleTab({ board, day, setDay, selSeg, selId, setSelId, selIssues, patchSel, addShift, dupSel, removeSel, fixSel, toggleDay, toggleBreak, rules, glob, tColor, pct, undo, redo, hist, future }) {
-  const rows = [...board].sort((a, b) => a.shift - b.shift);
+function ScheduleTab({
+  board, sortedRows, day, setDay, selSeg, selId, setSelId, selIssues, patchSel, addShift, dupSel, removeSel, fixSel, toggleDay, toggleBreak,
+  rules, glob, tColor, pct, undo, redo, hist, future,
+  ganttSort, setGanttSort, flaggedShifts, improveDeltas, selSuggestions, bestMoveSup, dayStarts, P,
+  dragging, onGanttPointerDown, onGanttPointerMove, onGanttPointerUp,
+}) {
+  const rows = sortedRows;
   return (
     <div>
-      <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
         <button style={nudgeBtn} onClick={addShift}>+ Add shift</button>
         <button style={nudgeBtn} onClick={undo} disabled={!hist.length}>Undo</button>
         <button style={nudgeBtn} onClick={redo} disabled={!future.length}>Redo</button>
+        <label style={{ fontSize: 12, color: sampleGray, display: "flex", alignItems: "center", gap: 6, marginLeft: 12 }}>
+          Sort
+          <select value={ganttSort} onChange={(e) => setGanttSort(e.target.value)} style={{ fontSize: 12 }}>
+            <option value="run">Run number</option>
+            <option value="time">Start time</option>
+            <option value="end">End time</option>
+            <option value="type">Type, then time</option>
+            <option value="flags">Flagged first{flaggedShifts.size > 0 ? ` (${flaggedShifts.size})` : ""}</option>
+            <option value="improve">Room to improve first</option>
+          </select>
+        </label>
         <span style={{ marginLeft: "auto", fontSize: 12, color: sampleGray, alignSelf: "center" }}>{board.length} shift rows</span>
       </div>
 
@@ -745,25 +900,122 @@ function ScheduleTab({ board, day, setDay, selSeg, selId, setSelId, selIssues, p
               {selIssues.map((iss, i) => <div key={i} style={{ fontSize: 12.5, color: gapRed }}>⚠ {iss}</div>)}
             </div>
           )}
+          {selSuggestions.length > 0 && (
+            <div style={{ marginTop: 10, borderLeft: `3px solid ${supplyTeal}`, background: "#EEF6F6", padding: "8px 10px" }}>
+              <div style={{ fontSize: 12, color: sampleGray, marginBottom: 6 }}>Best available moves for this run:</div>
+              {selSuggestions.slice(0, 3).map((s, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginTop: i ? 4 : 0 }}>
+                  <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 14, fontWeight: 700, color: supplyTeal, width: 52 }}>
+                    +{(s.delta * 100).toFixed(2)}
+                  </span>
+                  <span style={{ fontSize: 12, flex: 1 }}>{s.label}</span>
+                  <button style={{ ...nudgeBtn, padding: "2px 8px" }} onClick={() => patchSel(s.payload)}>Apply</button>
+                </div>
+              ))}
+              {bestMoveSup && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ fontSize: 11, color: sampleGray, marginBottom: 2 }}>
+                    {day} coverage if you apply the top move — <span style={{ color: supplyTeal }}>teal</span> gains, <span style={{ color: gapRed }}>red</span> loses:
+                  </div>
+                  <DeltaAreaChart delta={bestMoveSup[day].map((v, i) => v - P.sup[i])} demandRef={P.target} height={110} />
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
       <div style={{ ...cardStyle, padding: "10px 12px" }}>
+        {(() => {
+          const peak = Math.max(1, ...dayStarts);
+          const cap = glob.maxPullout || 0;
+          const overSlots = cap > 0 ? dayStarts.filter((n) => n > cap).length : 0;
+          return (
+            <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+              <div style={{ width: 108, fontSize: 9.5, color: sampleGray, display: "flex", alignItems: "flex-end", lineHeight: 1.1 }}>
+                sign-ins{cap > 0 ? ` /5m (cap ${cap})` : " /5m"}
+              </div>
+              <div style={{ position: "relative", flex: 1, height: 22, borderBottom: "1px solid #E2E8EA" }}
+                title={`Shifts signing in per 5-minute slot on ${day}. Peak ${peak}${cap > 0 ? `; ${overSlots} slot${overSlots === 1 ? "" : "s"} over the ${cap} cap` : ""}.`}>
+                {dayStarts.map((n, i) => n > 0 && (
+                  <div key={i} style={{
+                    position: "absolute", bottom: 0, left: `${pct(SLOT(i))}%`, width: 2, transform: "translateX(-1px)",
+                    height: `${Math.max(2, (n / peak) * 20)}px`,
+                    background: (cap > 0 && n > cap) ? gapRed : supplyTeal,
+                  }} />
+                ))}
+              </div>
+              <div style={{ width: 96 }} />
+            </div>
+          );
+        })()}
         <div style={{ maxHeight: 520, overflowY: "auto" }}>
           {rows.map((sg) => {
-            const bad = validateSeg(sg, rules, glob).length > 0;
+            const issues = validateSeg(sg, rules, glob);
+            const bad = issues.length > 0;
             const isSel = sg.id === selId;
             const covers = sg.days.includes(day);
+            const brkMin = sg.b ? sg.b[1] - sg.b[0] : 0;
+            const workHrs = ((sg.e - sg.s - brkMin) / 60).toFixed(2);
+            const isDrag = dragging != null && dragging.id === sg.id;
+            const barL = pct(sg.s), barR = pct(sg.e);
             return (
-              <div key={sg.id} className="ccrow" onClick={() => setSelId(sg.id)}
+              <div key={sg.id} className="ccrow"
+                onPointerDown={(ev) => onGanttPointerDown(ev, sg)}
+                onPointerMove={onGanttPointerMove}
+                onPointerUp={(ev) => onGanttPointerUp(ev, sg)}
+                onPointerCancel={(ev) => onGanttPointerUp(ev, sg)}
                 style={{ opacity: covers ? 1 : 0.45, outline: isSel ? `2px solid ${ink}` : "none" }}>
                 <div style={{ width: 108, fontSize: 12, fontWeight: isSel ? 700 : 500, color: bad ? gapRed : ink, paddingLeft: 4 }}>
                   {sg.shift} · {sg.type}
+                  {ganttSort === "improve" && improveDeltas && improveDeltas.get(sg.shift) > 0 && (
+                    <span style={{ marginLeft: 5, fontSize: 10, color: supplyTeal, fontWeight: 700 }}>+{(improveDeltas.get(sg.shift) * 100).toFixed(2)}</span>
+                  )}
                 </div>
-                <div style={{ position: "relative", flex: 1, height: 18, background: "#F4F7F8", borderRadius: 2 }}>
+                <div className="gtrack" style={{ position: "relative", flex: 1, height: 18, background: "#F4F7F8", borderRadius: 2 }}
+                  title={isDrag ? undefined : `${fmt(sg.s)}–${fmt(sg.e)} · ${workHrs}h working${sg.b ? ` · ${brkMin}m break (${fmt(sg.b[0])}–${fmt(sg.b[1])})` : ""}`}>
                   {[360, 600, 840, 1080, 1320].map((m) => <div key={m} style={{ position: "absolute", left: `${pct(m)}%`, top: 0, bottom: 0, width: 1, background: "#E2E8EA" }} />)}
-                  <div style={{ position: "absolute", top: 2, bottom: 2, left: `${pct(sg.s)}%`, width: `${pct(sg.e) - pct(sg.s)}%`, background: tColor(sg.type), borderRadius: 2, outline: bad ? `2px solid ${gapRed}` : "none" }} />
-                  {sg.b && <div style={{ position: "absolute", top: 2, bottom: 2, left: `${pct(sg.b[0])}%`, width: `${pct(sg.b[1]) - pct(sg.b[0])}%`, background: "#fff", opacity: 0.7 }} />}
+                  <div className={"gbar" + (isDrag ? " lifted" : "")} data-dragmode="move" style={{
+                    position: "absolute", top: 2, bottom: 2, left: `${barL}%`, width: `${barR - barL}%`,
+                    background: tColor(sg.type), borderRadius: 2, outline: bad ? `2px solid ${gapRed}` : "none",
+                  }} />
+                  <div className="ghandle" data-dragmode="seg-start" style={{ left: `calc(${barL}% - 3px)` }} />
+                  <div className="ghandle" data-dragmode="seg-end" style={{ left: `calc(${barR}% - 4px)` }} />
+                  {sg.b && (
+                    <>
+                      <div className={"gbrk" + (isDrag ? " lifted" : "")} data-dragmode="break-move" style={{
+                        position: "absolute", top: 2, bottom: 2, left: `${pct(sg.b[0])}%`, width: `${pct(sg.b[1]) - pct(sg.b[0])}%`, opacity: 0.85,
+                      }} />
+                      <div className="ghandle" data-dragmode="break-start" style={{ left: `calc(${pct(sg.b[0])}% - 3px)` }} />
+                      <div className="ghandle" data-dragmode="break-end" style={{ left: `calc(${pct(sg.b[1])}% - 4px)` }} />
+                    </>
+                  )}
+                  {isDrag && (() => {
+                    const dScore = (P.dayScore - dragging.startDayScore) * 100;
+                    const flipLeft = barR > 65;
+                    const staggerIssue = (() => {
+                      if (!glob.maxPullout) return null;
+                      const k = Math.floor((sg.s - T0) / 5);
+                      if (k < 0 || k >= N) return null;
+                      const count = board.filter((o) => o.id !== sg.id && o.days.includes(day) && Math.floor((o.s - T0) / 5) === k).length + 1;
+                      return count > glob.maxPullout ? `${count} sign-ins at ${fmt(sg.s)} (max ${glob.maxPullout})` : null;
+                    })();
+                    const allIssues = [...issues, staggerIssue].filter(Boolean);
+                    return (
+                      <div style={{
+                        position: "absolute", top: 17, zIndex: 30, pointerEvents: "none",
+                        ...(flipLeft ? { right: `${100 - barL}%`, marginRight: 6 } : { left: `${barR}%`, marginLeft: 6 }),
+                        background: ink, color: "#fff", padding: "6px 9px", borderRadius: 3,
+                        fontSize: 11, lineHeight: 1.5, whiteSpace: "nowrap", boxShadow: "0 2px 8px rgba(0,0,0,.3)",
+                      }}>
+                        <div style={{ fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+                          {fmt(sg.s)} – {fmt(sg.e)} · {workHrs}h{sg.b ? ` · break ${fmt(sg.b[0])}–${fmt(sg.b[1])} (${brkMin}m)` : ""}
+                        </div>
+                        <div style={{ color: dScore >= 0 ? "#7FD9BE" : "#F0A0A0" }}>{dScore >= 0 ? "+" : ""}{dScore.toFixed(2)} pt {day} coverage</div>
+                        {allIssues.map((iss, i) => <div key={i} style={{ color: "#F0A0A0" }}>⚠ {iss}</div>)}
+                      </div>
+                    );
+                  })()}
                 </div>
                 <div style={{ width: 96, fontSize: 11, color: sampleGray, textAlign: "right", paddingRight: 6, fontVariantNumeric: "tabular-nums" }}>{fmt(sg.s)}–{fmt(sg.e)}</div>
               </div>
