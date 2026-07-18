@@ -789,25 +789,22 @@ const SLIDES = [];
 for (let m = -120; m <= 120; m += 5) if (m !== 0) SLIDES.push(m);
 const BRK_SLIDES = [];
 for (let m = -90; m <= 90; m += 5) if (m !== 0) BRK_SLIDES.push(m);
+const SLIDE_MAX_MIN = SLIDES[SLIDES.length - 1];
+const BRK_SLIDE_MAX_MIN = BRK_SLIDES[BRK_SLIDES.length - 1];
 
-// Schedule-stability penalty: `weight` points per hour a candidate time sits from its
-// origin, so near-equal options resolve to "keep it where it is" while genuine coverage
-// gains still override it. Callers on retimeBoard's own raw-objective scale pass
-// glob.scheduleStability directly; callers on the tiny week-fraction-normalized objective
-// (findSuggestions/refinePerDay/the optimizer monitor) must pre-scale the weight — see
-// FS_STAB_SCALE/RPD_STAB_SCALE/MON_STAB_SCALE — or the penalty swamps the real deltas.
-function stabilityPenalty(candS, origS, weight) {
-  return weight ? (Math.abs(candS - origS) / 60) * weight : 0;
+// Schedule-stability penalty, self-calibrating instead of an absolute score subtraction: a
+// candidate that uses the FULL available move range (maxRangeMin — e.g. SLIDES' ±120min, a
+// package's own report-time-variance window, or a fixed 120min reference for whole-board
+// comparisons) gives up `stability/10` of its OWN raw gain; a move at a fraction of that range
+// gives up proportionally less. Because the penalty is a fraction of the candidate's own delta
+// rather than a fixed point value, it behaves consistently regardless of a board's size or how
+// large its typical deltas run — no per-board recalibration needed. stability=0 → no penalty
+// (identical to pre-feature behavior); stability=10 → a full-range move loses everything, so it
+// only wins if a smaller move can't match it at all.
+function stabilityFraction(moveMin, maxRangeMin, stability) {
+  if (!stability || !maxRangeMin) return 0;
+  return Math.min(1, (Math.abs(moveMin) / maxRangeMin) * (stability / 10));
 }
-// Calibrated empirically against the shipped sample board: findSuggestions' displayed delta is
-// s.delta*100 (see the Suggestions tab render), so a "+0.21" suggestion is a raw delta of 0.0021
-// — real deltas on that board run roughly 0.001-0.002, not the larger figure first assumed here.
-// These constants keep a 100-min slide's penalty at default stability (3) around a third of a
-// typical real delta (discourages big near-ties without blocking a clearly-better big move),
-// while a 5-min move's penalty stays negligible against the 0.0004 filter threshold.
-const FS_STAB_SCALE = 0.00002;    // findSuggestions (delta filter threshold 0.0004)
-const RPD_STAB_SCALE = 0.0000006; // refinePerDay (delta filter threshold 1e-6; see PROJECT_NOTES §5.6)
-const MON_STAB_SCALE = 0.00002;   // optimizer monitor accept-if-better (same objective family as findSuggestions)
 
 function startsPerSlot(board) {
   const starts = {};
@@ -821,7 +818,7 @@ function startsPerSlot(board) {
 
 function findSuggestions(board, eng, DEM, rules, glob, spans = null, original = null) {
   const origMap = new Map((original || board).map((s) => [s.id, s]));
-  const stabWeight = (glob.scheduleStability || 0) * FS_STAB_SCALE;
+  const stability = glob.scheduleStability || 0;
   const starts = startsPerSlot(board);
   const maxPull = glob.maxPullout || 0;
   const pcov = glob.coveragePriority > 0 ? glob.coveragePriority : 0;
@@ -889,8 +886,9 @@ function findSuggestions(board, eng, DEM, rules, glob, spans = null, original = 
         if (fleetBad) return;
         delta += term - termBase[d];
       }
-      const moveMin = cand.s !== seg.s ? Math.abs(cand.s - orig.s) : Math.abs(cand.b[0] - (orig.b ? orig.b[0] : cand.b[0]));
-      const netDelta = delta - (moveMin / 60) * stabWeight;
+      const isSlide = cand.s !== seg.s;
+      const moveMin = isSlide ? Math.abs(cand.s - orig.s) : Math.abs(cand.b[0] - (orig.b ? orig.b[0] : cand.b[0]));
+      const netDelta = delta * (1 - stabilityFraction(moveMin, isSlide ? SLIDE_MAX_MIN : BRK_SLIDE_MAX_MIN, stability));
       if (netDelta > 0.0004) out.push({ id: seg.id, shift: seg.shift, run: seg.run, type: seg.type, label, delta: netDelta, moveMin, payload: { s: cand.s, e: cand.e, b: cand.b } });
     };
     for (const m of SLIDES) {
@@ -1611,7 +1609,7 @@ function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans, origin
   // segment id mid-sweep below — the shift number is what stays stable across that split
   const origByShiftDay = new Map();
   for (const sg of (original || board0)) for (const d of sg.days) origByShiftDay.set(`${sg.shift}:${d}`, sg.s);
-  const stabWeight = (glob.scheduleStability || 0) * RPD_STAB_SCALE;
+  const stability = glob.scheduleStability || 0;
   const maxVar = Math.max(glob.maxStartVarWeekday || 0, glob.maxStartVarWeekend || 0, glob.maxStartVarCross || 0) || 60;
   const maxPull = glob.maxPullout || 0;
   let created = 0, moves = 0, evaluated = 0;
@@ -1693,7 +1691,7 @@ function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans, origin
         if (fleetBad) continue;
         const delta = t - term[d];
         const origS = origByShiftDay.get(`${seg.shift}:${d}`) ?? seg.s;
-        const netDelta = delta - (Math.abs(s2 - origS) / 60) * stabWeight;
+        const netDelta = delta * (1 - stabilityFraction(s2 - origS, maxVar, stability));
         if (netDelta > bestDelta) { bestDelta = netDelta; bestM = m; bestTerm = t; }
       }
       if (bestM === 0) continue;
@@ -2318,11 +2316,17 @@ export default function App({ onHome }) {
     const sc = st.scoreFn(segs); // { obj, cov }
     const tSec = (performance.now() - st.startedAt) / 1000;
     if (cfg.mode === "generate" && st.baselineScore == null) st.baselineScore = sc.cov; // reference = the plain single-shot Generate (coverage)
-    // accept on objective net of schedule-stability cost (how far this candidate drifted from
-    // the board the scheduler actually loaded, cfg.baseline) so a restart's wild reshuffle only
-    // becomes the new best if its coverage gain is worth the accumulated disruption — not just
-    // better than the previous best's raw objective, which could itself already have drifted.
-    if (sc.obj - st.stabilityCost(segs) > st.bestObj - st.stabilityCost(st.best) + 1e-12) { // accept on objective; display coverage
+    // accept on the marginal objective gain discounted by how far this candidate drifted from
+    // the board the scheduler actually loaded (cfg.baseline), so a restart's wild reshuffle only
+    // becomes the new best if its coverage gain is worth the disruption — not just better than
+    // the previous best's raw objective, which could itself already have drifted.
+    // Also require the honest coverage score itself not to drop: the objective (weighted/phantom-
+    // augmented, per computeEngine) can improve while the true coverage % the scheduler is looking
+    // at goes down — since st.bestScore only ever holds values that already passed this same gate,
+    // this keeps the displayed score monotonically non-decreasing across the whole run.
+    const gain = sc.obj - st.bestObj;
+    if (gain * (1 - st.disruptionFraction(segs)) > 1e-12
+      && sc.cov >= st.bestScore - 1e-9) { // accept on objective; display coverage
       st.best = segs;
       st.bestObj = sc.obj;
       st.bestScore = sc.cov;
@@ -2371,20 +2375,21 @@ export default function App({ onHome }) {
       return { obj: e.weekObjective, cov: e.weekScore };
     };
     const baseline = mode === "retime" ? scoreFn(cfg.baseline) : null;
-    // schedule-stability cost of a candidate board: mean hours each package's report time has
-    // moved from its position in cfg.baseline (the board the scheduler actually had loaded when
-    // Run Optimizer was clicked), so accept-if-better weighs coverage gain against disruption
-    // from where the run truly started — not just against the previous best, which could itself
-    // already have drifted. Mean, not sum, so board size doesn't change the penalty's weight.
-    const stabilityCost = (segs) => {
+    // schedule-stability disruption fraction for a candidate board: mean minutes each package's
+    // report time has moved from its position in cfg.baseline (the board the scheduler actually
+    // had loaded when Run Optimizer was clicked), expressed as a fraction of SLIDE_MAX_MIN (the
+    // same reference range findSuggestions uses) via stabilityFraction — so accept-if-better
+    // discounts this candidate's marginal objective gain proportionally, self-calibrated rather
+    // than an absolute point cost. Mean, not sum, so board size doesn't change the weight.
+    const disruptionFraction = (segs) => {
       if (!segs) return 0;
       const orig = new Map(cfg.baseline.map((s) => [s.shift, s.s]));
-      const hrs = segs.map((s) => Math.abs(s.s - (orig.get(s.shift) ?? s.s)) / 60);
-      const mean = hrs.length ? hrs.reduce((a, b) => a + b, 0) / hrs.length : 0;
-      return mean * (cfg.glob.scheduleStability || 0) * MON_STAB_SCALE;
+      const mins = segs.map((s) => Math.abs(s.s - (orig.get(s.shift) ?? s.s)));
+      const meanMin = mins.length ? mins.reduce((a, b) => a + b, 0) / mins.length : 0;
+      return stabilityFraction(meanMin, SLIDE_MAX_MIN, cfg.glob.scheduleStability || 0);
     };
     optRef.current = {
-      abort: false, cfg, scoreFn, stabilityCost,
+      abort: false, cfg, scoreFn, disruptionFraction,
       // retime mode seeds the loaded signup itself as the incumbent — the search can only
       // ever improve on what's already in hand, never hand back something worse
       best: mode === "retime" ? cfg.baseline : null,
@@ -2413,7 +2418,12 @@ export default function App({ onHome }) {
         ? deepOptimize(st.best, engineArgs, st.cfg.allRules, st.cfg.glob, st.cfg.baseline).board
         : optimizeToConvergence(st.best, engineArgs, st.cfg.allRules, st.cfg.glob, 25, st.cfg.baseline).board;
       const pScore = st.scoreFn(polished); // { obj, cov }
-      if (pScore.obj >= st.bestObj) { st.best = polished; st.bestObj = pScore.obj; st.bestScore = pScore.cov; }
+      // same discounted-gain + non-decreasing-coverage gate as every tick: the polish pass climbs
+      // the objective too, so it needs the same guard against trading away honest coverage.
+      const pGain = pScore.obj - st.bestObj;
+      if (pGain * (1 - st.disruptionFraction(polished)) >= 0 && pScore.cov >= st.bestScore - 1e-9) {
+        st.best = polished; st.bestObj = pScore.obj; st.bestScore = pScore.cov;
+      }
       const tSec = (performance.now() - st.startedAt) / 1000;
       st.history.push({ t: Math.round(tSec * 10) / 10, score: Math.round(st.bestScore * 10000) / 100 });
     }
@@ -5095,16 +5105,23 @@ export default function App({ onHome }) {
                       const before = eng.weekScore;
                       const r = deepOptimize(board, [DEM, includePT, glob.minVeh, spans, glob.maxFleet], allRules, glob);
                       const after = computeEngine(DEM, buildSupply(r.board), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob).weekScore;
-                      mutate(() => r.board);
-                      setOptResult({ applied: r.moves, evaluated: r.evaluated, created: r.created, passes: r.passes, gained: (after - before) * 100 });
+                      // Deep optimize climbs the internal objective (weighted/phantom-augmented),
+                      // which can improve while the honest coverage score it's compared against here
+                      // goes down. Only apply the result if the score you're actually looking at
+                      // didn't drop — otherwise leave the board untouched and say so.
+                      const rejected = after < before - 1e-9;
+                      if (!rejected) mutate(() => r.board);
+                      setOptResult({ applied: r.moves, evaluated: r.evaluated, created: r.created, passes: r.passes, gained: (after - before) * 100, rejected });
                       setSugs(null); setSugsStale(false); setOptBusy(false);
                     }, 30);
                   }}>
                   {optBusy ? "Optimizing…" : "Deep optimize (slides, breaks, per-day)"}
                 </button>
                 {optResult && !optBusy && (
-                  <span style={{ fontSize: 12.5, color: supplyTeal, fontWeight: 600 }}>
-                    Converged after evaluating {(optResult.evaluated || 0).toLocaleString()} candidate adjustments: +{optResult.gained.toFixed(2)} pts from {optResult.applied} moves{optResult.created ? ` (${optResult.created} day-variants created)` : ""}. No remaining single adjustment of any explored type improves the score.
+                  <span style={{ fontSize: 12.5, color: optResult.rejected ? demandAmber : supplyTeal, fontWeight: 600 }}>
+                    {optResult.rejected
+                      ? `Found ${optResult.applied} moves that improved the internal objective, but the honest coverage score would have dropped ${Math.abs(optResult.gained).toFixed(2)} pts — no changes applied. Try the Optimization monitor below; it explores many random variations and only keeps ones that don't lower coverage.`
+                      : `Converged after evaluating ${(optResult.evaluated || 0).toLocaleString()} candidate adjustments: +${optResult.gained.toFixed(2)} pts from ${optResult.applied} moves${optResult.created ? ` (${optResult.created} day-variants created)` : ""}. No remaining single adjustment of any explored type improves the score.`}
                   </span>
                 )}
                 {sugsStale && sugs && <span style={{ fontSize: 12.5, color: demandAmber, fontWeight: 600 }}>Board changed — results are stale, recompute.</span>}
