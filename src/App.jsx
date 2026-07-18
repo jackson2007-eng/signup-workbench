@@ -2201,6 +2201,201 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
   );
 }
 
+// Shared low-level renderer for the Rules-tab "shape preview" widgets: given a set of
+// same-length value arrays (a day's worth of 5-min slots), draws them as overlaid area/line
+// layers on one axis. Knows nothing about which rule produced the arrays — callers decide
+// what's live vs. fixed, what's demand vs. supply, and how to label it.
+function ShapePreviewChart({ layers, width = 700, height = 168 }) {
+  const padL = 30, padR = 8, padT = 8, padB = 20;
+  const innerW = width - padL - padR, innerH = height - padT - padB;
+  const n = layers[0].values.length;
+  const maxV = Math.max(1, ...layers.flatMap((l) => l.values)) * 1.15;
+  const x = (i) => padL + (i / (n - 1)) * innerW;
+  const y = (v) => padT + innerH - (Math.min(v, maxV) / maxV) * innerH;
+  const pathLine = (arr) => arr.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const pathArea = (arr) => `${pathLine(arr)} L${x(n - 1).toFixed(1)},${y(0).toFixed(1)} L${x(0).toFixed(1)},${y(0).toFixed(1)} Z`;
+  const nGrid = 3;
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: "auto", display: "block" }}>
+      {Array.from({ length: nGrid + 1 }, (_, g) => {
+        const v = (maxV / (1.15 * nGrid)) * g;
+        return (
+          <g key={g}>
+            <line x1={padL} y1={y(v)} x2={width - padR} y2={y(v)} stroke="var(--border)" strokeWidth={1} />
+            <text x={padL - 4} y={y(v) + 3} fontSize={9} textAnchor="end" fill="var(--muted)">{Math.round(v)}</text>
+          </g>
+        );
+      })}
+      {layers.map((l, i) => (
+        <g key={i}>
+          {l.area && <path d={pathArea(l.values)} fill={l.color} opacity={l.areaOpacity ?? 0.22} />}
+          <path d={pathLine(l.values)} fill="none" stroke={l.color} strokeWidth={l.width ?? 1.8}
+            strokeDasharray={l.dash} opacity={l.lineOpacity ?? 1} />
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+const DAY_LABEL = { Sunday: "Su", Monday: "Mo", Tuesday: "Tu", Wednesday: "We", Thursday: "Th", Friday: "Fr", Saturday: "Sa" };
+
+// Legend + optional day-picker chrome shared by every Rules-tab shape preview. Schedule
+// stability's preview has no day-picker — a shift's report time isn't day-specific — so
+// day/setDay are simply omitted for that caller instead of the picker rendering empty.
+function ShapePreviewFrame({ legend, day, setDay, children, rightSlot }) {
+  return (
+    <div style={{ marginTop: 4 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4, flexWrap: "wrap", gap: 4 }}>
+        <div style={{ fontSize: 11, color: "var(--muted)" }}>
+          {legend.map((l, i) => (
+            <span key={i} style={{ marginRight: 12 }}>
+              <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: l.color, marginRight: 4 }} />
+              {l.label}
+            </span>
+          ))}
+        </div>
+        {setDay ? (
+          <div style={{ display: "flex", gap: 2 }}>
+            {DAYS.map((d) => (
+              <button key={d} onClick={() => setDay(d)}
+                style={{
+                  fontSize: 10.5, padding: "2px 6px", borderRadius: 2, cursor: "pointer",
+                  border: "1px solid var(--border)", background: d === day ? supplyTeal : "transparent",
+                  color: d === day ? "#fff" : "var(--muted)",
+                }}>
+                {DAY_LABEL[d]}
+              </button>
+            ))}
+          </div>
+        ) : rightSlot || null}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// Live shape preview for the off-peak weighting slider: plots the reshaped demand target
+// (P.target — already gamma-weighted by glob.offPeakBias inside computeEngine, so it redraws
+// on every drag tick for free via the existing eng useMemo) against the day's actual current
+// supply. No separate math here — this is the exact curve the optimizer is chasing right now.
+function OffPeakShapePreview({ P, day, setDay }) {
+  return (
+    <ShapePreviewFrame day={day} setDay={setDay} legend={[
+      { color: demandAmber, label: "reshaped target (moves with the slider)" },
+      { color: supplyTeal, label: "actual supply today" },
+    ]}>
+      <ShapePreviewChart layers={[
+        { values: P.target, color: demandAmber, width: 2, area: true },
+        { values: P.sup, color: supplyTeal, width: 1.8, lineOpacity: 0.85 },
+      ]} />
+    </ShapePreviewFrame>
+  );
+}
+
+// Coverage priority has no direct formula-shaped curve to draw live (unlike off-peak weighting,
+// its effect only shows up after a real retime chooses different report times). The slider only
+// takes 9 legal positions (0–4 in 0.5 steps), so rather than approximate between samples, this
+// precomputes all 9 real retimeBoard() results up front and looks up the exact one for whatever
+// value the slider is on — an honest "what would retiming actually produce," not an interpolation.
+const COV_PRIORITY_VALUES = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4];
+
+function CoveragePriorityShapePreview({ P, day, setDay, coveragePriority, previewCache }) {
+  const previewSup = previewCache && previewCache[coveragePriority] ? previewCache[coveragePriority][day] : null;
+  return (
+    <ShapePreviewFrame day={day} setDay={setDay} legend={[
+      { color: demandAmber, label: "demand shape (vehicle-scaled)" },
+      { color: supplyTeal, label: "actual supply today" },
+      { color: targetInk, label: "retimed at this priority" },
+    ]}>
+      {previewSup ? (
+        <ShapePreviewChart layers={[
+          { values: P.target, color: demandAmber, width: 1.4, area: true, areaOpacity: 0.14, lineOpacity: 0.55 },
+          { values: P.sup, color: supplyTeal, width: 1.6, dash: "4 3", lineOpacity: 0.75 },
+          { values: previewSup, color: targetInk, width: 2.4 },
+        ]} />
+      ) : (
+        <div style={{ fontSize: 12, color: "var(--muted)", padding: "20px 0", textAlign: "center" }}>
+          Computing retimed preview…
+        </div>
+      )}
+    </ShapePreviewFrame>
+  );
+}
+
+// Every legal schedule-stability position (0–10 in 0.5 steps), same exact-lookup treatment
+// as coverage priority.
+const STABILITY_VALUES = [];
+for (let s = 0; s <= 10; s += 0.5) STABILITY_VALUES.push(s);
+
+// Schedule stability doesn't reshape a demand/supply curve — it changes how far shifts move
+// from where they already sit. So instead of an area chart, this plots one dot per shift:
+// original report time on x, minutes moved (signed) on y. Dragging the slider swaps in the
+// precomputed retime at that stability value; the dots visibly pull toward the zero line as
+// stability rises.
+function MovementScatterChart({ points, width = 700, height = 168 }) {
+  const padL = 34, padR = 8, padT = 8, padB = 20;
+  const innerW = width - padL - padR, innerH = height - padT - padB;
+  const yMax = Math.max(30, ...points.map((p) => Math.abs(p.moveMin))) * 1.15;
+  const x = (t) => padL + ((t - T0) / (T1 - T0)) * innerW;
+  const y = (v) => padT + innerH / 2 - (v / yMax) * (innerH / 2);
+  const nGrid = 2;
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: "auto", display: "block" }}>
+      {Array.from({ length: nGrid * 2 + 1 }, (_, g) => {
+        const v = yMax - (yMax / nGrid) * g;
+        return (
+          <g key={g}>
+            <line x1={padL} y1={y(v)} x2={width - padR} y2={y(v)}
+              stroke={Math.abs(v) < 1e-6 ? "var(--muted)" : "var(--border)"} strokeWidth={Math.abs(v) < 1e-6 ? 1.2 : 1} />
+            <text x={padL - 4} y={y(v) + 3} fontSize={9} textAnchor="end" fill="var(--muted)">{Math.round(v)}</text>
+          </g>
+        );
+      })}
+      {points.map((p, i) => (
+        <circle key={i} cx={x(p.origS)} cy={y(p.moveMin)} r={3.2} fill={p.moveMin === 0 ? supplyTeal : targetInk} opacity={0.75} />
+      ))}
+    </svg>
+  );
+}
+
+function ScheduleStabilityPreview({ board, scheduleStability, previewCache }) {
+  const moves = previewCache && previewCache[scheduleStability] ? previewCache[scheduleStability] : null;
+  const moved = moves ? moves.filter((m) => m.moveMin !== 0).length : 0;
+  const avgMove = moves && moves.length ? moves.reduce((a, m) => a + Math.abs(m.moveMin), 0) / moves.length : 0;
+  return (
+    <ShapePreviewFrame legend={[
+      { color: targetInk, label: "shift moved" },
+      { color: supplyTeal, label: "shift kept in place" },
+    ]}
+      rightSlot={moves && (
+        <div style={{ fontSize: 11, color: "var(--muted)" }}>
+          {moved} of {moves.length} shifts move · {avgMove.toFixed(1)} min avg
+        </div>
+      )}>
+      {moves ? (
+        <MovementScatterChart points={moves} />
+      ) : (
+        <div style={{ fontSize: 12, color: "var(--muted)", padding: "20px 0", textAlign: "center" }}>
+          Computing retimed preview…
+        </div>
+      )}
+    </ShapePreviewFrame>
+  );
+}
+
+// Settles a value ~delay ms after it stops changing. Used to keep the coverage-priority
+// preview's 9 retimeBoard() calls from re-running on every tick of some OTHER live slider
+// (e.g. off-peak weighting) that it depends on for context — only off-peak's own preview
+// needs to be instant; coverage priority's precompute can lag slightly behind it.
+function useDebouncedValue(value, delay) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return debounced;
+}
+
 /* ---------- main ---------- */
 export default function App({ onHome }) {
   const [theme, setTheme] = useState(() => {
@@ -2915,6 +3110,45 @@ export default function App({ onHome }) {
   const base = useMemo(() => computeEngine(DEM, buildSupply(baselineBoard), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, baselineBoard, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime]);
   const recycleViol = useMemo(() => recycleViolations(board, glob), [board, glob.recycleEnabled, glob.recycleTurnaround, glob.recycleWindow, glob.recycleCount]);
   const P = eng.perDay[day];
+  // Coverage-priority preview: precompute the real retimeBoard() supply curve at all 9 legal
+  // slider positions. Debounced on everything BUT coveragePriority itself (and gated to only
+  // run while the Rules tab is actually open) so dragging some other live slider elsewhere —
+  // off-peak weighting, or a Shift Builder drag that touches `board` — doesn't retrigger nine
+  // retime passes on every tick; only settles ~350ms after the board/other-rules go quiet.
+  const covCtxKey = JSON.stringify([glob.offPeakBias, glob.scheduleStability, glob.minVeh, glob.maxFleet, glob.maxPullout, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime, includePT]);
+  const debouncedCovCtxKey = useDebouncedValue(covCtxKey, 350);
+  const covPreviewCache = useMemo(() => {
+    if (tab !== "rules") return null;
+    const out = {};
+    for (const p of COV_PRIORITY_VALUES) {
+      const g = { ...glob, coveragePriority: p };
+      const r = retimeBoard(board, rules, g, DEM, spans, g.minVeh, includePT, { stability: g.scheduleStability });
+      out[p] = buildSupply(r.segs);
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, board, rules, DEM, spans, includePT, debouncedCovCtxKey]);
+  // Schedule-stability preview: same precompute-and-lookup approach, but the swept axis is
+  // now scheduleStability itself, so the "other settings" context includes coveragePriority
+  // this time (it was the excluded one above). retimeBoard() doesn't expose how far it moved
+  // each package, so move distance is computed here by matching shift numbers against the
+  // board's own current times — no changes to the engine function itself.
+  const stabCtxKey = JSON.stringify([glob.coveragePriority, glob.offPeakBias, glob.minVeh, glob.maxFleet, glob.maxPullout, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime, includePT]);
+  const debouncedStabCtxKey = useDebouncedValue(stabCtxKey, 350);
+  const stabPreviewCache = useMemo(() => {
+    if (tab !== "rules") return null;
+    const origByShift = new Map(board.map((sg) => [sg.shift, sg.s]));
+    const out = {};
+    for (const s of STABILITY_VALUES) {
+      const g = { ...glob, scheduleStability: s };
+      const r = retimeBoard(board, rules, g, DEM, spans, g.minVeh, includePT, { stability: s });
+      const seen = new Set();
+      out[s] = r.segs.filter((sg) => origByShift.has(sg.shift) && !seen.has(sg.shift) && seen.add(sg.shift))
+        .map((sg) => ({ origS: origByShift.get(sg.shift), moveMin: sg.s - origByShift.get(sg.shift) }));
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, board, rules, DEM, spans, includePT, debouncedStabCtxKey]);
   // Week-wide requirement sizing: total capped vehicle-hours across all 7 days,
   // divided by 40 (every weekly package = 40 paid hours = ~40 vehicle-hours,
   // straight or split). Gives the package count that reproduces the demand-implied
@@ -5475,12 +5709,30 @@ export default function App({ onHome }) {
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "10px 12px", alignItems: "center", fontSize: 13 }}>
                   <span>Coverage priority</span>
-                  <NumField value={glob.coveragePriority ?? 0} step={0.5} onCommit={(v) => setGlob((g) => ({ ...g, coveragePriority: Math.min(4, Math.max(0, Math.round(v * 2) / 2)) }))} />
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <input type="range" min={0} max={4} step={0.5} value={glob.coveragePriority ?? 0}
+                      onChange={(e) => setGlob((g) => ({ ...g, coveragePriority: Number(e.target.value) }))}
+                      style={{ flex: 1, accentColor: supplyTeal }} />
+                    <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.coveragePriority ?? 0}</span>
+                  </div>
                   <span>Off-peak weighting (%)</span>
-                  <NumField value={glob.offPeakBias ?? 0} step={5} onCommit={(v) => setGlob((g) => ({ ...g, offPeakBias: Math.min(60, Math.max(0, Math.round(v))) }))} />
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <input type="range" min={0} max={60} step={5} value={glob.offPeakBias ?? 0}
+                      onChange={(e) => setGlob((g) => ({ ...g, offPeakBias: Number(e.target.value) }))}
+                      style={{ flex: 1, accentColor: supplyTeal }} />
+                    <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.offPeakBias ?? 0}%</span>
+                  </div>
                   <span>Schedule stability</span>
-                  <NumField value={glob.scheduleStability ?? 3} step={0.5} onCommit={(v) => setGlob((g) => ({ ...g, scheduleStability: Math.max(0, Math.round(v * 2) / 2) }))} />
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <input type="range" min={0} max={10} step={0.5} value={glob.scheduleStability ?? 3}
+                      onChange={(e) => setGlob((g) => ({ ...g, scheduleStability: Number(e.target.value) }))}
+                      style={{ flex: 1, accentColor: supplyTeal }} />
+                    <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.scheduleStability ?? 3}</span>
+                  </div>
                 </div>
+                <CoveragePriorityShapePreview P={P} day={day} setDay={setDay} coveragePriority={glob.coveragePriority ?? 0} previewCache={covPreviewCache} />
+                <OffPeakShapePreview P={P} day={day} setDay={setDay} />
+                <ScheduleStabilityPreview board={board} scheduleStability={glob.scheduleStability ?? 3} previewCache={stabPreviewCache} />
                 <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10, lineHeight: 1.6 }}>
                   <b>Coverage priority</b> spreads resources across busy times: 0 sends everything to the single biggest gap first; higher (0.5–2) spreads resources more evenly across all under-served times before deepening any one gap.<br /><br />
                   <b>Off-peak weighting</b> gives quiet times of day a bit more service than raw demand alone, since off-peak trips share rides less. 0 = follow demand exactly; higher % = flatter, more even coverage. Only compare scores between signups using the same weighting.<br /><br />
