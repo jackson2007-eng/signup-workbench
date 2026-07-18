@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App.jsx";
 import CallCentre from "./CallCentre.jsx";
+import Dispatch from "./Dispatch.jsx";
 import Landing from "./Landing.jsx";
 
 // Minimal path router — no library. "/" (and anything unrecognized) shows the toolkit hub;
@@ -23,6 +24,7 @@ function Root() {
   };
   if (path === "/resourcing") return <App onHome={() => navigate("/")} />;
   if (path === "/callcentre") return <CallCentre onHome={() => navigate("/")} />;
+  if (path === "/dispatch") return <Dispatch onHome={() => navigate("/")} />;
   return <Landing navigate={navigate} />;
 }
 

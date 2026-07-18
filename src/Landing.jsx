@@ -17,7 +17,7 @@ const MODULES = [
     body: "Shape agent schedules against active-call curves with the same coverage engine, sized against calls in queue and in service instead of vehicles.",
   },
   {
-    key: "dispatch", path: null, status: "roadmap", accent: demandAmber,
+    key: "dispatch", path: "/dispatch", status: "live", accent: demandAmber,
     title: "Dispatch Desks",
     tag: "Concurrent workload",
     body: "Size and time dispatcher desks against concurrent-incident load through the day, so the control room is staffed to the shape of real demand.",
