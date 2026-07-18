@@ -2254,20 +2254,23 @@ function ShapePreviewFrame({ legend, day, setDay, children, rightSlot }) {
             </span>
           ))}
         </div>
-        {setDay ? (
-          <div style={{ display: "flex", gap: 2 }}>
-            {DAYS.map((d) => (
-              <button key={d} onClick={() => setDay(d)}
-                style={{
-                  fontSize: 10.5, padding: "2px 6px", borderRadius: 2, cursor: "pointer",
-                  border: "1px solid var(--border)", background: d === day ? supplyTeal : "transparent",
-                  color: d === day ? "#fff" : "var(--muted)",
-                }}>
-                {DAY_LABEL[d]}
-              </button>
-            ))}
-          </div>
-        ) : rightSlot || null}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {rightSlot}
+          {setDay && (
+            <div style={{ display: "flex", gap: 2 }}>
+              {DAYS.map((d) => (
+                <button key={d} onClick={() => setDay(d)}
+                  style={{
+                    fontSize: 10.5, padding: "2px 6px", borderRadius: 2, cursor: "pointer",
+                    border: "1px solid var(--border)", background: d === day ? supplyTeal : "transparent",
+                    color: d === day ? "#fff" : "var(--muted)",
+                  }}>
+                  {DAY_LABEL[d]}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
       {children}
     </div>
@@ -2299,20 +2302,66 @@ function OffPeakShapePreview({ P, day, setDay }) {
 // value the slider is on — an honest "what would retiming actually produce," not an interpolation.
 const COV_PRIORITY_VALUES = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4];
 
+// Retiming reallocates the SAME total vehicle-hours — it doesn't add or remove them — so
+// "actual supply" and "retimed supply" drawn as two overlaid absolute curves mostly sit on
+// top of each other; the real effect (a few vehicles pulled from one slot, added to another)
+// gets lost in the noise of two nearly-identical lines. A delta chart makes the trade itself
+// the picture: shaded up where this priority adds coverage relative to today, shaded down
+// where it pulls coverage away, against a faint demand-shape backdrop for landmarks.
+function DeltaAreaChart({ delta, demandRef, width = 700, height = 168 }) {
+  const padL = 30, padR = 8, padT = 8, padB = 20;
+  const innerW = width - padL - padR, innerH = height - padT - padB;
+  const n = delta.length;
+  const maxAbs = Math.max(1, ...delta.map((v) => Math.abs(v))) * 1.25;
+  const x = (i) => padL + (i / (n - 1)) * innerW;
+  const y = (v) => padT + innerH / 2 - (v / maxAbs) * (innerH / 2);
+  const zeroY = y(0);
+  const areaPath = (vals) => {
+    let d = vals.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+    d += ` L${x(n - 1).toFixed(1)},${zeroY.toFixed(1)} L${x(0).toFixed(1)},${zeroY.toFixed(1)} Z`;
+    return d;
+  };
+  const pos = delta.map((v) => Math.max(0, v));
+  const neg = delta.map((v) => Math.min(0, v));
+  const maxDemand = Math.max(1, ...demandRef);
+  const demandLine = demandRef.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${(padT + innerH - (v / maxDemand) * innerH).toFixed(1)}`).join(" ");
+  const nGrid = 2;
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: "auto", display: "block" }}>
+      {Array.from({ length: nGrid * 2 + 1 }, (_, g) => {
+        const v = maxAbs - (maxAbs / nGrid) * g;
+        return (
+          <g key={g}>
+            <line x1={padL} y1={y(v)} x2={width - padR} y2={y(v)}
+              stroke={Math.abs(v) < 1e-6 ? "var(--muted)" : "var(--border)"} strokeWidth={Math.abs(v) < 1e-6 ? 1.2 : 1} />
+            <text x={padL - 4} y={y(v) + 3} fontSize={9} textAnchor="end" fill="var(--muted)">{v > 0 ? "+" : ""}{Math.round(v)}</text>
+          </g>
+        );
+      })}
+      <path d={demandLine} fill="none" stroke={demandAmber} strokeWidth={1.2} opacity={0.35} />
+      <path d={areaPath(pos)} fill={supplyTeal} opacity={0.55} />
+      <path d={areaPath(neg)} fill={gapRed} opacity={0.5} />
+    </svg>
+  );
+}
+
 function CoveragePriorityShapePreview({ P, day, setDay, coveragePriority, previewCache }) {
   const previewSup = previewCache && previewCache[coveragePriority] ? previewCache[coveragePriority][day] : null;
+  const delta = previewSup ? previewSup.map((v, i) => v - P.sup[i]) : null;
+  const shifted = delta ? delta.reduce((a, v) => a + Math.max(0, v), 0) * (5 / 60) : 0;
   return (
     <ShapePreviewFrame day={day} setDay={setDay} legend={[
-      { color: demandAmber, label: "demand shape (vehicle-scaled)" },
-      { color: supplyTeal, label: "actual supply today" },
-      { color: targetInk, label: "retimed at this priority" },
-    ]}>
+      { color: supplyTeal, label: "gains coverage at this priority" },
+      { color: gapRed, label: "loses coverage at this priority" },
+      { color: demandAmber, label: "demand shape (for landmarks)" },
+    ]}
+      rightSlot={previewSup && (
+        <div style={{ fontSize: 11, color: "var(--muted)" }}>
+          ≈{shifted.toFixed(1)} vehicle-hours reallocated vs. today
+        </div>
+      )}>
       {previewSup ? (
-        <ShapePreviewChart layers={[
-          { values: P.target, color: demandAmber, width: 1.4, area: true, areaOpacity: 0.14, lineOpacity: 0.55 },
-          { values: P.sup, color: supplyTeal, width: 1.6, dash: "4 3", lineOpacity: 0.75 },
-          { values: previewSup, color: targetInk, width: 2.4 },
-        ]} />
+        <DeltaAreaChart delta={delta} demandRef={P.target} />
       ) : (
         <div style={{ fontSize: 12, color: "var(--muted)", padding: "20px 0", textAlign: "center" }}>
           Computing retimed preview…
