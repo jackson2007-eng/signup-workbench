@@ -135,7 +135,7 @@ touch-friendly editing for the scheduling modules without a specific reason to r
 - **Usage dashboard:** follows from the above — premature infrastructure for a customer
   count that doesn't need it yet. Parked alongside phase-2 accounts, not scheduled.
 
-## Module parity initiative (added 2026-07-20, IN PROGRESS)
+## Module parity initiative (added 2026-07-20, SHIPPED 2026-07-20 — deferrals noted below)
 
 Bring Call Centre and Dispatch up to the operator workbench's feature depth, with language
 and mechanics adapted to each domain (agents/calls, dispatchers/incident load — never
@@ -156,10 +156,15 @@ exception days for now; phase strip yes but NO guided tour.
   dispatcher-ratio requirement). SHIPPED except the background Optimization monitor —
   deferred (large embedded time-sliced loop in App.jsx; port in its own pass).
 - **Phase 3 — Rules substance**: part-time for Call Centre; wire package rules into real
-  flagging in both.
+  flagging in both. SHIPPED — CC has the full ptRules/ptEnabled/ptCount machinery (Rules
+  card, Build-tab count, generation, persistence); packageInfo issues now flag in both
+  siblings' Packaging tab and Schedule gantt.
 - **Phase 4 — Full Packaging tab** both siblings (grid, auto-package, per-day refine).
-- **Phase 5 — Editing depth + chrome**: week strip, duplicate, day variants; phase strip;
-  redo for the operator module.
+  SHIPPED as a shared PackagingTab exported from CallCentre.jsx.
+- **Phase 5 — Editing depth + chrome**: phase strip SHIPPED (shared PhaseStrip, Setup →
+  Build → Review → Handoff, done/pending tints). DEFERRED to follow-up passes: the
+  operator-style week-strip/3-state package editor in the siblings, redo for the operator
+  module, and the background Optimization monitor port (same deferral as Phase 2).
 
 Tier/pricing note: ALL gating work is parked on the `tier-scaffolding` branch (pushed to
 GitHub) per 2026-07-20 decision to hold off on pricing. main is clean of it; merge that

@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import {
   T0, T1, N, SLOT, DAYS, WEEKEND_DAYS, fmt, parseHM, cloneSeg,
   buildSupply, computeEngine, generateBoard, validateSeg, autofixSeg,
-  findSuggestions, parseSignupWorkbook, retimeBoard, deepOptimize, refinePerDay,
+  findSuggestions, parseSignupWorkbook, retimeBoard, deepOptimize, refinePerDay, packageInfo, autoPackage,
   TimeField, NumField, Nudge, Stat, CoverageChart, Sketcher, DeltaAreaChart,
   CoveragePriorityShapePreview, ScheduleStabilityPreview, COVERAGE_RESOLUTIONS,
 } from "./App.jsx";
@@ -153,16 +153,7 @@ function requiredAgents(A, ahtMin, targetSec, targetPct) {
   return N;
 }
 
-const NAV = [
-  { key: "rules", label: "RULES" },
-  { key: "import", label: "IMPORT" },
-  { key: "demand", label: "DEMAND" },
-  { key: "build", label: "BUILD" },
-  { key: "coverage", label: "COVERAGE" },
-  { key: "suggest", label: "SUGGESTIONS" },
-  { key: "compare", label: "COMPARE" },
-  { key: "schedule", label: "SCHEDULE" },
-];
+
 
 export default function CallCentre({ onHome }) {
   const [theme, setTheme] = useState(() => {
@@ -202,9 +193,16 @@ export default function CallCentre({ onHome }) {
   const [baselineBoard, setBaselineBoard] = useState(() => CALL_SAMPLE.board.map(cloneSeg));
   const [scheduleSource, setScheduleSource] = useState("sample"); // "sample" | "uploaded"
   const [scheduleUpload, setScheduleUpload] = useState(null); // parser summary for the banner
+  // Part-time agent classifications — same ptRules/ptEnabled/ptCount machinery as Dispatch
+  // and the operator tool (generateBoard's fully-parameterized pt args).
+  const [ptRules, setPtRules] = useState({});
+  const [ptEnabled, setPtEnabled] = useState(false);
+  const [ptCount, setPtCount] = useState(6);
+  const [newPtType, setNewPtType] = useState("");
 
   const nextId = useRef(Math.max(0, ...CALL_SAMPLE.board.map((s) => s.id || 0)) + 1);
   const tColor = (t) => typeColors[t] || DEFAULT_TCOLOR;
+  const allRules = useMemo(() => ({ ...rules, ...ptRules }), [rules, ptRules]);
 
   const DEM = calls;
   const ftCov = useMemo(() => buildSupply(board), [board]);
@@ -222,7 +220,7 @@ export default function CallCentre({ onHome }) {
   const peakReq = reqCurve.length ? Math.max(...reqCurve) : 0;
 
   const distinctShifts = new Set(board.map((s) => s.shift)).size;
-  const flagCount = board.reduce((n, s) => n + (validateSeg(s, rules, glob).length ? 1 : 0), 0);
+  const flagCount = board.reduce((n, s) => n + (validateSeg(s, allRules, glob).length ? 1 : 0), 0);
 
   // Changes vs the baseline schedule — same id-keyed diff as the operator tool's Compare.
   const boardDiff = useMemo(() => {
@@ -267,7 +265,7 @@ export default function CallCentre({ onHome }) {
 
   /* ---------- generate ---------- */
   const generate = () => {
-    const r = generateBoard(0, Math.max(1, Math.round(nAgents)), rules, glob, DEM, spans, glob.minVeh, false, null, glob.shiftSeriesBase);
+    const r = generateBoard(0, Math.max(1, Math.round(nAgents)), rules, glob, DEM, spans, glob.minVeh, false, null, glob.shiftSeriesBase, {}, ptEnabled ? ptRules : {}, ptEnabled ? ptCount : 0);
     const segs = r.segs.map((s) => ({ ...cloneSeg(s), id: nextId.current++ }));
     setHist((h) => [...h.slice(-40), board]); setFuture([]);
     setBoard(segs);
@@ -346,7 +344,7 @@ export default function CallCentre({ onHome }) {
     rd.onload = () => {
       try {
         const wb = XLSX.read(rd.result, { type: file.name.endsWith(".csv") ? "string" : "array" });
-        const res = parseSignupWorkbook(wb, null, rules);
+        const res = parseSignupWorkbook(wb, null, allRules);
         if (!res.ok) { alert(res.error); return; }
         const segs = res.segments.map((s) => ({ ...cloneSeg(s), id: nextId.current++ }));
         setBoard(segs.map(cloneSeg));
@@ -370,14 +368,14 @@ export default function CallCentre({ onHome }) {
   const [sugs, setSugs] = useState(null);
   const [optResult, setOptResult] = useState(null);
   const scoreOf = (b) => computeEngine(DEM, buildSupply(b), false, glob.minVeh, spans, 0, glob.offPeakBias, glob.coveragePriority, 0, 0, glob).weekScore;
-  const findSugs = () => setSugs(findSuggestions(board, eng, DEM, rules, glob, spans));
+  const findSugs = () => setSugs(findSuggestions(board, eng, DEM, allRules, glob, spans));
   const applySug = (s) => {
     commit((b) => b.map((sg) => (sg.id === s.id ? { ...cloneSeg(sg), s: s.payload.s, e: s.payload.e, b: s.payload.b ? [...s.payload.b] : null } : sg)));
     setSugs(null);
   };
   const runDeep = () => {
     const before = eng.weekScore;
-    const r = deepOptimize(board, [DEM, false, glob.minVeh, spans, 0], rules, glob);
+    const r = deepOptimize(board, [DEM, false, glob.minVeh, spans, 0], allRules, glob);
     const after = scoreOf(r.board);
     commit(() => r.board.map(cloneSeg));
     setOptResult({ kind: "Deep optimize", detail: `${r.moves} moves · ${r.created} day-variant${r.created === 1 ? "" : "s"} created · ${(r.evaluated || 0).toLocaleString()} candidates evaluated`, before, after });
@@ -385,7 +383,7 @@ export default function CallCentre({ onHome }) {
   };
   const runRefine = () => {
     const before = eng.weekScore;
-    const r = refinePerDay(board, rules, glob, DEM, false, glob.minVeh, spans);
+    const r = refinePerDay(board, allRules, glob, DEM, false, glob.minVeh, spans);
     const after = scoreOf(r.board);
     commit(() => r.board.map(cloneSeg));
     setOptResult({ kind: "Day-to-day refine", detail: `${r.moves} per-day moves · ${r.created} day-variant${r.created === 1 ? "" : "s"} created`, before, after });
@@ -408,6 +406,28 @@ export default function CallCentre({ onHome }) {
     return Math.max(1, Math.ceil(h / 40));
   }, [calls, glob.ahtMin, glob.slTargetSec, glob.slTargetPct]);
   const sizeToReq = () => setNAgents(reqPackages);
+  // Package-rule checking (min rest, consecutive days, report-time variance) — flags only,
+  // never blocks, same as everywhere else in the toolkit.
+  const packageIssues = useMemo(() => {
+    const by = new Map();
+    for (const sg of board) { if (!by.has(sg.shift)) by.set(sg.shift, []); by.get(sg.shift).push(sg); }
+    const out = new Map();
+    for (const [sh, segs] of by) {
+      const issues = packageInfo(segs, allRules, glob).issues;
+      if (issues.length) out.set(sh, issues);
+    }
+    return out;
+  }, [board, allRules, glob]);
+  const runAutoPackage = () => {
+    const before = eng.weekScore;
+    const r = autoPackage(board, rules, glob);
+    const after = scoreOf(r.board);
+    commit(() => r.board.map(cloneSeg));
+    setOptResult({ kind: "Auto-package", detail: `${r.made} package${r.made === 1 ? "" : "s"} formed · ${r.orphans} single day${r.orphans === 1 ? "" : "s"} left unpackaged`, before, after });
+    setSugs(null);
+  };
+  const [hasVisitedCoverage, setHasVisitedCoverage] = useState(false);
+  useEffect(() => { if (tab === "coverage") setHasVisitedCoverage(true); }, [tab]);
 
   /* ---------- export / project ---------- */
   const exportSchedule = () => {
@@ -430,7 +450,7 @@ export default function CallCentre({ onHome }) {
     XLSX.writeFile(wb, "agent-schedule.xlsx");
   };
   const saveProject = () => {
-    const blob = new Blob([JSON.stringify({ kind: "callcentre", board, baselineBoard, scheduleSource, rules, glob, spans, calls, arrivals, demSource, typeColors, callSummary }, null, 0)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ kind: "callcentre", board, baselineBoard, scheduleSource, rules, ptRules, ptEnabled, ptCount, glob, spans, calls, arrivals, demSource, typeColors, callSummary }, null, 0)], { type: "application/json" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "callcentre-project.json"; a.click();
   };
   const loadProject = (file) => {
@@ -441,6 +461,9 @@ export default function CallCentre({ onHome }) {
         if (!p || !Array.isArray(p.board)) throw new Error("bad");
         setBoard(p.board.map(cloneSeg));
         if (p.rules) setRules(p.rules);
+        setPtRules(p.ptRules && typeof p.ptRules === "object" ? p.ptRules : {});
+        setPtEnabled(!!p.ptEnabled);
+        if (p.ptCount != null) setPtCount(Math.max(0, Math.round(p.ptCount)));
         if (p.glob) setGlob({ ...CALL_SAMPLE.global, ...p.glob });
         if (p.spans) setSpans(p.spans);
         if (p.calls) { setCalls(p.calls); setDemSource(p.demSource || "uploaded"); }
@@ -459,7 +482,7 @@ export default function CallCentre({ onHome }) {
 
   /* ---------- shift editing ---------- */
   const selSeg = selId != null ? board.find((s) => s.id === selId) : null;
-  const selIssues = selSeg ? validateSeg(selSeg, rules, glob) : [];
+  const selIssues = selSeg ? validateSeg(selSeg, allRules, glob) : [];
   const patchSel = (patch) => commit((b) => b.map((s) => (s.id === selId ? { ...cloneSeg(s), ...patch } : s)));
   const addShift = () => {
     const t = Object.keys(rules)[0];
@@ -490,7 +513,8 @@ export default function CallCentre({ onHome }) {
   const [ganttSort, setGanttSort] = useState("run"); // "run"|"time"|"end"|"type"|"flags"|"improve"
   const flaggedShifts = useMemo(() => {
     const set = new Set();
-    for (const sg of board) if (validateSeg(sg, rules, glob).length > 0) set.add(sg.shift);
+    for (const sg of board) if (validateSeg(sg, allRules, glob).length > 0) set.add(sg.shift);
+    for (const sh of packageIssues.keys()) set.add(sh);
     return set;
   }, [board, rules, glob]);
   // Best single-move score delta per shift, for "Room to improve first" — only computed
@@ -679,12 +703,26 @@ export default function CallCentre({ onHome }) {
           </div>
         </div>
 
-        {/* nav */}
-        <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap" }}>
-          {NAV.map((n) => (
-            <div key={n.key} className={"ccnav" + (tab === n.key ? " on" : "")} onClick={() => setTab(n.key)}>{n.label}</div>
-          ))}
-        </div>
+        {/* nav — phase strip (Setup → Build → Review → Handoff), same model as the operator tool */}
+        <PhaseStrip tab={tab} setTab={setTab} groups={[
+          { phase: "PHASE 1 · SETUP", tabs: [
+            { key: "rules", label: "RULES" },
+            { key: "import", label: "IMPORT", done: scheduleSource === "uploaded", reason: "Still using the sample schedule — upload your real agent schedule" },
+            { key: "demand", label: "DEMAND", done: demSource !== "sample", reason: "Still using sample call data — sketch your own or upload real data" },
+          ]},
+          { phase: "PHASE 2 · BUILD", tabs: [
+            { key: "build", label: "BUILD" },
+            { key: "schedule", label: "SCHEDULE" },
+          ]},
+          { phase: "PHASE 3 · REVIEW", tabs: [
+            { key: "coverage", label: "COVERAGE", done: hasVisitedCoverage, reason: "Not yet reviewed" },
+            { key: "suggest", label: "SUGGESTIONS" },
+            { key: "compare", label: "COMPARE" },
+          ]},
+          { phase: "PHASE 4 · HANDOFF", tabs: [
+            { key: "pack", label: "PACKAGING" },
+          ]},
+        ]} />
 
         {/* day paddles (shared by demand/coverage/schedule) */}
         {tab !== "rules" && tab !== "build" && (
@@ -702,12 +740,13 @@ export default function CallCentre({ onHome }) {
           </div>
         )}
 
-        {tab === "rules" && <RulesTab {...{ rules, setRule, glob, setGlob, spans, setSpans, tColor, board, day, setDay, P }} />}
+        {tab === "rules" && <RulesTab {...{ rules, setRule, glob, setGlob, spans, setSpans, tColor, board, day, setDay, P, ptRules, setPtRules, ptEnabled, setPtEnabled, newPtType, setNewPtType, allRules }} />}
         {tab === "import" && <ImportTab {...{ scheduleSource, scheduleUpload, uploadSchedule, downloadScheduleTemplate, resetToBaseline, changedCount, baselineBoard, scheduleFileRef, noun: "agent" }} />}
         {tab === "suggest" && <SuggestTab {...{ sugs, findSugs, applySug, runDeep, runRefine, optResult, tColor, noun: "agent" }} />}
         {tab === "compare" && <CompareTab {...{ boardDiff, changedCount, scheduleSource, eng, baseEng, tColor, noun: "agent" }} />}
         {tab === "demand" && <DemandTab {...{ day, calls, arrivals, showArrivals, setShowArrivals, demSource, uploadInfo, callSummary, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }} />}
-        {tab === "build" && <BuildTab {...{ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor, sizeToReq, reqPackages, runRetime, optResult, noun: "agent" }} />}
+        {tab === "build" && <BuildTab {...{ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor, sizeToReq, reqPackages, runRetime, optResult, noun: "agent", ptEnabled, ptCount, setPtCount }} />}
+        {tab === "pack" && <PackagingTab {...{ board, packageIssues, tColor, runAutoPackage, runRefine, optResult, noun: "agent" }} />}
         {tab === "coverage" && (
           <div>
             {P.floorViol.length > 0 && (
@@ -929,7 +968,7 @@ export function SuggestTab({ sugs, findSugs, applySug, runDeep, runRefine, optRe
 }
 
 /* ================= RULES ================= */
-function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, board, day, setDay, P }) {
+function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, board, day, setDay, P, ptRules, setPtRules, ptEnabled, setPtEnabled, newPtType, setNewPtType, allRules }) {
   const setG = (k, v) => setGlob((g) => ({ ...g, [k]: v }));
   const setGArr = (k, i, v) => setGlob((g) => ({ ...g, [k]: g[k].map((x, j) => (j === i ? v : x)) }));
   return (
@@ -1038,9 +1077,102 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, boar
           <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 10, lineHeight: 1.6 }}>
             <b>Coverage priority</b> tilts the target the generator chases between the peaks and the quiet times: left of 2 gives the peaks extra claim on agents, 2 follows call volume as-is, and right of 2 shifts emphasis toward the edges and off-peak stretches.<br /><br />
             <b>Off-peak weighting</b> gives quiet times of day a bit more staffing than raw call volume alone. 0 = follow call volume exactly; higher % = flatter, more even coverage.<br /><br />
-            <b>Schedule stability</b> affects how strongly the generator favors keeping shifts close to where they already sit: 0 chases every coverage point regardless of disruption; higher = a stronger pull to keep shifts in place, only moving one when the coverage gain is worth it.
+            <b>Schedule stability</b> affects how strongly the generator favors keeping shifts close to where they already sit: 0 chases every coverage point regardless of disruption; higher = a stronger pull to keep shifts in place, only moving one when the coverage gain is worth it. Only applies to full-time agent shifts — part-time placement isn't retimed by this preview.
           </div>
         </div>
+      </div>
+
+      <div style={cardStyle}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+          <input type="checkbox" checked={ptEnabled} onChange={(e) => setPtEnabled(e.target.checked)} />
+          <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>Offer part-time agent shifts</span>
+        </label>
+        {ptEnabled && (
+          <>
+            <div style={{ fontSize: 11.5, color: sampleGray, margin: "6px 0 10px" }}>
+              Part-time classifications use the same start/end/spread/work/break parameters as full-time, plus the days each is available to work. A part-time shift works <b>all</b> of its available days at once — no 40-hour week, no consecutive days-off rule. Set how many to build in the Build tab.
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ borderCollapse: "collapse", minWidth: 820 }}>
+                <thead>
+                  <tr>
+                    {["Type", "Earliest start", "Latest start", "Earliest end", "Latest end", "Min spread (h)", "Max spread (h)", "Work (h)", "Break", "Available days", "In use", ""].map((h) => (
+                      <th key={h} style={{ padding: "4px 8px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".06em", color: sampleGray, textAlign: "left", borderBottom: "1px solid var(--border)" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.keys(ptRules).map((t) => {
+                    const R = ptRules[t];
+                    const inUse = board.filter((s) => s.type === t).length;
+                    const upd = (patch) => setPtRules((old) => ({ ...old, [t]: { ...old[t], ...patch } }));
+                    const days = R.days || [];
+                    return (
+                      <tr key={t}>
+                        <td style={{ padding: "4px 8px" }}>
+                          <span style={{ fontSize: 12, padding: "2px 8px", background: tColor(t), color: "#fff", borderRadius: 2, fontWeight: 600 }}>{t}</span>
+                        </td>
+                        <td style={{ padding: "3px 6px" }}><TimeField value={R.s[0]} onCommit={(v) => upd({ s: [v, R.s[1]] })} /></td>
+                        <td style={{ padding: "3px 6px" }}><TimeField value={R.s[1]} onCommit={(v) => upd({ s: [R.s[0], v] })} /></td>
+                        <td style={{ padding: "3px 6px" }}><TimeField value={R.e[0]} onCommit={(v) => upd({ e: [v, R.e[1]] })} /></td>
+                        <td style={{ padding: "3px 6px" }}><TimeField value={R.e[1]} onCommit={(v) => upd({ e: [R.e[0], v] })} /></td>
+                        <td style={{ padding: "3px 6px" }}><NumField value={R.spr[0] / 60} step={0.25} onCommit={(v) => upd({ spr: [Math.round(v * 60), R.spr[1]] })} /></td>
+                        <td style={{ padding: "3px 6px" }}><NumField value={R.spr[1] / 60} step={0.25} onCommit={(v) => upd({ spr: [R.spr[0], Math.round(v * 60)] })} /></td>
+                        <td style={{ padding: "3px 6px" }}><NumField value={R.work / 60} step={0.25} onCommit={(v) => upd({ work: Math.round(v * 60) })} /></td>
+                        <td style={{ padding: "3px 6px", textAlign: "center" }}>
+                          <input type="checkbox" checked={!!R.brk} onChange={(e) => upd({ brk: e.target.checked })} />
+                        </td>
+                        <td style={{ padding: "3px 6px" }}>
+                          <div style={{ display: "flex", gap: 3 }}>
+                            {DAYS.map((d) => {
+                              const on = days.includes(d);
+                              return (
+                                <button key={d} title={d}
+                                  onClick={() => upd({ days: on ? days.filter((x) => x !== d) : [...days, d] })}
+                                  style={{ padding: "2px 5px", fontSize: 10.5, fontWeight: 600, borderRadius: 2, cursor: "pointer",
+                                    border: `1px solid ${on ? supplyTeal : "var(--border-input)"}`, background: on ? supplyTeal : card, color: on ? "#fff" : sampleGray }}>
+                                  {d.slice(0, 2)}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </td>
+                        <td style={{ padding: "3px 8px", fontSize: 12, color: inUse ? text : sampleGray }}>{inUse}</td>
+                        <td style={{ padding: "3px 6px" }}>
+                          <button style={{ ...nudgeBtn, padding: "3px 8px", fontSize: 12, color: gapRed, borderColor: gapRed }}
+                            title={inUse > 0 ? `${inUse} shift${inUse === 1 ? "" : "s"} use this type — they'll be flagged until retyped` : "Remove this type"}
+                            onClick={() => {
+                              if (inUse > 0 && !window.confirm(
+                                `${inUse} shift${inUse === 1 ? "" : "s"} still use ${t}. They won't be deleted — they'll be flagged until you retype them or re-add ${t}. Remove the type?`)) return;
+                              setPtRules((old) => { const n = { ...old }; delete n[t]; return n; });
+                            }}>
+                            remove
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {Object.keys(ptRules).length === 0 && (
+                    <tr><td colSpan={12} style={{ padding: "8px", fontSize: 12, color: sampleGray }}>No part-time classifications yet — add one below.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
+              <input placeholder="New part-time code (e.g. AGPT-EVE)" value={newPtType}
+                onChange={(e) => setNewPtType(e.target.value.toUpperCase().slice(0, 8))}
+                style={{ padding: "6px 8px", border: "1px solid var(--border-input)", borderRadius: 2, fontSize: 13, width: 210, background: card, color: text }} />
+              <button style={nudgeBtn} disabled={!newPtType || !!allRules[newPtType]}
+                onClick={() => {
+                  if (!newPtType || allRules[newPtType]) return;
+                  setPtRules((old) => ({ ...old, [newPtType]: { s: [300, 660], e: [840, 1470], spr: [240, 480], work: 240, brk: false, days: [...DAYS] } }));
+                  setNewPtType("");
+                }}>
+                + Add part-time type
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1096,17 +1228,23 @@ function DemandTab({ day, calls, arrivals, showArrivals, setShowArrivals, demSou
 }
 
 /* ================= BUILD ================= */
-function BuildTab({ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor, sizeToReq, reqPackages, runRetime, optResult, noun }) {
+function BuildTab({ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor, sizeToReq, reqPackages, runRetime, optResult, noun, ptEnabled, ptCount, setPtCount }) {
   return (
     <div>
       <div style={cardStyle}>
         <div style={hTitle}>Generate an agent schedule</div>
         <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 10 }}>
-          Greedily builds weekly packages (5 days on, 2 off) from your shift types, placing each shift where it most improves coverage of the active-calls curve. The result lands as a fully editable schedule.
+          Greedily builds weekly packages (5 days on, 2 off) from your shift types, placing each shift where it most improves coverage of the active-calls curve{ptEnabled ? ", filling in part-time shifts alongside full-time" : ""}. The result lands as a fully editable schedule.
         </div>
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 13 }}>Number of {noun}s (weekly packages)</span>
+          <span style={{ fontSize: 13 }}>Number of full-time {noun}s (weekly packages)</span>
           <NumField value={nAgents} onCommit={(v) => setNAgents(Math.max(1, Math.round(v)))} />
+          {ptEnabled && (
+            <>
+              <span style={{ fontSize: 13 }}>Part-time shifts</span>
+              <NumField value={ptCount} onCommit={(v) => setPtCount(Math.max(0, Math.round(v)))} />
+            </>
+          )}
           {sizeToReq && <button style={nudgeBtn} onClick={sizeToReq} title="Set the package count from the weekly requirement">Size to requirement ({reqPackages})</button>}
           <button style={primaryBtn} onClick={generate}>Generate schedule</button>
         </div>
@@ -1442,6 +1580,118 @@ function CallDataSummary({ summary, day, calls }) {
       )}
       <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>
         Average inbound calls per day (bars) and average handle time, from the loaded call data. Longer handle time ties each agent up longer, so more agents are needed for the same call volume.
+      </div>
+    </div>
+  );
+}
+
+/* ================= SHARED: PHASE STRIP ================= */
+/* Setup → Build → Review → Handoff navigation, mirroring the operator tool's phase tabs:
+   done = teal with a checkmark, pending = amber with the reason as a tooltip. Purely
+   informational — clicking any tab always works (flag, never block). */
+export function PhaseStrip({ tab, setTab, groups, navClass = "ccnav" }) {
+  return (
+    <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
+      {groups.map((g) => (
+        <div key={g.phase}>
+          <div style={{ fontSize: 9.5, textTransform: "uppercase", letterSpacing: ".1em", color: sampleGray, margin: "0 2px 3px", fontWeight: 600 }}>{g.phase}</div>
+          <div style={{ display: "flex", gap: 4 }}>
+            {g.tabs.map((n) => {
+              const status = n.done === undefined ? null : n.done ? "done" : "pending";
+              return (
+                <div key={n.key}
+                  className={navClass + (tab === n.key ? " on" : "")}
+                  title={status === "pending" ? n.reason : status === "done" ? "Done" : undefined}
+                  onClick={() => setTab(n.key)}
+                  style={status === "done" ? { color: supplyTeal } : status === "pending" ? { color: demandAmber } : undefined}>
+                  {status === "done" ? "\u2713 " : ""}{n.label}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ================= SHARED: PACKAGING ================= */
+/* Signup-sheet-style weekly package grid, shared by Call Centre and Dispatch. Groups the board
+   by shift number, shows each package's week at a glance, flags package-rule issues from
+   packageInfo, and offers auto-package + per-day refine. */
+export function PackagingTab({ board, packageIssues, tColor, runAutoPackage, runRefine, optResult, noun }) {
+  const packages = useMemo(() => {
+    const by = new Map();
+    for (const sg of board) { if (!by.has(sg.shift)) by.set(sg.shift, []); by.get(sg.shift).push(sg); }
+    return [...by.entries()].sort((a, b) => a[0] - b[0]).map(([shift, segs]) => {
+      const perDay = {};
+      for (const d of DAYS) perDay[d] = segs.filter((s) => s.days.includes(d));
+      const daysWorked = DAYS.filter((d) => perDay[d].length > 0);
+      return { shift, segs, perDay, daysWorked };
+    });
+  }, [board]);
+  const singles = packages.filter((p) => p.daysWorked.length === 1).length;
+  const flagged = packages.filter((p) => (packageIssues.get(p.shift) || []).length > 0).length;
+  return (
+    <div>
+      <div style={cardStyle}>
+        <div style={hTitle}>Weekly packages</div>
+        <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 10 }}>
+          Each row is one {noun}'s week — every shift sharing a shift number. Auto-package combines single-day shifts into legal weekly packages (min rest, consecutive-day, and report-time-variance rules respected); per-day refine then nudges times day by day for coverage. Issues are flagged, never blocking.
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <Stat label="Packages" value={packages.length} tone={supplyTeal} />
+          <Stat label="Single-day" value={singles} tone={singles ? demandAmber : undefined} />
+          <Stat label="Flagged" value={flagged} tone={flagged ? gapRed : undefined} />
+          <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }} onClick={runAutoPackage}>Auto-package</button>
+          <button style={nudgeBtn} onClick={runRefine}>Refine day-to-day times</button>
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <OptResultBanner optResult={optResult && (optResult.kind === "Auto-package" || optResult.kind === "Day-to-day refine") ? optResult : null} />
+        </div>
+      </div>
+      <div style={cardStyle}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 900 }}>
+            <thead>
+              <tr>
+                {["Shift", ...DAYS.map((d) => d.slice(0, 3)), "Issues"].map((h) => (
+                  <th key={h} style={{ padding: "5px 8px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".06em", color: sampleGray, textAlign: "left", borderBottom: "1px solid var(--border)" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {packages.map((p) => {
+                const issues = packageIssues.get(p.shift) || [];
+                return (
+                  <tr key={p.shift} style={{ borderTop: "1px solid var(--border-light)", background: issues.length ? "var(--tint-red)" : undefined }}>
+                    <td style={{ padding: "5px 8px", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{p.shift}</td>
+                    {DAYS.map((d) => {
+                      const cell = p.perDay[d];
+                      if (!cell.length) return <td key={d} style={{ padding: "5px 8px", color: sampleGray, fontSize: 11.5 }}>—</td>;
+                      return (
+                        <td key={d} style={{ padding: "5px 8px", fontSize: 11.5, whiteSpace: "nowrap" }}>
+                          {cell.map((sg) => (
+                            <div key={sg.id} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                              <span style={{ display: "inline-block", width: 8, height: 8, background: tColor(sg.type), borderRadius: 2, flex: "none" }} />
+                              <span style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(sg.s)}–{fmt(sg.e)}</span>
+                            </div>
+                          ))}
+                        </td>
+                      );
+                    })}
+                    <td style={{ padding: "5px 8px", fontSize: 11.5, color: issues.length ? gapRed : sampleGray }}>
+                      {issues.length ? issues.join("; ") : "\u2713"}
+                    </td>
+                  </tr>
+                );
+              })}
+              {packages.length === 0 && (
+                <tr><td colSpan={9} style={{ padding: "10px 8px", fontSize: 12.5, color: sampleGray }}>No shifts yet — build or import a schedule first.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

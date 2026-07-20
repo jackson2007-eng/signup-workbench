@@ -3,11 +3,11 @@ import * as XLSX from "xlsx";
 import {
   T0, T1, N, SLOT, DAYS, fmt, parseHM, cloneSeg,
   buildSupply, computeEngine, generateBoard, validateSeg, autofixSeg,
-  findSuggestions, parseSignupWorkbook, retimeBoard, deepOptimize, refinePerDay,
+  findSuggestions, parseSignupWorkbook, retimeBoard, deepOptimize, refinePerDay, packageInfo, autoPackage,
   TimeField, NumField, Nudge, Stat, CoverageChart, Sketcher, DeltaAreaChart,
   CoveragePriorityShapePreview, ScheduleStabilityPreview, COVERAGE_RESOLUTIONS,
 } from "./App.jsx";
-import { ImportTab, CompareTab, SuggestTab, OptResultBanner } from "./CallCentre.jsx";
+import { ImportTab, CompareTab, SuggestTab, OptResultBanner, PhaseStrip, PackagingTab } from "./CallCentre.jsx";
 import { DISPATCH_SAMPLE } from "./dispatchSampleData.js";
 
 /* Dispatch Desks — a third sibling of the operator workbench, reusing the shared coverage engine
@@ -87,16 +87,6 @@ function requiredDispatchers(ops, ratio, minOnDuty) {
   return Math.max(minOnDuty, Math.ceil(ops / ratio));
 }
 
-const NAV = [
-  { key: "rules", label: "RULES" },
-  { key: "import", label: "IMPORT" },
-  { key: "demand", label: "DEMAND" },
-  { key: "build", label: "BUILD" },
-  { key: "coverage", label: "COVERAGE" },
-  { key: "suggest", label: "SUGGESTIONS" },
-  { key: "compare", label: "COMPARE" },
-  { key: "schedule", label: "SCHEDULE" },
-];
 
 export default function Dispatch({ onHome }) {
   const [theme, setTheme] = useState(() => {
@@ -358,6 +348,28 @@ export default function Dispatch({ onHome }) {
     return Math.max(1, Math.ceil(h / 40));
   }, [operators, glob.ratioPerDispatcher, glob.minOnDuty]);
   const sizeToReq = () => setNDispatchers(reqPackages);
+  // Package-rule checking (min rest, consecutive days, report-time variance) — flags only,
+  // never blocks. packageInfo already exempts part-time classifications.
+  const packageIssues = useMemo(() => {
+    const by = new Map();
+    for (const sg of board) { if (!by.has(sg.shift)) by.set(sg.shift, []); by.get(sg.shift).push(sg); }
+    const out = new Map();
+    for (const [sh, segs] of by) {
+      const issues = packageInfo(segs, allRules, glob).issues;
+      if (issues.length) out.set(sh, issues);
+    }
+    return out;
+  }, [board, allRules, glob]);
+  const runAutoPackage = () => {
+    const before = eng.weekScore;
+    const r = autoPackage(board, rules, glob);
+    const after = scoreOf(r.board);
+    commit(() => r.board.map(cloneSeg));
+    setOptResult({ kind: "Auto-package", detail: `${r.made} package${r.made === 1 ? "" : "s"} formed · ${r.orphans} single day${r.orphans === 1 ? "" : "s"} left unpackaged`, before, after });
+    setSugs(null);
+  };
+  const [hasVisitedCoverage, setHasVisitedCoverage] = useState(false);
+  useEffect(() => { if (tab === "coverage") setHasVisitedCoverage(true); }, [tab]);
 
   /* ---------- export / project ---------- */
   const exportSchedule = () => {
@@ -442,8 +454,9 @@ export default function Dispatch({ onHome }) {
   const flaggedShifts = useMemo(() => {
     const set = new Set();
     for (const sg of board) if (validateSeg(sg, allRules, glob).length > 0) set.add(sg.shift);
+    for (const sh of packageIssues.keys()) set.add(sh);
     return set;
-  }, [board, allRules, glob]);
+  }, [board, allRules, glob, packageIssues]);
   // Best single-move score delta per shift, for "Room to improve first" — only computed
   // when that sort is actually selected, since a full-board findSuggestions pass is
   // heavier than the other sort keys.
@@ -630,12 +643,26 @@ export default function Dispatch({ onHome }) {
           </div>
         </div>
 
-        {/* nav */}
-        <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap" }}>
-          {NAV.map((n) => (
-            <div key={n.key} className={"dsnav" + (tab === n.key ? " on" : "")} onClick={() => setTab(n.key)}>{n.label}</div>
-          ))}
-        </div>
+        {/* nav — phase strip (Setup → Build → Review → Handoff), same model as the operator tool */}
+        <PhaseStrip tab={tab} setTab={setTab} navClass="dsnav" groups={[
+          { phase: "PHASE 1 · SETUP", tabs: [
+            { key: "rules", label: "RULES" },
+            { key: "import", label: "IMPORT", done: scheduleSource === "uploaded", reason: "Still using the sample schedule — upload your real dispatcher schedule" },
+            { key: "demand", label: "DEMAND", done: demSource !== "sample", reason: "Still using sample workload — sketch your own, upload data, or derive from a signup board" },
+          ]},
+          { phase: "PHASE 2 · BUILD", tabs: [
+            { key: "build", label: "BUILD" },
+            { key: "schedule", label: "SCHEDULE" },
+          ]},
+          { phase: "PHASE 3 · REVIEW", tabs: [
+            { key: "coverage", label: "COVERAGE", done: hasVisitedCoverage, reason: "Not yet reviewed" },
+            { key: "suggest", label: "SUGGESTIONS" },
+            { key: "compare", label: "COMPARE" },
+          ]},
+          { phase: "PHASE 4 · HANDOFF", tabs: [
+            { key: "pack", label: "PACKAGING" },
+          ]},
+        ]} />
 
         {/* day paddles (shared by demand/coverage/schedule) */}
         {tab !== "rules" && tab !== "build" && (
@@ -663,6 +690,7 @@ export default function Dispatch({ onHome }) {
         {tab === "import" && <ImportTab {...{ scheduleSource, scheduleUpload, uploadSchedule, downloadScheduleTemplate, resetToBaseline, changedCount, baselineBoard, scheduleFileRef, noun: "dispatcher" }} />}
         {tab === "suggest" && <SuggestTab {...{ sugs, findSugs, applySug, runDeep, runRefine, optResult, tColor, noun: "dispatcher" }} />}
         {tab === "compare" && <CompareTab {...{ boardDiff, changedCount, scheduleSource, eng, baseEng, tColor, noun: "dispatcher" }} />}
+        {tab === "pack" && <PackagingTab {...{ board, packageIssues, tColor, runAutoPackage, runRefine, optResult, noun: "dispatcher" }} />}
         {tab === "demand" && <DemandTab {...{ day, operators, demSource, uploadInfo, sketchRaw, setSketchRaw, peakOps, setPeakOps, applySketch, useSample, uploadOperators, uploadSignupBoard, downloadTemplate, P }} />}
         {tab === "build" && <BuildTab {...{ nDispatchers, setNDispatchers, generate, buildResult, distinctShifts, flagCount, tColor, ptEnabled, sizeToReq, reqPackages, runRetime, optResult }} />}
         {tab === "coverage" && (

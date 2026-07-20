@@ -6268,7 +6268,7 @@ export default function App({ onHome }) {
 export {
   T0, T1, N, SLOT, DAYS, WEEKEND_DAYS, fmt, parseHM, cloneSeg,
   parseSignupWorkbook,
-  buildSupply, computeEngine, buildCandidates, generateBoard, retimeBoard, deepOptimize, refinePerDay,
+  buildSupply, computeEngine, buildCandidates, generateBoard, retimeBoard, deepOptimize, refinePerDay, autoPackage,
   validateSeg, autofixSeg, packageInfo, startVarianceIssues, segContrib, findSuggestions,
   TimeField, NumField, Nudge, WeekStrip, Stat, CoverageChart, Sketcher, ActualCurve,
   ShapePreviewChart, ShapePreviewFrame, DeltaAreaChart, MovementScatterChart,
