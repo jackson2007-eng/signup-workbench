@@ -6267,6 +6267,7 @@ export default function App({ onHome }) {
 // one-file change; the operator tool above is unaffected.
 export {
   T0, T1, N, SLOT, DAYS, WEEKEND_DAYS, fmt, parseHM, cloneSeg,
+  parseSignupWorkbook,
   buildSupply, computeEngine, buildCandidates, generateBoard, retimeBoard,
   validateSeg, autofixSeg, packageInfo, startVarianceIssues, segContrib, findSuggestions,
   TimeField, NumField, Nudge, WeekStrip, Stat, CoverageChart, Sketcher, ActualCurve,

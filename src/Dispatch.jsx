@@ -3,10 +3,11 @@ import * as XLSX from "xlsx";
 import {
   T0, T1, N, SLOT, DAYS, fmt, parseHM, cloneSeg,
   buildSupply, computeEngine, generateBoard, validateSeg, autofixSeg,
-  findSuggestions,
+  findSuggestions, parseSignupWorkbook,
   TimeField, NumField, Nudge, Stat, CoverageChart, Sketcher, DeltaAreaChart,
   CoveragePriorityShapePreview, ScheduleStabilityPreview, COVERAGE_RESOLUTIONS,
 } from "./App.jsx";
+import { ImportTab, CompareTab } from "./CallCentre.jsx";
 import { DISPATCH_SAMPLE } from "./dispatchSampleData.js";
 
 /* Dispatch Desks — a third sibling of the operator workbench, reusing the shared coverage engine
@@ -88,9 +89,11 @@ function requiredDispatchers(ops, ratio, minOnDuty) {
 
 const NAV = [
   { key: "rules", label: "RULES" },
+  { key: "import", label: "IMPORT" },
   { key: "demand", label: "DEMAND" },
   { key: "build", label: "BUILD" },
   { key: "coverage", label: "COVERAGE" },
+  { key: "compare", label: "COMPARE" },
   { key: "schedule", label: "SCHEDULE" },
 ];
 
@@ -127,6 +130,12 @@ export default function Dispatch({ onHome }) {
   const [future, setFuture] = useState([]);
   const [coverageResolution, setCoverageResolution] = useState(5); // minutes per chart bucket
   const fileRef = useRef(null);
+  const scheduleFileRef = useRef(null);
+  // Baseline dispatcher schedule the working board is compared against — sample until a real
+  // schedule is uploaded, then that upload. Same baseline/rebase model as the operator tool.
+  const [baselineBoard, setBaselineBoard] = useState(() => DISPATCH_SAMPLE.board.map(cloneSeg));
+  const [scheduleSource, setScheduleSource] = useState("sample"); // "sample" | "uploaded"
+  const [scheduleUpload, setScheduleUpload] = useState(null);
 
   const nextId = useRef(Math.max(0, ...DISPATCH_SAMPLE.board.map((s) => s.id || 0)) + 1);
   const allRules = useMemo(() => ({ ...rules, ...ptRules }), [rules, ptRules]);
@@ -149,6 +158,29 @@ export default function Dispatch({ onHome }) {
 
   const distinctShifts = new Set(board.map((s) => s.shift)).size;
   const flagCount = board.reduce((n, s) => n + (validateSeg(s, allRules, glob).length ? 1 : 0), 0);
+
+  // Changes vs the baseline schedule — same id-keyed diff as the operator tool's Compare.
+  const boardDiff = useMemo(() => {
+    const originalMap = new Map(baselineBoard.map((s) => [s.id, s]));
+    const added = [], removed = [], modified = [];
+    const ids = new Set();
+    for (const s of board) {
+      ids.add(s.id);
+      const o = originalMap.get(s.id);
+      if (!o) { added.push(s); continue; }
+      if (o.s !== s.s || o.e !== s.e || o.type !== s.type ||
+        JSON.stringify(o.b) !== JSON.stringify(s.b) || o.days.join() !== s.days.join()) {
+        modified.push({ seg: s, orig: o });
+      }
+    }
+    for (const [id, o] of originalMap) if (!ids.has(id)) removed.push(o);
+    return { added, removed, modified };
+  }, [board, baselineBoard]);
+  const changedCount = boardDiff.added.length + boardDiff.removed.length + boardDiff.modified.length;
+  const baseEng = useMemo(
+    () => computeEngine(DEM, buildSupply(baselineBoard), false, glob.minVeh, spans, 0, glob.offPeakBias, glob.coveragePriority, 0, 0, glob),
+    [DEM, baselineBoard, glob, spans]
+  );
 
   const commit = (fn) => {
     setHist((h) => [...h.slice(-40), board]);
@@ -237,6 +269,53 @@ export default function Dispatch({ onHome }) {
     rd.readAsText(file);
   };
 
+  /* ---------- schedule import ---------- */
+  const downloadScheduleTemplate = () => {
+    const wb = XLSX.utils.book_new();
+    const instr = [
+      ["Dispatcher schedule template"], [],
+      ["One row per dispatcher shift. If a shift's start/end times differ on some days, add one row per distinct time pattern — every row shares the same Shift No."],
+      ["Days Worked: space-separated 2-letter weekday codes, e.g. \"MO TU WE TH FR\"."],
+      ["Report Time / Off are the paid on-duty start/end (24h, e.g. 14:30). If a shift runs past midnight, Off can be earlier than Report Time — it's read as the next day."],
+      ["Break Start / Break End (optional): same 24h format. Leave both blank for a shift with no scheduled break."],
+      ["Days Off / Type are optional — Days Off is inferred from Days Worked, and a blank Type is auto-matched against your shift types in Rules."],
+      ["No dispatcher names or IDs — this tool only tracks shift structure."],
+    ];
+    const wsI = XLSX.utils.aoa_to_sheet(instr);
+    wsI["!cols"] = [{ wch: 90 }];
+    XLSX.utils.book_append_sheet(wb, wsI, "Instructions");
+    const header = ["Shift No", "Run", "Days Off", "Type", "Break Start", "Break End", "Days Worked", "Report Time", "Off"];
+    const rows = [header, [8001, "8001", "SA-SU", "", "12:00", "12:30", "MO TU WE TH FR", "6:00", "14:30"]];
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws["!cols"] = [{ wch: 9 }, { wch: 7 }, { wch: 10 }, { wch: 7 }, { wch: 11 }, { wch: 11 }, { wch: 18 }, { wch: 11 }, { wch: 8 }];
+    XLSX.utils.book_append_sheet(wb, ws, "Dispatcher Schedule");
+    XLSX.writeFile(wb, "dispatcher-schedule-template.xlsx");
+  };
+  const uploadSchedule = (file) => {
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        const wb = XLSX.read(rd.result, { type: file.name.endsWith(".csv") ? "string" : "array" });
+        const res = parseSignupWorkbook(wb, null, allRules);
+        if (!res.ok) { alert(res.error); return; }
+        const segs = res.segments.map((s) => ({ ...cloneSeg(s), id: nextId.current++ }));
+        setBoard(segs.map(cloneSeg));
+        setBaselineBoard(segs.map(cloneSeg));
+        setScheduleSource("uploaded");
+        setScheduleUpload(res.summary);
+        setHist([]); setFuture([]); setSelId(null); setBuildResult(null);
+      } catch (e) {
+        alert("Could not read that schedule file — check it matches the dispatcher schedule template.");
+      }
+    };
+    if (file.name.endsWith(".csv")) rd.readAsText(file); else rd.readAsArrayBuffer(file);
+  };
+  const resetToBaseline = () => {
+    setHist((h) => [...h.slice(-40), board]); setFuture([]);
+    setBoard(baselineBoard.map(cloneSeg));
+    setSelId(null); setBuildResult(null);
+  };
+
   /* ---------- export / project ---------- */
   const exportSchedule = () => {
     const header = ["Shift", "Type", "Days Off", "Days Worked", "Report Time", "Break", "End"];
@@ -258,7 +337,7 @@ export default function Dispatch({ onHome }) {
     XLSX.writeFile(wb, "dispatcher-schedule.xlsx");
   };
   const saveProject = () => {
-    const blob = new Blob([JSON.stringify({ kind: "dispatch", board, rules, ptRules, ptEnabled, ptCount, glob, spans, operators, demSource, typeColors }, null, 0)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ kind: "dispatch", board, baselineBoard, scheduleSource, rules, ptRules, ptEnabled, ptCount, glob, spans, operators, demSource, typeColors }, null, 0)], { type: "application/json" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "dispatch-project.json"; a.click();
   };
   const loadProject = (file) => {
@@ -276,6 +355,10 @@ export default function Dispatch({ onHome }) {
         if (p.spans) setSpans(p.spans);
         if (p.operators) { setOperators(p.operators); setDemSource(p.demSource || "uploaded"); }
         if (p.typeColors) setTypeColors(p.typeColors);
+        // older saves have no baseline — the loaded board becomes its own baseline
+        setBaselineBoard(Array.isArray(p.baselineBoard) ? p.baselineBoard.map(cloneSeg) : p.board.map(cloneSeg));
+        setScheduleSource(p.scheduleSource === "uploaded" && Array.isArray(p.baselineBoard) ? "uploaded" : "sample");
+        setScheduleUpload(null);
         setHist([]); setFuture([]); setSelId(null); setBuildResult(null);
       } catch (e) { alert("Could not read that Dispatch project file."); }
     };
@@ -534,6 +617,8 @@ export default function Dispatch({ onHome }) {
             day, setDay, P,
           }} />
         )}
+        {tab === "import" && <ImportTab {...{ scheduleSource, scheduleUpload, uploadSchedule, downloadScheduleTemplate, resetToBaseline, changedCount, baselineBoard, scheduleFileRef, noun: "dispatcher" }} />}
+        {tab === "compare" && <CompareTab {...{ boardDiff, changedCount, scheduleSource, eng, baseEng, tColor, noun: "dispatcher" }} />}
         {tab === "demand" && <DemandTab {...{ day, operators, demSource, uploadInfo, sketchRaw, setSketchRaw, peakOps, setPeakOps, applySketch, useSample, uploadOperators, uploadSignupBoard, downloadTemplate, P }} />}
         {tab === "build" && <BuildTab {...{ nDispatchers, setNDispatchers, generate, buildResult, distinctShifts, flagCount, tColor, ptEnabled }} />}
         {tab === "coverage" && (

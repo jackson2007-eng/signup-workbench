@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import {
   T0, T1, N, SLOT, DAYS, WEEKEND_DAYS, fmt, parseHM, cloneSeg,
   buildSupply, computeEngine, generateBoard, validateSeg, autofixSeg,
-  findSuggestions,
+  findSuggestions, parseSignupWorkbook,
   TimeField, NumField, Nudge, Stat, CoverageChart, Sketcher, DeltaAreaChart,
   CoveragePriorityShapePreview, ScheduleStabilityPreview, COVERAGE_RESOLUTIONS,
 } from "./App.jsx";
@@ -155,9 +155,11 @@ function requiredAgents(A, ahtMin, targetSec, targetPct) {
 
 const NAV = [
   { key: "rules", label: "RULES" },
+  { key: "import", label: "IMPORT" },
   { key: "demand", label: "DEMAND" },
   { key: "build", label: "BUILD" },
   { key: "coverage", label: "COVERAGE" },
+  { key: "compare", label: "COMPARE" },
   { key: "schedule", label: "SCHEDULE" },
 ];
 
@@ -193,6 +195,12 @@ export default function CallCentre({ onHome }) {
   const [future, setFuture] = useState([]);
   const [coverageResolution, setCoverageResolution] = useState(5); // minutes per chart bucket
   const fileRef = useRef(null);
+  const scheduleFileRef = useRef(null);
+  // Baseline agent schedule the working board is compared against — the sample until a real
+  // schedule is uploaded, then that upload. Same baseline/rebase model as the operator tool.
+  const [baselineBoard, setBaselineBoard] = useState(() => CALL_SAMPLE.board.map(cloneSeg));
+  const [scheduleSource, setScheduleSource] = useState("sample"); // "sample" | "uploaded"
+  const [scheduleUpload, setScheduleUpload] = useState(null); // parser summary for the banner
 
   const nextId = useRef(Math.max(0, ...CALL_SAMPLE.board.map((s) => s.id || 0)) + 1);
   const tColor = (t) => typeColors[t] || DEFAULT_TCOLOR;
@@ -214,6 +222,29 @@ export default function CallCentre({ onHome }) {
 
   const distinctShifts = new Set(board.map((s) => s.shift)).size;
   const flagCount = board.reduce((n, s) => n + (validateSeg(s, rules, glob).length ? 1 : 0), 0);
+
+  // Changes vs the baseline schedule — same id-keyed diff as the operator tool's Compare.
+  const boardDiff = useMemo(() => {
+    const originalMap = new Map(baselineBoard.map((s) => [s.id, s]));
+    const added = [], removed = [], modified = [];
+    const ids = new Set();
+    for (const s of board) {
+      ids.add(s.id);
+      const o = originalMap.get(s.id);
+      if (!o) { added.push(s); continue; }
+      if (o.s !== s.s || o.e !== s.e || o.type !== s.type ||
+        JSON.stringify(o.b) !== JSON.stringify(s.b) || o.days.join() !== s.days.join()) {
+        modified.push({ seg: s, orig: o });
+      }
+    }
+    for (const [id, o] of originalMap) if (!ids.has(id)) removed.push(o);
+    return { added, removed, modified };
+  }, [board, baselineBoard]);
+  const changedCount = boardDiff.added.length + boardDiff.removed.length + boardDiff.modified.length;
+  const baseEng = useMemo(
+    () => computeEngine(DEM, buildSupply(baselineBoard), false, glob.minVeh, spans, 0, glob.offPeakBias, glob.coveragePriority, 0, 0, glob),
+    [DEM, baselineBoard, glob, spans]
+  );
 
   const commit = (fn) => {
     setHist((h) => [...h.slice(-40), board]);
@@ -287,6 +318,53 @@ export default function CallCentre({ onHome }) {
     XLSX.writeFile(wb, "call-data-template.xlsx");
   };
 
+  /* ---------- schedule import ---------- */
+  const downloadScheduleTemplate = () => {
+    const wb = XLSX.utils.book_new();
+    const instr = [
+      ["Agent schedule template"], [],
+      ["One row per agent shift. If a shift's start/end times differ on some days, add one row per distinct time pattern — every row shares the same Shift No."],
+      ["Days Worked: space-separated 2-letter weekday codes, e.g. \"MO TU WE TH FR\"."],
+      ["Report Time / Off are the paid on-duty start/end (24h, e.g. 14:30). If a shift runs past midnight, Off can be earlier than Report Time — it's read as the next day."],
+      ["Break Start / Break End (optional): same 24h format. Leave both blank for a shift with no scheduled break."],
+      ["Days Off / Type are optional — Days Off is inferred from Days Worked, and a blank Type is auto-matched against your shift types in Rules."],
+      ["No agent names or IDs — this tool only tracks shift structure."],
+    ];
+    const wsI = XLSX.utils.aoa_to_sheet(instr);
+    wsI["!cols"] = [{ wch: 90 }];
+    XLSX.utils.book_append_sheet(wb, wsI, "Instructions");
+    const header = ["Shift No", "Run", "Days Off", "Type", "Break Start", "Break End", "Days Worked", "Report Time", "Off"];
+    const rows = [header, [7001, "7001", "SA-SU", "", "12:00", "12:30", "MO TU WE TH FR", "8:00", "16:30"]];
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws["!cols"] = [{ wch: 9 }, { wch: 7 }, { wch: 10 }, { wch: 7 }, { wch: 11 }, { wch: 11 }, { wch: 18 }, { wch: 11 }, { wch: 8 }];
+    XLSX.utils.book_append_sheet(wb, ws, "Agent Schedule");
+    XLSX.writeFile(wb, "agent-schedule-template.xlsx");
+  };
+  const uploadSchedule = (file) => {
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        const wb = XLSX.read(rd.result, { type: file.name.endsWith(".csv") ? "string" : "array" });
+        const res = parseSignupWorkbook(wb, null, rules);
+        if (!res.ok) { alert(res.error); return; }
+        const segs = res.segments.map((s) => ({ ...cloneSeg(s), id: nextId.current++ }));
+        setBoard(segs.map(cloneSeg));
+        setBaselineBoard(segs.map(cloneSeg));
+        setScheduleSource("uploaded");
+        setScheduleUpload(res.summary);
+        setHist([]); setFuture([]); setSelId(null); setBuildResult(null);
+      } catch (e) {
+        alert("Could not read that schedule file — check it matches the agent schedule template.");
+      }
+    };
+    if (file.name.endsWith(".csv")) rd.readAsText(file); else rd.readAsArrayBuffer(file);
+  };
+  const resetToBaseline = () => {
+    setHist((h) => [...h.slice(-40), board]); setFuture([]);
+    setBoard(baselineBoard.map(cloneSeg));
+    setSelId(null); setBuildResult(null);
+  };
+
   /* ---------- export / project ---------- */
   const exportSchedule = () => {
     const header = ["Shift", "Type", "Days Off", "Days Worked", "Report Time", "Break", "End"];
@@ -308,7 +386,7 @@ export default function CallCentre({ onHome }) {
     XLSX.writeFile(wb, "agent-schedule.xlsx");
   };
   const saveProject = () => {
-    const blob = new Blob([JSON.stringify({ kind: "callcentre", board, rules, glob, spans, calls, arrivals, demSource, typeColors, callSummary }, null, 0)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ kind: "callcentre", board, baselineBoard, scheduleSource, rules, glob, spans, calls, arrivals, demSource, typeColors, callSummary }, null, 0)], { type: "application/json" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "callcentre-project.json"; a.click();
   };
   const loadProject = (file) => {
@@ -325,6 +403,10 @@ export default function CallCentre({ onHome }) {
         setCallSummary(p.callSummary || null);
         setArrivals(p.arrivals || null);
         if (p.typeColors) setTypeColors(p.typeColors);
+        // older saves have no baseline — the loaded board becomes its own baseline
+        setBaselineBoard(Array.isArray(p.baselineBoard) ? p.baselineBoard.map(cloneSeg) : p.board.map(cloneSeg));
+        setScheduleSource(p.scheduleSource === "uploaded" && Array.isArray(p.baselineBoard) ? "uploaded" : "sample");
+        setScheduleUpload(null);
         setHist([]); setFuture([]); setSelId(null); setBuildResult(null);
       } catch (e) { alert("Could not read that Call Centre project file."); }
     };
@@ -577,6 +659,8 @@ export default function CallCentre({ onHome }) {
         )}
 
         {tab === "rules" && <RulesTab {...{ rules, setRule, glob, setGlob, spans, setSpans, tColor, board, day, setDay, P }} />}
+        {tab === "import" && <ImportTab {...{ scheduleSource, scheduleUpload, uploadSchedule, downloadScheduleTemplate, resetToBaseline, changedCount, baselineBoard, scheduleFileRef, noun: "agent" }} />}
+        {tab === "compare" && <CompareTab {...{ boardDiff, changedCount, scheduleSource, eng, baseEng, tColor, noun: "agent" }} />}
         {tab === "demand" && <DemandTab {...{ day, calls, arrivals, showArrivals, setShowArrivals, demSource, uploadInfo, callSummary, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }} />}
         {tab === "build" && <BuildTab {...{ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor }} />}
         {tab === "coverage" && (
@@ -629,6 +713,118 @@ export default function CallCentre({ onHome }) {
             dragging, onGanttPointerDown, onGanttPointerMove, onGanttPointerUp,
           }} />
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ================= IMPORT (shared by Call Centre + Dispatch via copy) ================= */
+export function ImportTab({ scheduleSource, scheduleUpload, uploadSchedule, downloadScheduleTemplate, resetToBaseline, changedCount, baselineBoard, scheduleFileRef, noun }) {
+  const baselineShifts = new Set(baselineBoard.map((s) => s.shift)).size;
+  return (
+    <div>
+      <div style={cardStyle}>
+        <div style={hTitle}>Current {noun} schedule</div>
+        <div style={{ fontSize: 13, marginBottom: 10 }}>
+          {scheduleSource === "uploaded"
+            ? <>Working from an <b>uploaded schedule</b> — {baselineShifts} shifts. Every edit, generate, and optimization compares back to it on the Compare tab.</>
+            : <>Working from the <b>shipped sample schedule</b> ({baselineShifts} shifts). Upload your real {noun} schedule to plan against it — the upload becomes the baseline everything is compared to.</>}
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }}
+            onClick={() => scheduleFileRef.current && scheduleFileRef.current.click()}>Upload {noun} schedule</button>
+          <button style={nudgeBtn} onClick={downloadScheduleTemplate}>Download template</button>
+          {changedCount > 0 && (
+            <button style={{ ...nudgeBtn, borderColor: demandAmber, color: demandAmber }} onClick={resetToBaseline}>
+              Reset working schedule to baseline ({changedCount} change{changedCount === 1 ? "" : "s"})
+            </button>
+          )}
+          <input ref={scheduleFileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }}
+            onChange={(e) => { if (e.target.files && e.target.files[0]) uploadSchedule(e.target.files[0]); e.target.value = ""; }} />
+        </div>
+        {scheduleUpload && (
+          <div style={{ marginTop: 10, background: "var(--tint-teal-a, rgba(15,123,122,.08))", border: `1px solid ${supplyTeal}`, padding: "8px 12px", fontSize: 12.5 }}>
+            Loaded <b>{scheduleUpload.shifts}</b> shifts ({scheduleUpload.rows} rows).
+            {scheduleUpload.autoClassified > 0 && <> {scheduleUpload.autoClassified} auto-matched to a shift type{scheduleUpload.ambiguousClassified > 0 ? ` (${scheduleUpload.ambiguousClassified} ambiguous)` : ""}.</>}
+            {scheduleUpload.unclassified > 0 && <> <span style={{ color: gapRed }}>{scheduleUpload.unclassified} could not be matched to any type — they'll be flagged until retyped.</span></>}
+            {scheduleUpload.unrecognizedTypes.length > 0 && <> Types not in Rules: {scheduleUpload.unrecognizedTypes.join(", ")}.</>}
+            {(scheduleUpload.dateSpecificSkipped > 0 || scheduleUpload.exceptionRows > 0) && <> {scheduleUpload.dateSpecificSkipped + scheduleUpload.exceptionRows} date-specific row{scheduleUpload.dateSpecificSkipped + scheduleUpload.exceptionRows === 1 ? "" : "s"} ignored (this module has no exception days yet).</>}
+            {scheduleUpload.footerRowsSkipped > 0 && <> {scheduleUpload.footerRowsSkipped} non-shift row{scheduleUpload.footerRowsSkipped === 1 ? "" : "s"} skipped.</>}
+          </div>
+        )}
+        <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 10, lineHeight: 1.6 }}>
+          The template is one row per shift (Shift No, Days Worked, Report Time, Off, optional break columns). No {noun} names or IDs — shift structure only. Uploading replaces the working schedule AND the baseline; use Save project first if you want to keep what you have.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================= COMPARE ================= */
+export function CompareTab({ boardDiff, changedCount, scheduleSource, eng, baseEng, tColor, noun }) {
+  const fmtB = (b) => (b ? `${fmt(b[0])}–${fmt(b[1])}` : "no break");
+  const rowStyle = { borderTop: "1px solid var(--border-light)", fontSize: 12.5 };
+  const cur = Math.round(eng.weekScore * 1000) / 10;
+  const base = Math.round(baseEng.weekScore * 1000) / 10;
+  const delta = Math.round((cur - base) * 10) / 10;
+  return (
+    <div>
+      <div style={cardStyle}>
+        <div style={hTitle}>Working schedule vs. {scheduleSource === "uploaded" ? "uploaded baseline" : "sample baseline"}</div>
+        <div style={{ display: "flex", gap: 24, flexWrap: "wrap", fontSize: 13, marginBottom: 10 }}>
+          <span>Baseline coverage <b>{base}%</b></span>
+          <span>Current coverage <b>{cur}%</b></span>
+          <span style={{ color: delta > 0 ? supplyTeal : delta < 0 ? gapRed : sampleGray }}>
+            {delta > 0 ? "+" : ""}{delta} pts
+          </span>
+          <span>{boardDiff.modified.length} modified · {boardDiff.added.length} added · {boardDiff.removed.length} removed</span>
+        </div>
+        {changedCount === 0 ? (
+          <div style={{ fontSize: 13, color: sampleGray }}>No changes yet — the working schedule matches the baseline exactly.</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ borderCollapse: "collapse", width: "100%" }}>
+              <thead><tr style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", color: sampleGray, textAlign: "left" }}>
+                <th style={{ padding: "4px 8px" }}>Change</th><th style={{ padding: "4px 8px" }}>Shift</th><th style={{ padding: "4px 8px" }}>Type</th><th style={{ padding: "4px 8px" }}>Days</th><th style={{ padding: "4px 8px" }}>Before</th><th style={{ padding: "4px 8px" }}>After</th>
+              </tr></thead>
+              <tbody>
+                {boardDiff.modified.map(({ seg, orig }) => (
+                  <tr key={`m${seg.id}`} style={rowStyle}>
+                    <td style={{ padding: "4px 8px", color: demandAmber }}>Modified</td>
+                    <td style={{ padding: "4px 8px" }}>{seg.shift}</td>
+                    <td style={{ padding: "4px 8px" }}><span style={{ background: tColor(seg.type), color: "#fff", padding: "1px 6px", borderRadius: 2, fontSize: 11 }}>{seg.type}</span></td>
+                    <td style={{ padding: "4px 8px" }}>{seg.days.map((d) => d.slice(0, 2)).join(" ")}</td>
+                    <td style={{ padding: "4px 8px", color: sampleGray }}>{fmt(orig.s)}–{fmt(orig.e)} · {fmtB(orig.b)}</td>
+                    <td style={{ padding: "4px 8px" }}>{fmt(seg.s)}–{fmt(seg.e)} · {fmtB(seg.b)}</td>
+                  </tr>
+                ))}
+                {boardDiff.added.map((seg) => (
+                  <tr key={`a${seg.id}`} style={rowStyle}>
+                    <td style={{ padding: "4px 8px", color: supplyTeal }}>Added</td>
+                    <td style={{ padding: "4px 8px" }}>{seg.shift}</td>
+                    <td style={{ padding: "4px 8px" }}><span style={{ background: tColor(seg.type), color: "#fff", padding: "1px 6px", borderRadius: 2, fontSize: 11 }}>{seg.type}</span></td>
+                    <td style={{ padding: "4px 8px" }}>{seg.days.map((d) => d.slice(0, 2)).join(" ")}</td>
+                    <td style={{ padding: "4px 8px", color: sampleGray }}>—</td>
+                    <td style={{ padding: "4px 8px" }}>{fmt(seg.s)}–{fmt(seg.e)} · {fmtB(seg.b)}</td>
+                  </tr>
+                ))}
+                {boardDiff.removed.map((seg) => (
+                  <tr key={`r${seg.id}`} style={rowStyle}>
+                    <td style={{ padding: "4px 8px", color: gapRed }}>Removed</td>
+                    <td style={{ padding: "4px 8px" }}>{seg.shift}</td>
+                    <td style={{ padding: "4px 8px" }}><span style={{ background: tColor(seg.type), color: "#fff", padding: "1px 6px", borderRadius: 2, fontSize: 11 }}>{seg.type}</span></td>
+                    <td style={{ padding: "4px 8px" }}>{seg.days.map((d) => d.slice(0, 2)).join(" ")}</td>
+                    <td style={{ padding: "4px 8px", color: sampleGray }}>{fmt(seg.s)}–{fmt(seg.e)} · {fmtB(seg.b)}</td>
+                    <td style={{ padding: "4px 8px" }}>—</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 10, lineHeight: 1.6 }}>
+          Coverage percentages are the honest weekly score (share of {noun === "agent" ? "call volume" : "workload"} aligned with staffing) for each schedule, measured identically. Removed shifts from a full regenerate are listed too — a generated schedule replaces every baseline shift.
+        </div>
       </div>
     </div>
   );
