@@ -2286,11 +2286,15 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
 // same-length value arrays (a day's worth of 5-min slots), draws them as overlaid area/line
 // layers on one axis. Knows nothing about which rule produced the arrays — callers decide
 // what's live vs. fixed, what's demand vs. supply, and how to label it.
-function ShapePreviewChart({ layers, width = 700, height = 168 }) {
+function ShapePreviewChart({ layers, width = 700, height = 168, fixedMax }) {
   const padL = 30, padR = 8, padT = 8, padB = 20;
   const innerW = width - padL - padR, innerH = height - padT - padB;
   const n = layers[0].values.length;
-  const maxV = Math.max(1, ...layers.flatMap((l) => l.values)) * 1.15;
+  // fixedMax lets a caller pin the vertical scale to the largest value the slider can ever
+  // produce, rather than the current draw's own max — otherwise a growing peak that becomes
+  // the tallest thing on screen drags the scale up right along with it, and the pixel height
+  // plateaus even though the real value keeps climbing.
+  const maxV = (fixedMax ?? Math.max(1, ...layers.flatMap((l) => l.values))) * 1.15;
   const x = (i) => padL + (i / (n - 1)) * innerW;
   const y = (v) => padT + innerH - (Math.min(v, maxV) / maxV) * innerH;
   const pathLine = (arr) => arr.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
@@ -2405,12 +2409,11 @@ const COV_PRIORITY_VALUES = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4];
 // gets lost in the noise of two nearly-identical lines. A delta chart makes the trade itself
 // the picture: shaded up where this priority adds coverage relative to today, shaded down
 // where it pulls coverage away, against a faint demand-shape backdrop for landmarks.
-function DeltaAreaChart({ delta, demandRef, refDelta, coveragePriority, width = 700, height = 168 }) {
+function DeltaAreaChart({ delta, demandRef, width = 700, height = 168 }) {
   const padL = 30, padR = 8, padT = 8, padB = 20;
   const innerW = width - padL - padR, innerH = height - padT - padB;
   const n = delta.length;
-  const allVals = refDelta ? delta.concat(refDelta) : delta;
-  const maxAbs = Math.max(1, ...allVals.map((v) => Math.abs(v))) * 1.25;
+  const maxAbs = Math.max(1, ...delta.map((v) => Math.abs(v))) * 1.25;
   const x = (i) => padL + (i / (n - 1)) * innerW;
   const y = (v) => padT + innerH / 2 - (v / maxAbs) * (innerH / 2);
   const zeroY = y(0);
@@ -2425,22 +2428,6 @@ function DeltaAreaChart({ delta, demandRef, refDelta, coveragePriority, width = 
   const maxDemand = Math.max(1, ...demandRef);
   const demandLine = demandRef.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${(padT + innerH - (v / maxDemand) * innerH).toFixed(1)}`).join(" ");
   const nGrid = 2;
-  // Peak markers: how concentrated the single biggest gain is right now, against how
-  // concentrated it got at priority 0 (maximum concentration). A real retimed board doesn't
-  // reliably shrink its tallest gain in a clean, readable way as priority rises — a
-  // fixed-size board can land on the same best achievable peak at more than one setting, and
-  // retimeBoard's own tie-breaking isn't perfectly stable run to run — so both stems' heights
-  // are illustrative, anchored to the chart's real vertical scale but following a guaranteed
-  // curve as the slider moves. Position stays at wherever the real delta actually peaks right
-  // now; only the height (the part that has to read as a clear trend) is synthetic. The
-  // shaded gain/loss area behind the stems stays the real retimed delta throughout.
-  // Only this preview's coverage-priority call site passes coveragePriority — other
-  // DeltaAreaChart usages (the Deep-optimize/Suggestions previews) render exactly as before.
-  const peakIdx = pos.reduce((best, v, i) => (v > pos[best] ? i : best), 0);
-  const scaleBase = maxAbs / 1.25;
-  const priorityFrac = coveragePriority != null ? Math.min(1, coveragePriority / 4) : 0;
-  const peakVal = coveragePriority != null ? scaleBase * (0.85 - priorityFrac * 0.6) : 0;
-  const refPeakVal = coveragePriority != null && coveragePriority !== 0 && refDelta ? scaleBase * 0.85 : 0;
   return (
     <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: "auto", display: "block" }}>
       {Array.from({ length: nGrid * 2 + 1 }, (_, g) => {
@@ -2454,43 +2441,47 @@ function DeltaAreaChart({ delta, demandRef, refDelta, coveragePriority, width = 
         );
       })}
       <path d={demandLine} fill="none" stroke={demandAmber} strokeWidth={1.2} opacity={0.35} />
-      {refDelta && <path d={linePath(refDelta)} fill="none" stroke="var(--muted)" strokeWidth={1.4} strokeDasharray="4 3" opacity={0.65} />}
       <path d={areaPath(pos)} fill={supplyTeal} opacity={0.55} />
       <path d={areaPath(neg)} fill={gapRed} opacity={0.5} />
-      {refPeakVal > 0.05 && (
-        <line x1={x(peakIdx)} y1={zeroY} x2={x(peakIdx)} y2={y(refPeakVal)}
-          stroke="var(--muted)" strokeWidth={2.5} strokeDasharray="3 2" opacity={0.55} strokeLinecap="round" />
-      )}
-      {peakVal > 0.05 && (
-        <line x1={x(peakIdx)} y1={zeroY} x2={x(peakIdx)} y2={y(peakVal)}
-          stroke={supplyTeal} strokeWidth={4} opacity={0.95} strokeLinecap="round" />
-      )}
     </svg>
   );
 }
 
-function CoveragePriorityShapePreview({ P, day, setDay, coveragePriority, previewCache }) {
-  const previewSup = previewCache && previewCache[coveragePriority] ? previewCache[coveragePriority][day] : null;
-  const delta = previewSup ? previewSup.map((v, i) => v - P.sup[i]) : null;
-  // Priority 0 (max concentration into the single biggest gap) as a fixed dashed reference,
-  // so the trend toward spreading as the slider rises stays legible even where the current
-  // position's own shape isn't moving in a simple, monotonic way.
-  const zeroSup = previewCache && previewCache[0] ? previewCache[0][day] : null;
-  const refDelta = coveragePriority !== 0 && zeroSup ? zeroSup.map((v, i) => v - P.sup[i]) : null;
+// Mirrors off-peak weighting's own gamma-reshaping math (w = target^gamma, renormalized to
+// conserve total volume) but with gamma > 1 instead of < 1 — sharpening the demand shape's
+// peaks instead of flattening them. On a typical weekday's two-peak curve, the AM/PM peaks
+// grow taller and the troughs between/around them recede, more so the further right the
+// slider goes. Illustrative at the preview layer for now, same treatment as the off-peak
+// chart it's designed to sit beside — the real engine's own coveragePriority behavior is a
+// separate, later change.
+function intensifyTarget(target, coveragePriority) {
+  const gamma = 1 + (Math.min(4, Math.max(0, coveragePriority ?? 0)) / 4) * 1.5;
+  const total = target.reduce((a, v) => a + v, 0);
+  const raw = target.map((v) => Math.pow(Math.max(0, v), gamma));
+  const rawSum = raw.reduce((a, v) => a + v, 0) || 1;
+  return raw.map((v) => (v / rawSum) * total);
+}
+
+function CoveragePriorityShapePreview({ P, day, setDay, coveragePriority }) {
+  const intensified = intensifyTarget(P.target, coveragePriority);
+  // Pin the vertical scale to the tallest the peak can ever get (gamma at its max, priority 4)
+  // rather than letting it auto-scale to the current draw — otherwise the growing peak drags
+  // its own axis up with it and the pixel height plateaus well before the slider's real end.
+  const maxIntensity = intensifyTarget(P.target, 4);
+  const fixedMax = Math.max(1, ...P.target, ...maxIntensity, ...P.sup);
   return (
     <ShapePreviewFrame day={day} setDay={setDay} legend={[
-      { color: supplyTeal, label: "gains coverage at this priority" },
-      { color: gapRed, label: "loses coverage at this priority" },
-      { color: demandAmber, label: "demand shape (for landmarks)" },
-      { color: "var(--muted)", label: "priority 0 — fixed reference (max concentration)" },
+      { color: demandAmber, label: "intensified target (moves with the slider)" },
+      { color: "var(--muted)", label: "demand shape — fixed 0 reference" },
+      { color: supplyTeal, label: "actual supply today" },
     ]}>
-      {previewSup ? (
-        <DeltaAreaChart delta={delta} demandRef={P.target} refDelta={refDelta} coveragePriority={coveragePriority} />
-      ) : (
-        <div style={{ fontSize: 12, color: "var(--muted)", padding: "20px 0", textAlign: "center" }}>
-          Computing retimed preview…
-        </div>
-      )}
+      <ShapePreviewChart fixedMax={fixedMax} layers={[
+        { values: P.target, color: "var(--muted)", width: 1.4, dash: "4 3", lineOpacity: 0.7,
+          peakMarker: true, peakWidth: 2.5, peakOpacity: 0.5 },
+        { values: intensified, color: demandAmber, width: 2, area: true,
+          peakMarker: true, peakWidth: 4, peakOpacity: 0.95 },
+        { values: P.sup, color: supplyTeal, width: 1.8, lineOpacity: 0.85 },
+      ]} />
     </ShapePreviewFrame>
   );
 }
@@ -3291,24 +3282,6 @@ export default function App({ onHome }) {
   const base = useMemo(() => computeEngine(DEM, buildSupply(baselineBoard), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, baselineBoard, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime]);
   const recycleViol = useMemo(() => recycleViolations(board, glob), [board, glob.recycleEnabled, glob.recycleTurnaround, glob.recycleWindow, glob.recycleCount]);
   const P = eng.perDay[day];
-  // Coverage-priority preview: precompute the real retimeBoard() supply curve at all 9 legal
-  // slider positions. Debounced on everything BUT coveragePriority itself (and gated to only
-  // run while the Rules tab is actually open) so dragging some other live slider elsewhere —
-  // off-peak weighting, or a Shift Builder drag that touches `board` — doesn't retrigger nine
-  // retime passes on every tick; only settles ~350ms after the board/other-rules go quiet.
-  const covCtxKey = JSON.stringify([glob.offPeakBias, glob.scheduleStability, glob.minVeh, glob.maxFleet, glob.maxPullout, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime, includePT]);
-  const debouncedCovCtxKey = useDebouncedValue(covCtxKey, 350);
-  const covPreviewCache = useMemo(() => {
-    if (tab !== "rules") return null;
-    const out = {};
-    for (const p of COV_PRIORITY_VALUES) {
-      const g = { ...glob, coveragePriority: p };
-      const r = retimeBoard(board, rules, g, DEM, spans, g.minVeh, includePT, { stability: g.scheduleStability });
-      out[p] = buildSupply(r.segs);
-    }
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, board, rules, DEM, spans, includePT, debouncedCovCtxKey]);
   // Week-wide requirement sizing: total capped vehicle-hours across all 7 days,
   // divided by 40 (every weekly package = 40 paid hours = ~40 vehicle-hours,
   // straight or split). Gives the package count that reproduces the demand-implied
@@ -5982,7 +5955,7 @@ export default function App({ onHome }) {
                     <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.scheduleStability ?? 3}</span>
                   </div>
                 </div>
-                <CoveragePriorityShapePreview P={P} day={day} setDay={setDay} coveragePriority={glob.coveragePriority ?? 0} previewCache={covPreviewCache} />
+                <CoveragePriorityShapePreview P={P} day={day} setDay={setDay} coveragePriority={glob.coveragePriority ?? 0} />
                 <OffPeakShapePreview P={P} day={day} setDay={setDay} baseTarget={engBase0.perDay[day].target} />
                 <ScheduleStabilityPreview scheduleStability={glob.scheduleStability ?? 3} />
                 <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10, lineHeight: 1.6 }}>
