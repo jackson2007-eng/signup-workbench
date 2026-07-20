@@ -135,6 +135,35 @@ touch-friendly editing for the scheduling modules without a specific reason to r
 - **Usage dashboard:** follows from the above — premature infrastructure for a customer
   count that doesn't need it yet. Parked alongside phase-2 accounts, not scheduled.
 
+## Module parity initiative (added 2026-07-20, IN PROGRESS)
+
+Bring Call Centre and Dispatch up to the operator workbench's feature depth, with language
+and mechanics adapted to each domain (agents/calls, dispatchers/incident load — never
+operator/vehicle wording). Full audit performed 2026-07-20; gaps confirmed:
+schedule import/baseline/Compare, Retime, Suggestions tab (deep optimize + per-day refine),
+Optimization monitor, Size-to-requirement, Packaging (grid + auto-package + rule checking —
+note their Rules-tab package settings are currently DECORATIVE, never checked), part-time
+(Call Centre only; Dispatch has it), week strip/duplicate/day-variant editing, phase strip.
+Reverse gap: siblings have redo; operator module doesn't.
+
+Scope decisions (user, 2026-07-20): full Packaging tab in both siblings; NO holidays/
+exception days for now; phase strip yes but NO guided tour.
+
+- **Phase 1 — Schedule import + baseline + Compare** (template download, parser, upload,
+  promote, diff view; "agent schedule"/"dispatcher schedule" language).
+- **Phase 2 — Optimizer parity**: Retime card, Suggestions tab, Deep optimize, Optimization
+  monitor, Size-to-requirement (Call Centre sizes from the Erlang requirement, Dispatch from
+  the dispatcher-ratio requirement).
+- **Phase 3 — Rules substance**: part-time for Call Centre; wire package rules into real
+  flagging in both.
+- **Phase 4 — Full Packaging tab** both siblings (grid, auto-package, per-day refine).
+- **Phase 5 — Editing depth + chrome**: week strip, duplicate, day variants; phase strip;
+  redo for the operator module.
+
+Tier/pricing note: ALL gating work is parked on the `tier-scaffolding` branch (pushed to
+GitHub) per 2026-07-20 decision to hold off on pricing. main is clean of it; merge that
+branch when pricing resumes.
+
 ## Ops / infra chores
 - Connect a real domain (replace `transit-toolkit.jackson2007.workers.dev`).
 - Delete the old obsolete worker.
