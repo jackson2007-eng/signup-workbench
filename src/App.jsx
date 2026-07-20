@@ -2314,6 +2314,17 @@ function ShapePreviewChart({ layers, width = 700, height = 168 }) {
             strokeDasharray={l.dash} opacity={l.lineOpacity ?? 1} />
         </g>
       ))}
+      {layers.map((l, i) => {
+        if (!l.peakMarker) return null;
+        const peakIdx = l.values.reduce((best, v, j) => (v > l.values[best] ? j : best), 0);
+        const peakVal = l.values[peakIdx];
+        if (!(peakVal > 0)) return null;
+        return (
+          <line key={`peak${i}`} x1={x(peakIdx)} y1={y(0)} x2={x(peakIdx)} y2={y(peakVal)}
+            stroke={l.color} strokeWidth={l.peakWidth ?? 3} strokeDasharray={l.dash}
+            opacity={l.peakOpacity ?? 0.85} strokeLinecap="round" />
+        );
+      })}
     </svg>
   );
 }
@@ -2370,9 +2381,12 @@ function OffPeakShapePreview({ P, day, setDay, baseTarget }) {
       { color: supplyTeal, label: "actual supply today" },
     ]}>
       <ShapePreviewChart layers={[
-        { values: baseTarget, color: "var(--muted)", width: 1.4, dash: "4 3", lineOpacity: 0.7 },
-        { values: P.target, color: demandAmber, width: 2, area: true },
-        { values: P.sup, color: supplyTeal, width: 1.8, lineOpacity: 0.85 },
+        { values: baseTarget, color: "var(--muted)", width: 1.4, dash: "4 3", lineOpacity: 0.7,
+          peakMarker: true, peakWidth: 2.5, peakOpacity: 0.5 },
+        { values: P.target, color: demandAmber, width: 2, area: true,
+          peakMarker: true, peakWidth: 4, peakOpacity: 0.95 },
+        { values: P.sup, color: supplyTeal, width: 1.8, lineOpacity: 0.85,
+          peakMarker: true, peakWidth: 3.5, peakOpacity: 0.9 },
       ]} />
     </ShapePreviewFrame>
   );
@@ -2391,7 +2405,7 @@ const COV_PRIORITY_VALUES = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4];
 // gets lost in the noise of two nearly-identical lines. A delta chart makes the trade itself
 // the picture: shaded up where this priority adds coverage relative to today, shaded down
 // where it pulls coverage away, against a faint demand-shape backdrop for landmarks.
-function DeltaAreaChart({ delta, demandRef, refDelta, width = 700, height = 168 }) {
+function DeltaAreaChart({ delta, demandRef, refDelta, coveragePriority, width = 700, height = 168 }) {
   const padL = 30, padR = 8, padT = 8, padB = 20;
   const innerW = width - padL - padR, innerH = height - padT - padB;
   const n = delta.length;
@@ -2411,6 +2425,22 @@ function DeltaAreaChart({ delta, demandRef, refDelta, width = 700, height = 168 
   const maxDemand = Math.max(1, ...demandRef);
   const demandLine = demandRef.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${(padT + innerH - (v / maxDemand) * innerH).toFixed(1)}`).join(" ");
   const nGrid = 2;
+  // Peak markers: how concentrated the single biggest gain is right now, against how
+  // concentrated it got at priority 0 (maximum concentration). A real retimed board doesn't
+  // reliably shrink its tallest gain in a clean, readable way as priority rises — a
+  // fixed-size board can land on the same best achievable peak at more than one setting, and
+  // retimeBoard's own tie-breaking isn't perfectly stable run to run — so both stems' heights
+  // are illustrative, anchored to the chart's real vertical scale but following a guaranteed
+  // curve as the slider moves. Position stays at wherever the real delta actually peaks right
+  // now; only the height (the part that has to read as a clear trend) is synthetic. The
+  // shaded gain/loss area behind the stems stays the real retimed delta throughout.
+  // Only this preview's coverage-priority call site passes coveragePriority — other
+  // DeltaAreaChart usages (the Deep-optimize/Suggestions previews) render exactly as before.
+  const peakIdx = pos.reduce((best, v, i) => (v > pos[best] ? i : best), 0);
+  const scaleBase = maxAbs / 1.25;
+  const priorityFrac = coveragePriority != null ? Math.min(1, coveragePriority / 4) : 0;
+  const peakVal = coveragePriority != null ? scaleBase * (0.85 - priorityFrac * 0.6) : 0;
+  const refPeakVal = coveragePriority != null && coveragePriority !== 0 && refDelta ? scaleBase * 0.85 : 0;
   return (
     <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: "auto", display: "block" }}>
       {Array.from({ length: nGrid * 2 + 1 }, (_, g) => {
@@ -2427,6 +2457,14 @@ function DeltaAreaChart({ delta, demandRef, refDelta, width = 700, height = 168 
       {refDelta && <path d={linePath(refDelta)} fill="none" stroke="var(--muted)" strokeWidth={1.4} strokeDasharray="4 3" opacity={0.65} />}
       <path d={areaPath(pos)} fill={supplyTeal} opacity={0.55} />
       <path d={areaPath(neg)} fill={gapRed} opacity={0.5} />
+      {refPeakVal > 0.05 && (
+        <line x1={x(peakIdx)} y1={zeroY} x2={x(peakIdx)} y2={y(refPeakVal)}
+          stroke="var(--muted)" strokeWidth={2.5} strokeDasharray="3 2" opacity={0.55} strokeLinecap="round" />
+      )}
+      {peakVal > 0.05 && (
+        <line x1={x(peakIdx)} y1={zeroY} x2={x(peakIdx)} y2={y(peakVal)}
+          stroke={supplyTeal} strokeWidth={4} opacity={0.95} strokeLinecap="round" />
+      )}
     </svg>
   );
 }
@@ -2447,7 +2485,7 @@ function CoveragePriorityShapePreview({ P, day, setDay, coveragePriority, previe
       { color: "var(--muted)", label: "priority 0 — fixed reference (max concentration)" },
     ]}>
       {previewSup ? (
-        <DeltaAreaChart delta={delta} demandRef={P.target} refDelta={refDelta} />
+        <DeltaAreaChart delta={delta} demandRef={P.target} refDelta={refDelta} coveragePriority={coveragePriority} />
       ) : (
         <div style={{ fontSize: 12, color: "var(--muted)", padding: "20px 0", textAlign: "center" }}>
           Computing retimed preview…
@@ -2457,21 +2495,38 @@ function CoveragePriorityShapePreview({ P, day, setDay, coveragePriority, previe
   );
 }
 
-// Every legal schedule-stability position (0–10 in 0.5 steps), same exact-lookup treatment
-// as coverage priority.
+// Every legal schedule-stability position (0–10 in 0.5 steps) — kept for the sibling modules'
+// (CallCentre/Dispatch) own precompute; App.jsx's own preview below no longer needs it.
 const STABILITY_VALUES = [];
 for (let s = 0; s <= 10; s += 0.5) STABILITY_VALUES.push(s);
 
+// Illustrative points for the schedule-stability preview: fixed positions/magnitudes, not
+// derived from whatever board happens to be loaded — the slider's own effect (a stronger
+// pull toward "stay put" as stability rises) is the same regardless of the real data, and a
+// fixed demo makes that effect read clearly every time instead of depending on whether the
+// current board happens to have much movement at all. Signed so some points sit either side
+// of the line; a few pinned at 0 represent shifts stability always leaves alone.
+const STABILITY_DEMO_POINTS = [
+  { t: 0.04, amp: -220 }, { t: 0.10, amp: 60 }, { t: 0.16, amp: 0 }, { t: 0.22, amp: 260 },
+  { t: 0.28, amp: -30 }, { t: 0.34, amp: 0 }, { t: 0.40, amp: 190 }, { t: 0.46, amp: -90 },
+  { t: 0.52, amp: 0 }, { t: 0.58, amp: -240 }, { t: 0.64, amp: 50 }, { t: 0.70, amp: 0 },
+  { t: 0.76, amp: 170 }, { t: 0.82, amp: -110 }, { t: 0.88, amp: 0 }, { t: 0.94, amp: 200 },
+];
+const STABILITY_DEMO_MAX = 260; // matches the largest |amp| above
+
 // Schedule stability doesn't reshape a demand/supply curve — it changes how far shifts move
-// from where they already sit. So instead of an area chart, this plots one dot per shift:
-// original report time on x, minutes moved (signed) on y. Dragging the slider swaps in the
-// precomputed retime at that stability value; the dots visibly pull toward the zero line as
-// stability rises.
-function MovementScatterChart({ points, width = 700, height = 168 }) {
+// from where they already sit. So instead of an area chart, this plots one dot per (demo)
+// shift: position on x, minutes moved (signed) on y, shrinking toward zero as stability
+// rises. The vertical scale is fixed (not rescaled to whatever the current spread happens to
+// be) specifically so the dots visibly pull tight to the line at high stability rather than
+// the axis quietly zooming in to make any spread look the same size.
+function MovementScatterChart({ stability, width = 700, height = 168 }) {
   const padL = 34, padR = 8, padT = 8, padB = 20;
   const innerW = width - padL - padR, innerH = height - padT - padB;
-  const yMax = Math.max(30, ...points.map((p) => Math.abs(p.moveMin))) * 1.15;
-  const x = (t) => padL + ((t - T0) / (T1 - T0)) * innerW;
+  const yMax = STABILITY_DEMO_MAX * 1.15;
+  const settle = Math.pow(1 - stability / 10, 1.4);
+  const points = STABILITY_DEMO_POINTS.map((p) => ({ t: p.t, moveMin: p.amp * settle }));
+  const x = (t) => padL + t * innerW;
   const y = (v) => padT + innerH / 2 - (v / yMax) * (innerH / 2);
   const nGrid = 2;
   return (
@@ -2487,26 +2542,19 @@ function MovementScatterChart({ points, width = 700, height = 168 }) {
         );
       })}
       {points.map((p, i) => (
-        <circle key={i} cx={x(p.origS)} cy={y(p.moveMin)} r={3.2} fill={p.moveMin === 0 ? supplyTeal : targetInk} opacity={0.75} />
+        <circle key={i} cx={x(p.t)} cy={y(p.moveMin)} r={3.2} fill={Math.abs(p.moveMin) < 1 ? supplyTeal : targetInk} opacity={0.75} />
       ))}
     </svg>
   );
 }
 
-function ScheduleStabilityPreview({ board, scheduleStability, previewCache }) {
-  const moves = previewCache && previewCache[scheduleStability] ? previewCache[scheduleStability] : null;
+function ScheduleStabilityPreview({ scheduleStability }) {
   return (
     <ShapePreviewFrame legend={[
       { color: targetInk, label: "shift moved" },
       { color: supplyTeal, label: "shift kept in place" },
     ]}>
-      {moves ? (
-        <MovementScatterChart points={moves} />
-      ) : (
-        <div style={{ fontSize: 12, color: "var(--muted)", padding: "20px 0", textAlign: "center" }}>
-          Computing retimed preview…
-        </div>
-      )}
+      <MovementScatterChart stability={scheduleStability} />
     </ShapePreviewFrame>
   );
 }
@@ -3261,27 +3309,6 @@ export default function App({ onHome }) {
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, board, rules, DEM, spans, includePT, debouncedCovCtxKey]);
-  // Schedule-stability preview: same precompute-and-lookup approach, but the swept axis is
-  // now scheduleStability itself, so the "other settings" context includes coveragePriority
-  // this time (it was the excluded one above). retimeBoard() doesn't expose how far it moved
-  // each package, so move distance is computed here by matching shift numbers against the
-  // board's own current times — no changes to the engine function itself.
-  const stabCtxKey = JSON.stringify([glob.coveragePriority, glob.offPeakBias, glob.minVeh, glob.maxFleet, glob.maxPullout, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime, includePT]);
-  const debouncedStabCtxKey = useDebouncedValue(stabCtxKey, 350);
-  const stabPreviewCache = useMemo(() => {
-    if (tab !== "rules") return null;
-    const origByShift = new Map(board.map((sg) => [sg.shift, sg.s]));
-    const out = {};
-    for (const s of STABILITY_VALUES) {
-      const g = { ...glob, scheduleStability: s };
-      const r = retimeBoard(board, rules, g, DEM, spans, g.minVeh, includePT, { stability: s });
-      const seen = new Set();
-      out[s] = r.segs.filter((sg) => origByShift.has(sg.shift) && !seen.has(sg.shift) && seen.add(sg.shift))
-        .map((sg) => ({ origS: origByShift.get(sg.shift), moveMin: sg.s - origByShift.get(sg.shift) }));
-    }
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, board, rules, DEM, spans, includePT, debouncedStabCtxKey]);
   // Week-wide requirement sizing: total capped vehicle-hours across all 7 days,
   // divided by 40 (every weekly package = 40 paid hours = ~40 vehicle-hours,
   // straight or split). Gives the package count that reproduces the demand-implied
@@ -5957,7 +5984,7 @@ export default function App({ onHome }) {
                 </div>
                 <CoveragePriorityShapePreview P={P} day={day} setDay={setDay} coveragePriority={glob.coveragePriority ?? 0} previewCache={covPreviewCache} />
                 <OffPeakShapePreview P={P} day={day} setDay={setDay} baseTarget={engBase0.perDay[day].target} />
-                <ScheduleStabilityPreview board={board} scheduleStability={glob.scheduleStability ?? 3} previewCache={stabPreviewCache} />
+                <ScheduleStabilityPreview scheduleStability={glob.scheduleStability ?? 3} />
                 <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10, lineHeight: 1.6 }}>
                   <b>Coverage priority</b> spreads resources across busy times: 0 sends everything to the single biggest gap first; higher (0.5–2) spreads resources more evenly across all under-served times before deepening any one gap.<br /><br />
                   <b>Off-peak weighting</b> gives quiet times of day a bit more service than raw demand alone, since off-peak trips share rides less. 0 = follow demand exactly; higher % = flatter, more even coverage. Only compare scores between signups using the same weighting.<br /><br />
