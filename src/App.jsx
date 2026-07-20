@@ -2450,15 +2450,16 @@ function DeltaAreaChart({ delta, demandRef, fixedMax, width = 700, height = 168 
   );
 }
 
-// Mirrors off-peak weighting's own gamma-reshaping math (w = target^gamma, renormalized to
-// conserve total volume) but with gamma > 1 instead of < 1 — sharpening the demand shape's
-// peaks instead of flattening them. On a typical weekday's two-peak curve, the AM/PM peaks
-// grow taller and the troughs between/around them recede, more so the further right the
-// slider goes. Illustrative at the preview layer for now, same treatment as the off-peak
-// chart it's designed to sit beside — the real engine's own coveragePriority behavior is a
-// separate, later change.
-function intensifyTarget(target, coveragePriority) {
-  const gamma = 1 + (Math.min(4, Math.max(0, coveragePriority ?? 0)) / 4) * 1.5;
+// Same gamma-reshaping math as off-peak weighting (w = target^gamma, renormalized to
+// conserve total volume), but here the slider sweeps gamma from ABOVE 1 down THROUGH 1 to
+// below it: at 0 the demand shape is sharpened (peaks intensified, troughs receded), at the
+// midpoint it's neutral, and at 4 it's flattened (peaks pulled down, edges/off-peak lifted).
+// So the left end reads "focus everything on the peaks," the right end "spread it out to the
+// quiet times," with the crossover in between. Illustrative at the preview layer for now —
+// the real engine's own coveragePriority behavior is a separate, later change.
+function reshapeTarget(target, coveragePriority) {
+  const p = Math.min(4, Math.max(0, coveragePriority ?? 0));
+  const gamma = 1.5 - (p / 4) * 1.0; // 0 -> 1.5 (sharpen), 2 -> 1.0 (neutral), 4 -> 0.5 (flatten)
   const total = target.reduce((a, v) => a + v, 0);
   const raw = target.map((v) => Math.pow(Math.max(0, v), gamma));
   const rawSum = raw.reduce((a, v) => a + v, 0) || 1;
@@ -2466,20 +2467,22 @@ function intensifyTarget(target, coveragePriority) {
 }
 
 function CoveragePriorityShapePreview({ P, day, setDay, coveragePriority }) {
-  // Diverging delta from the unweighted baseline: positive (green, up) where this priority
-  // intensifies coverage above today's demand shape — the peaks — negative (red, down) where
-  // it recedes — the valleys. Pinned to the max delta at priority 4 so the shading's own
-  // growth stays visible the whole way across the slider instead of the scale quietly
-  // rescaling to hide it.
-  const intensified = intensifyTarget(P.target, coveragePriority);
-  const delta = intensified.map((v, i) => v - P.target[i]);
-  const maxIntensity = intensifyTarget(P.target, 4);
-  const maxDelta = maxIntensity.map((v, i) => v - P.target[i]);
-  const fixedMax = Math.max(1, ...maxDelta.map((v) => Math.abs(v)));
+  // Diverging delta from the unweighted baseline: green (up) where this position adds
+  // emphasis, red (down) where it takes it away. At the left end the peaks glow green and
+  // valleys dip red; sliding right, that inverts — peaks drop red, edges and off-peak rise
+  // green. Scale pinned to the largest delta either extreme can produce so the shading's
+  // growth stays visible the whole way across instead of the axis rescaling to hide it.
+  const reshaped = reshapeTarget(P.target, coveragePriority);
+  const delta = reshaped.map((v, i) => v - P.target[i]);
+  const extremeLo = reshapeTarget(P.target, 0);
+  const extremeHi = reshapeTarget(P.target, 4);
+  const fixedMax = Math.max(1,
+    ...extremeLo.map((v, i) => Math.abs(v - P.target[i])),
+    ...extremeHi.map((v, i) => Math.abs(v - P.target[i])));
   return (
     <ShapePreviewFrame day={day} setDay={setDay} legend={[
-      { color: supplyTeal, label: "intensifies here (peaks)" },
-      { color: gapRed, label: "recedes here (valleys)" },
+      { color: supplyTeal, label: "gains emphasis here" },
+      { color: gapRed, label: "loses emphasis here" },
       { color: demandAmber, label: "demand shape (for landmarks)" },
     ]}>
       <DeltaAreaChart delta={delta} demandRef={P.target} fixedMax={fixedMax} />
