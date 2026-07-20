@@ -2361,34 +2361,7 @@ function ShapePreviewFrame({ legend, day, setDay, children, rightSlot }) {
   );
 }
 
-// Live shape preview for the off-peak weighting slider: plots the reshaped demand target
-// (P.target — already gamma-weighted by glob.offPeakBias inside computeEngine, so it redraws
-// on every drag tick for free via the existing eng useMemo) against the day's actual current
-// supply. No separate math here — this is the exact curve the optimizer is chasing right now.
-function OffPeakShapePreview({ P, day, setDay, baseTarget }) {
-  return (
-    <ShapePreviewFrame day={day} setDay={setDay} legend={[
-      { color: demandAmber, label: "reshaped target (moves with the slider)" },
-      { color: "var(--muted)", label: "unweighted demand — fixed 0% reference" },
-      { color: supplyTeal, label: "actual supply today" },
-    ]}>
-      <ShapePreviewChart layers={[
-        { values: baseTarget, color: "var(--muted)", width: 1.4, dash: "4 3", lineOpacity: 0.7,
-          peakMarker: true, peakWidth: 2.5, peakOpacity: 0.5 },
-        { values: P.target, color: demandAmber, width: 2, area: true,
-          peakMarker: true, peakWidth: 4, peakOpacity: 0.95 },
-        { values: P.sup, color: supplyTeal, width: 1.8, lineOpacity: 0.85,
-          peakMarker: true, peakWidth: 3.5, peakOpacity: 0.9 },
-      ]} />
-    </ShapePreviewFrame>
-  );
-}
-
-// Coverage priority has no direct formula-shaped curve to draw live (unlike off-peak weighting,
-// its effect only shows up after a real retime chooses different report times). The slider only
-// takes 9 legal positions (0–4 in 0.5 steps), so rather than approximate between samples, this
-// precomputes all 9 real retimeBoard() results up front and looks up the exact one for whatever
-// value the slider is on — an honest "what would retiming actually produce," not an interpolation.
+// Legal coverage-priority slider positions — kept for the sibling modules' precompute plumbing.
 const COV_PRIORITY_VALUES = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4];
 
 // Retiming reallocates the SAME total vehicle-hours — it doesn't add or remove them — so
@@ -2447,18 +2420,19 @@ function applyGamma(arr, gamma) {
   return raw.map((v) => (v / rawSum) * total);
 }
 
-function CoveragePriorityShapePreview({ P, day, setDay, coveragePriority }) {
-  // The engine's target ALREADY carries the priority gamma (it's folded into the demand
-  // weights), so the neutral baseline is recovered by inverting it — applyGamma with
-  // 1/gamma undoes a pointwise power up to the renormalizing scale. Delta is then the real
-  // reshaping this slider position applies vs. neutral: green (up) where emphasis is gained,
-  // red (down) where it's lost. Left end: peaks green, valleys red. Right end: inverted.
-  // Scale pinned to the larger of the two extremes so growth stays visible the whole way.
-  const g = priorityGamma(coveragePriority);
+// The ONE shape preview for both scheduling-algorithm sliders. The engine's target already
+// carries the composite gamma (coverage priority × off-peak weighting, folded into the
+// demand weights), so the raw-demand baseline is recovered by inverting it — applyGamma with
+// 1/gamma undoes a pointwise power up to the renormalizing scale. Delta is then the real,
+// combined reshaping both sliders currently apply: green (up) where emphasis is gained, red
+// (down) where it's lost. Scale pinned to the joint extremes (priority 0 + bias 0 → gamma
+// 1.5; priority 4 + bias 60 → gamma 0.2) so growth stays visible across both sliders' travel.
+function CoveragePriorityShapePreview({ P, day, setDay, coveragePriority, offPeakBias }) {
+  const g = priorityGamma(coveragePriority) * demandGamma({ offPeakBias: offPeakBias ?? 0 });
   const base = g === 1 ? P.target : applyGamma(P.target, 1 / g);
   const delta = P.target.map((v, i) => v - base[i]);
-  const extremeLo = applyGamma(base, priorityGamma(0));
-  const extremeHi = applyGamma(base, priorityGamma(4));
+  const extremeLo = applyGamma(base, 1.5);
+  const extremeHi = applyGamma(base, 0.2);
   const fixedMax = Math.max(1,
     ...extremeLo.map((v, i) => Math.abs(v - base[i])),
     ...extremeHi.map((v, i) => Math.abs(v - base[i])));
@@ -3262,10 +3236,6 @@ export default function App({ onHome }) {
   const holidayCountForDay = useMemo(() => holidays.filter((h) => h.runsAs === day).length, [holidays, day]);
   const ftCov = useMemo(() => buildSupply(board), [board]);
   const eng = useMemo(() => computeEngine(DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime]);
-  // Fixed 0%-bias reference for the off-peak preview's ghost line — deliberately excludes
-  // glob.offPeakBias from its deps so it doesn't recompute while dragging that slider; it's
-  // the one thing on the chart that's supposed to hold still.
-  const engBase0 = useMemo(() => computeEngine(DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, 0, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime]);
   const base = useMemo(() => computeEngine(DEM, buildSupply(baselineBoard), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, baselineBoard, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime]);
   const recycleViol = useMemo(() => recycleViolations(board, glob), [board, glob.recycleEnabled, glob.recycleTurnaround, glob.recycleWindow, glob.recycleCount]);
   const P = eng.perDay[day];
@@ -5942,8 +5912,7 @@ export default function App({ onHome }) {
                     <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.scheduleStability ?? 3}</span>
                   </div>
                 </div>
-                <CoveragePriorityShapePreview P={P} day={day} setDay={setDay} coveragePriority={glob.coveragePriority ?? 2} />
-                <OffPeakShapePreview P={P} day={day} setDay={setDay} baseTarget={engBase0.perDay[day].target} />
+                <CoveragePriorityShapePreview P={P} day={day} setDay={setDay} coveragePriority={glob.coveragePriority ?? 2} offPeakBias={glob.offPeakBias ?? 0} />
                 <ScheduleStabilityPreview scheduleStability={glob.scheduleStability ?? 3} />
                 <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10, lineHeight: 1.6 }}>
                   <b>Coverage priority</b> tilts the target the optimizer chases between the peaks and the quiet times: left of 2 gives the peaks extra claim on resources (and thins the edges), 2 follows the demand shape as-is, and right of 2 shifts emphasis toward the edges and off-peak stretches (thinning the peaks). Affects generation and every optimizer tool; the honest coverage score is measured the same regardless.<br /><br />
@@ -6294,7 +6263,7 @@ export {
   validateSeg, autofixSeg, packageInfo, startVarianceIssues, segContrib, findSuggestions,
   TimeField, NumField, Nudge, WeekStrip, Stat, CoverageChart, Sketcher, ActualCurve,
   ShapePreviewChart, ShapePreviewFrame, DeltaAreaChart, MovementScatterChart,
-  CoveragePriorityShapePreview, OffPeakShapePreview, ScheduleStabilityPreview,
+  CoveragePriorityShapePreview, ScheduleStabilityPreview,
   COV_PRIORITY_VALUES, STABILITY_VALUES, useDebouncedValue,
   aggregateCoverageRows, COVERAGE_RESOLUTIONS,
 };

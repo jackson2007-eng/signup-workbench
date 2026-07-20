@@ -2,11 +2,10 @@ import React, { useState, useMemo, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 import {
   T0, T1, N, SLOT, DAYS, fmt, parseHM, cloneSeg,
-  buildSupply, computeEngine, generateBoard, retimeBoard, validateSeg, autofixSeg,
+  buildSupply, computeEngine, generateBoard, validateSeg, autofixSeg,
   findSuggestions,
   TimeField, NumField, Nudge, Stat, CoverageChart, Sketcher, DeltaAreaChart,
-  CoveragePriorityShapePreview, OffPeakShapePreview, ScheduleStabilityPreview,
-  COV_PRIORITY_VALUES, STABILITY_VALUES, useDebouncedValue, COVERAGE_RESOLUTIONS,
+  CoveragePriorityShapePreview, ScheduleStabilityPreview, COVERAGE_RESOLUTIONS,
 } from "./App.jsx";
 import { DISPATCH_SAMPLE } from "./dispatchSampleData.js";
 
@@ -140,40 +139,6 @@ export default function Dispatch({ onHome }) {
     [DEM, ftCov, glob, spans]
   );
   const P = eng.perDay[day];
-
-  // Coverage priority / schedule stability live previews (Rules tab) — same precompute-and-
-  // lookup pattern as the operator tool and Call Centre. retimeBoard is given the FT-only
-  // `rules` (not `allRules`) deliberately: it has no PT-specific candidate generation (that's
-  // generateBoard's job), so a PT segment with a type outside `rules` falls into retimeBoard's
-  // own passthrough path and is left untouched by the preview — matching how the operator
-  // tool's own preview behaves.
-  const rulesCtxKey = JSON.stringify([glob.offPeakBias, glob.scheduleStability, glob.coveragePriority, glob.minVeh, glob.maxPullout]);
-  const debouncedRulesCtxKey = useDebouncedValue(rulesCtxKey, 350);
-  const covPreviewCache = useMemo(() => {
-    if (tab !== "rules") return null;
-    const out = {};
-    for (const p of COV_PRIORITY_VALUES) {
-      const g = { ...glob, coveragePriority: p };
-      const r = retimeBoard(board, rules, g, DEM, spans, g.minVeh, false, { stability: g.scheduleStability });
-      out[p] = buildSupply(r.segs);
-    }
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, board, rules, DEM, spans, debouncedRulesCtxKey]);
-  const stabPreviewCache = useMemo(() => {
-    if (tab !== "rules") return null;
-    const origByShift = new Map(board.map((sg) => [sg.shift, sg.s]));
-    const out = {};
-    for (const s of STABILITY_VALUES) {
-      const g = { ...glob, scheduleStability: s };
-      const r = retimeBoard(board, rules, g, DEM, spans, g.minVeh, false, { stability: s });
-      const seen = new Set();
-      out[s] = r.segs.filter((sg) => origByShift.has(sg.shift) && !seen.has(sg.shift) && seen.add(sg.shift))
-        .map((sg) => ({ origS: origByShift.get(sg.shift), moveMin: sg.s - origByShift.get(sg.shift) }));
-    }
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, board, rules, DEM, spans, debouncedRulesCtxKey]);
 
   // Required-dispatchers reference curve for the selected day, from the operators-working level.
   const reqCurve = useMemo(
@@ -566,7 +531,7 @@ export default function Dispatch({ onHome }) {
           <RulesTab {...{
             rules, setRule, glob, setGlob, spans, setSpans, tColor,
             ptRules, setPtRules, ptEnabled, setPtEnabled, newPtType, setNewPtType, allRules, board,
-            day, setDay, P, covPreviewCache, stabPreviewCache,
+            day, setDay, P,
           }} />
         )}
         {tab === "demand" && <DemandTab {...{ day, operators, demSource, uploadInfo, sketchRaw, setSketchRaw, peakOps, setPeakOps, applySketch, useSample, uploadOperators, uploadSignupBoard, downloadTemplate, P }} />}
@@ -627,7 +592,7 @@ export default function Dispatch({ onHome }) {
 }
 
 /* ================= RULES ================= */
-function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, ptRules, setPtRules, ptEnabled, setPtEnabled, newPtType, setNewPtType, allRules, board, day, setDay, P, covPreviewCache, stabPreviewCache }) {
+function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, ptRules, setPtRules, ptEnabled, setPtEnabled, newPtType, setNewPtType, allRules, board, day, setDay, P }) {
   const setG = (k, v) => setGlob((g) => ({ ...g, [k]: v }));
   const setGArr = (k, i, v) => setGlob((g) => ({ ...g, [k]: g[k].map((x, j) => (j === i ? v : x)) }));
   return (
@@ -710,10 +675,10 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, ptRu
           <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "10px 12px", alignItems: "center", fontSize: 13 }}>
             <span>Coverage priority</span>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <input type="range" min={0} max={4} step={0.5} value={glob.coveragePriority ?? 0}
+              <input type="range" min={0} max={4} step={0.5} value={glob.coveragePriority ?? 2}
                 onChange={(e) => setG("coveragePriority", Number(e.target.value))}
                 style={{ flex: 1, accentColor: supplyTeal }} />
-              <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.coveragePriority ?? 0}</span>
+              <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.coveragePriority ?? 2}</span>
             </div>
             <span>Off-peak weighting (%)</span>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -730,11 +695,10 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, ptRu
               <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.scheduleStability ?? 3}</span>
             </div>
           </div>
-          <CoveragePriorityShapePreview P={P} day={day} setDay={setDay} coveragePriority={glob.coveragePriority ?? 0} previewCache={covPreviewCache} />
-          <OffPeakShapePreview P={P} day={day} setDay={setDay} />
-          <ScheduleStabilityPreview board={board} scheduleStability={glob.scheduleStability ?? 3} previewCache={stabPreviewCache} />
+          <CoveragePriorityShapePreview P={P} day={day} setDay={setDay} coveragePriority={glob.coveragePriority ?? 2} offPeakBias={glob.offPeakBias ?? 0} />
+          <ScheduleStabilityPreview scheduleStability={glob.scheduleStability ?? 3} />
           <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 10, lineHeight: 1.6 }}>
-            <b>Coverage priority</b> spreads dispatchers across busy times: 0 sends everything to the single biggest gap first; higher (0.5–2) spreads dispatchers more evenly across all under-served times before deepening any one gap.<br /><br />
+            <b>Coverage priority</b> tilts the target the generator chases between the peaks and the quiet times: left of 2 gives the peaks extra claim on dispatchers, 2 follows the load as-is, and right of 2 shifts emphasis toward the edges and off-peak stretches.<br /><br />
             <b>Off-peak weighting</b> gives quiet times of day a bit more staffing than raw operator load alone. 0 = follow the load exactly; higher % = flatter, more even coverage.<br /><br />
             <b>Schedule stability</b> affects how strongly the generator favors keeping shifts close to where they already sit: 0 chases every coverage point regardless of disruption; higher = a stronger pull to keep shifts in place, only moving one when the coverage gain is worth it. Only applies to full-time dispatcher shifts — part-time placement isn't retimed by this preview.
           </div>
