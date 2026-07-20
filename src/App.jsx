@@ -658,25 +658,17 @@ function autofixSeg(seg, rules, glob) {
 const demandGamma = (glob) => 1 - Math.min(60, Math.max(0, glob.offPeakBias || 0)) / 100;
 const weightEv = (v, gamma) => (gamma === 1 ? v : Math.pow(v, gamma));
 
-// concave coverage utility: reward for covering a slot has diminishing returns, so the FIRST
-// vehicle at a slot is worth more than the fifth and priority shifts to the least-covered
-// slots regardless of their size. p (coveragePriority) 0 → min(demand,supply) exactly, the
-// original "fill the gap" objective; higher p spreads coverage before deepening any one peak.
-const slotCredit = (d, s, p) => {
-  if (d <= 0) return 0;
-  if (!(p > 0)) return Math.min(d, s);          // identity path
-  const c = Math.min(1, s / d);
-  return d * (1 - Math.pow(1 - c, 1 + p));
-};
-// value the +1th vehicle earns at a slot whose target=T absolute vehicles, current supply=s.
-// p=0 → clamp(T−s,0,1), matching the original greedy marginal exactly.
-const covU = (T, s, p) => (T <= 0 ? 0 : T * (1 - Math.pow(1 - Math.min(1, s / T), 1 + p)));
-const concaveGain = (T, s, p) =>
-  (!(p > 0) ? Math.max(0, Math.min(1, T - s)) : covU(T, s + 1, p) - covU(T, s, p));
+// coverage priority as a second gamma on the demand shape, sweeping THROUGH neutral: 0 → 1.5
+// (sharpen — peaks gain claim on the target, troughs recede), 2 → 1.0 (neutral, follow demand
+// as-is), 4 → 0.5 (flatten — edges/off-peak gain, peaks recede). Composes with off-peak
+// weighting's gamma by multiplication (two power transforms on the same curve). This replaced
+// an earlier concave-coverage-utility mechanism ("first vehicle at a slot is worth more than
+// the fifth") — the slider now tilts WHERE the target puts demand rather than changing how
+// coverage is credited, matching its Rules-tab preview exactly.
+const priorityGamma = (p) => 1.5 - Math.min(4, Math.max(0, p ?? 2)) * 0.25;
 
-function computeEngine(DEM, ftCov, includePT, minVeh, SPANS, maxFleet, offPeakBias = 0, coveragePriority = 0, deadheadOutMin = 0, deadheadInMin = 0, glob = null) {
-  const gamma = demandGamma({ offPeakBias });
-  const pcov = coveragePriority > 0 ? coveragePriority : 0;
+function computeEngine(DEM, ftCov, includePT, minVeh, SPANS, maxFleet, offPeakBias = 0, coveragePriority = 2, deadheadOutMin = 0, deadheadInMin = 0, glob = null) {
+  const gamma = demandGamma({ offPeakBias }) * priorityGamma(coveragePriority);
   const SD = glob ? targetDemand(DEM, glob) : schedulingDemand(DEM, deadheadOutMin, deadheadInMin);
   const perDay = {};
   let weekW = 0, weekSupSlots = 0;
@@ -715,12 +707,12 @@ function computeEngine(DEM, ftCov, includePT, minVeh, SPANS, maxFleet, offPeakBi
       const dSh = dayW > 0 ? p.w[i] / dayW : 0;                    // weighted+phantom (objective/target)
       const sSh = daySupSlots > 0 ? p.sup[i] / daySupSlots : 0;
       const dCov = dayEv > 0 ? p.ev[i] / dayEv : 0;                // raw ridership share (honest coverage)
-      dayObjective += slotCredit(dSh, sSh, pcov);
+      dayObjective += Math.min(dSh, sSh);
       dayScore += Math.min(dCov, sSh);
       target.push(dSh * daySupSlots);
     }
     for (let i = 0; i < N; i++) {
-      weekObjective += slotCredit(weekW > 0 ? p.w[i] / weekW : 0, weekSupSlots > 0 ? p.sup[i] / weekSupSlots : 0, pcov);
+      weekObjective += Math.min(weekW > 0 ? p.w[i] / weekW : 0, weekSupSlots > 0 ? p.sup[i] / weekSupSlots : 0);
       weekScore += Math.min(weekEvents > 0 ? p.ev[i] / weekEvents : 0, weekSupSlots > 0 ? p.sup[i] / weekSupSlots : 0);
     }
     const gaps = [];
@@ -827,7 +819,6 @@ function findSuggestions(board, eng, DEM, rules, glob, spans = null, original = 
   const stability = glob.scheduleStability || 0;
   const starts = startsPerSlot(board);
   const maxPull = glob.maxPullout || 0;
-  const pcov = glob.coveragePriority > 0 ? glob.coveragePriority : 0;
   let evaluated = 0;
   // other day-variant segments of the same shift (for report-time-variation checks)
   const shiftStartsOf = (shiftNo, exceptId) => {
@@ -846,7 +837,7 @@ function findSuggestions(board, eng, DEM, rules, glob, spans = null, original = 
   for (const d of DAYS) {
     let t = 0;
     const p = eng.perDay[d];
-    for (let i = 0; i < N; i++) t += slotCredit(p.w[i] / weekEv, p.sup[i] / weekSup, pcov);
+    for (let i = 0; i < N; i++) t += Math.min(p.w[i] / weekEv, p.sup[i] / weekSup);
     termBase[d] = t;
   }
   const out = [];
@@ -888,7 +879,7 @@ function findSuggestions(board, eng, DEM, rules, glob, spans = null, original = 
         for (let i = 0; i < N; i++) {
           const ns = p.sup[i] - oldC[i] + newC[i];
           if (glob.maxFleet > 0 && ns > glob.maxFleet && p.sup[i] <= glob.maxFleet) { fleetBad = true; break; }
-          term += slotCredit(p.w[i] / weekEv, ns / weekSup, pcov);
+          term += Math.min(p.w[i] / weekEv, ns / weekSup);
         }
         if (fleetBad) return;
         delta += term - termBase[d];
@@ -1063,8 +1054,7 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
   const rng = opts.rng || null;
   const noise = rng && opts.noise > 0 ? opts.noise : 0;
   let evaluated = 0;
-  const gammaG = demandGamma(glob);
-  const pcov = glob.coveragePriority > 0 ? glob.coveragePriority : 0;
+  const gammaG = demandGamma(glob) * priorityGamma(glob.coveragePriority);
   const SD = targetDemand(DEM, glob); // occupancy model or edge staging (targetDemand picks)
   const WD = {};
   for (const d of DAYS) WD[d] = gammaG === 1 ? SD[d] : SD[d].map((v) => weightEv(v, gammaG));
@@ -1110,7 +1100,7 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
       const pg = new Array(N + 1).fill(0), pc = new Array(N + 1).fill(0);
       for (let i = 0; i < N; i++) {
         const tgt = target[d][i];
-        let g = concaveGain(tgt, sup[d][i], pcov);
+        let g = Math.max(0, Math.min(1, tgt - sup[d][i]));
         const t = SLOT(i);
         if (t >= s0 && t < s1 && sup[d][i] < minVeh) g += 0.5;
         pg[i + 1] = pg[i] + g;
@@ -1192,7 +1182,7 @@ function generateBoard(tenTarget, nPackages, rules, glob, DEM, spans, minVeh, in
       const pg = new Array(N + 1).fill(0), pc = new Array(N + 1).fill(0);
       for (let i = 0; i < N; i++) {
         const tgt = target[d][i];
-        let g = concaveGain(tgt, sup[d][i], pcov);
+        let g = Math.max(0, Math.min(1, tgt - sup[d][i]));
         const t = SLOT(i);
         if (t >= s0 && t < s1 && sup[d][i] < minVeh) g += 0.5;
         pg[i + 1] = pg[i] + g;
@@ -1275,8 +1265,7 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT, opts 
   // coverage gains (typically much larger) still override it and move the closest run.
   const stability = opts.stability != null ? opts.stability : 3;
   let evaluated = 0;
-  const gammaT = demandGamma(glob);
-  const pcov = glob.coveragePriority > 0 ? glob.coveragePriority : 0;
+  const gammaT = demandGamma(glob) * priorityGamma(glob.coveragePriority);
   const SD = targetDemand(DEM, glob); // occupancy model or edge staging (targetDemand picks)
   const WD = {};
   for (const d of DAYS) WD[d] = gammaT === 1 ? SD[d] : SD[d].map((v) => weightEv(v, gammaT));
@@ -1346,7 +1335,7 @@ function retimeBoard(baseline, rules, glob, DEM, spans, minVeh, includePT, opts 
       const pg = new Array(N + 1).fill(0), pc = new Array(N + 1).fill(0);
       for (let i = 0; i < N; i++) {
         const tgt = target[d][i];
-        let g = concaveGain(tgt, sup[d][i], pcov);
+        let g = Math.max(0, Math.min(1, tgt - sup[d][i]));
         const t = SLOT(i);
         if (t >= s0 && t < s1 && sup[d][i] < minVeh) g += 0.5;
         pg[i + 1] = pg[i] + g;
@@ -1639,8 +1628,7 @@ function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans, origin
     for (const d of sg.days) for (let i = 0; i < N; i++) sup[d][i] += c[i];
   }
   let weekEv = 0, weekSup = 0;
-  const gammaR = demandGamma(glob);
-  const pcov = glob.coveragePriority > 0 ? glob.coveragePriority : 0;
+  const gammaR = demandGamma(glob) * priorityGamma(glob.coveragePriority);
   const SD = targetDemand(DEM, glob); // occupancy model or edge staging (targetDemand picks)
   const ev = {};
   for (const d of DAYS) {
@@ -1650,7 +1638,7 @@ function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans, origin
   }
   const dayTerm = (d) => {
     let t = 0;
-    for (let i = 0; i < N; i++) t += slotCredit(ev[d][i] / weekEv, sup[d][i] / weekSup, pcov);
+    for (let i = 0; i < N; i++) t += Math.min(ev[d][i] / weekEv, sup[d][i] / weekSup);
     return t;
   };
   const term = {};
@@ -1700,7 +1688,7 @@ function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans, origin
         for (let i = 0; i < N; i++) {
           const ns = sup[d][i] - oldC[i] + newC[i];
           if (glob.maxFleet > 0 && ns > glob.maxFleet && sup[d][i] <= glob.maxFleet) { fleetBad = true; break; }
-          t += slotCredit(ev[d][i] / weekEv, ns / weekSup, pcov);
+          t += Math.min(ev[d][i] / weekEv, ns / weekSup);
         }
         if (fleetBad) continue;
         const delta = t - term[d];
@@ -2450,42 +2438,37 @@ function DeltaAreaChart({ delta, demandRef, fixedMax, width = 700, height = 168 
   );
 }
 
-// Same gamma-reshaping math as off-peak weighting (w = target^gamma, renormalized to
-// conserve total volume), but here the slider sweeps gamma from ABOVE 1 down THROUGH 1 to
-// below it: at 0 the demand shape is sharpened (peaks intensified, troughs receded), at the
-// midpoint it's neutral, and at 4 it's flattened (peaks pulled down, edges/off-peak lifted).
-// So the left end reads "focus everything on the peaks," the right end "spread it out to the
-// quiet times," with the crossover in between. Illustrative at the preview layer for now —
-// the real engine's own coveragePriority behavior is a separate, later change.
-function reshapeTarget(target, coveragePriority) {
-  const p = Math.min(4, Math.max(0, coveragePriority ?? 0));
-  const gamma = 1.5 - (p / 4) * 1.0; // 0 -> 1.5 (sharpen), 2 -> 1.0 (neutral), 4 -> 0.5 (flatten)
-  const total = target.reduce((a, v) => a + v, 0);
-  const raw = target.map((v) => Math.pow(Math.max(0, v), gamma));
+// Pointwise power + renormalize to conserve total volume — the same transform the engine's
+// weight gamma applies, reproduced here for the preview's own arithmetic.
+function applyGamma(arr, gamma) {
+  const total = arr.reduce((a, v) => a + v, 0);
+  const raw = arr.map((v) => Math.pow(Math.max(0, v), gamma));
   const rawSum = raw.reduce((a, v) => a + v, 0) || 1;
   return raw.map((v) => (v / rawSum) * total);
 }
 
 function CoveragePriorityShapePreview({ P, day, setDay, coveragePriority }) {
-  // Diverging delta from the unweighted baseline: green (up) where this position adds
-  // emphasis, red (down) where it takes it away. At the left end the peaks glow green and
-  // valleys dip red; sliding right, that inverts — peaks drop red, edges and off-peak rise
-  // green. Scale pinned to the largest delta either extreme can produce so the shading's
-  // growth stays visible the whole way across instead of the axis rescaling to hide it.
-  const reshaped = reshapeTarget(P.target, coveragePriority);
-  const delta = reshaped.map((v, i) => v - P.target[i]);
-  const extremeLo = reshapeTarget(P.target, 0);
-  const extremeHi = reshapeTarget(P.target, 4);
+  // The engine's target ALREADY carries the priority gamma (it's folded into the demand
+  // weights), so the neutral baseline is recovered by inverting it — applyGamma with
+  // 1/gamma undoes a pointwise power up to the renormalizing scale. Delta is then the real
+  // reshaping this slider position applies vs. neutral: green (up) where emphasis is gained,
+  // red (down) where it's lost. Left end: peaks green, valleys red. Right end: inverted.
+  // Scale pinned to the larger of the two extremes so growth stays visible the whole way.
+  const g = priorityGamma(coveragePriority);
+  const base = g === 1 ? P.target : applyGamma(P.target, 1 / g);
+  const delta = P.target.map((v, i) => v - base[i]);
+  const extremeLo = applyGamma(base, priorityGamma(0));
+  const extremeHi = applyGamma(base, priorityGamma(4));
   const fixedMax = Math.max(1,
-    ...extremeLo.map((v, i) => Math.abs(v - P.target[i])),
-    ...extremeHi.map((v, i) => Math.abs(v - P.target[i])));
+    ...extremeLo.map((v, i) => Math.abs(v - base[i])),
+    ...extremeHi.map((v, i) => Math.abs(v - base[i])));
   return (
     <ShapePreviewFrame day={day} setDay={setDay} legend={[
       { color: supplyTeal, label: "gains emphasis here" },
       { color: gapRed, label: "loses emphasis here" },
       { color: demandAmber, label: "demand shape (for landmarks)" },
     ]}>
-      <DeltaAreaChart delta={delta} demandRef={P.target} fixedMax={fixedMax} />
+      <DeltaAreaChart delta={delta} demandRef={base} fixedMax={fixedMax} />
     </ShapePreviewFrame>
   );
 }
@@ -3108,7 +3091,7 @@ export default function App({ onHome }) {
           }
           if (g.demandShare == null) g.demandShare = DEFAULT_DEMAND_SHARE;
           if (g.offPeakBias == null) g.offPeakBias = 0; // neutralized default; superseded by coveragePriority
-          if (g.coveragePriority == null) g.coveragePriority = 0;
+          if (g.coveragePriority == null) g.coveragePriority = 2; // 2 = neutral under the gamma-sweep semantics
           if (!Array.isArray(g.weekendGroup)) g.weekendGroup = ["Saturday", "Sunday"];
           if (g.recycleEnabled == null) g.recycleEnabled = false;
           if (g.recycleTurnaround == null) g.recycleTurnaround = 15;
@@ -5939,10 +5922,10 @@ export default function App({ onHome }) {
                 <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "10px 12px", alignItems: "center", fontSize: 13 }}>
                   <span>Coverage priority</span>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <input type="range" min={0} max={4} step={0.5} value={glob.coveragePriority ?? 0}
+                    <input type="range" min={0} max={4} step={0.5} value={glob.coveragePriority ?? 2}
                       onChange={(e) => setGlob((g) => ({ ...g, coveragePriority: Number(e.target.value) }))}
                       style={{ flex: 1, accentColor: supplyTeal }} />
-                    <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.coveragePriority ?? 0}</span>
+                    <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.coveragePriority ?? 2}</span>
                   </div>
                   <span>Off-peak weighting (%)</span>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -5959,11 +5942,11 @@ export default function App({ onHome }) {
                     <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.scheduleStability ?? 3}</span>
                   </div>
                 </div>
-                <CoveragePriorityShapePreview P={P} day={day} setDay={setDay} coveragePriority={glob.coveragePriority ?? 0} />
+                <CoveragePriorityShapePreview P={P} day={day} setDay={setDay} coveragePriority={glob.coveragePriority ?? 2} />
                 <OffPeakShapePreview P={P} day={day} setDay={setDay} baseTarget={engBase0.perDay[day].target} />
                 <ScheduleStabilityPreview scheduleStability={glob.scheduleStability ?? 3} />
                 <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10, lineHeight: 1.6 }}>
-                  <b>Coverage priority</b> spreads resources across busy times: 0 sends everything to the single biggest gap first; higher (0.5–2) spreads resources more evenly across all under-served times before deepening any one gap.<br /><br />
+                  <b>Coverage priority</b> tilts the target the optimizer chases between the peaks and the quiet times: left of 2 gives the peaks extra claim on resources (and thins the edges), 2 follows the demand shape as-is, and right of 2 shifts emphasis toward the edges and off-peak stretches (thinning the peaks). Affects generation and every optimizer tool; the honest coverage score is measured the same regardless.<br /><br />
                   <b>Off-peak weighting</b> gives quiet times of day a bit more service than raw demand alone, since off-peak trips share rides less. 0 = follow demand exactly; higher % = flatter, more even coverage. Only compare scores between signups using the same weighting.<br /><br />
                   <b>Schedule stability</b> affects Suggestions, Deep optimize, Retime, and the Optimization monitor: 0 chases every coverage point regardless of disruption; higher = a stronger pull to keep shifts where they already are, only moving one when the coverage gain is worth it.
                 </div>

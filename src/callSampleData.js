@@ -38,7 +38,7 @@ const global = {
   maxStartVarWeekday: 60, maxStartVarWeekend: 120, maxStartVarCross: 120,
   shiftSeriesBase: 7000,
   deadheadOutMin: 0, deadheadInMin: 0,
-  offPeakBias: 0, coveragePriority: 0, scheduleStability: 3,
+  offPeakBias: 0, coveragePriority: 2, scheduleStability: 3,
   weekendGroup: ["Saturday", "Sunday"],
   recycleEnabled: false, recycleTurnaround: 15, recycleWindow: [795, 900], recycleCount: 15,
   occupancyTarget: false,
