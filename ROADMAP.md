@@ -151,9 +151,10 @@ exception days for now; phase strip yes but NO guided tour.
 
 - **Phase 1 — Schedule import + baseline + Compare** (template download, parser, upload,
   promote, diff view; "agent schedule"/"dispatcher schedule" language).
-- **Phase 2 — Optimizer parity**: Retime card, Suggestions tab, Deep optimize, Optimization
-  monitor, Size-to-requirement (Call Centre sizes from the Erlang requirement, Dispatch from
-  the dispatcher-ratio requirement).
+- **Phase 2 — Optimizer parity**: Retime card, Suggestions tab, Deep optimize,
+  Size-to-requirement (Call Centre sizes from the Erlang requirement, Dispatch from the
+  dispatcher-ratio requirement). SHIPPED except the background Optimization monitor —
+  deferred (large embedded time-sliced loop in App.jsx; port in its own pass).
 - **Phase 3 — Rules substance**: part-time for Call Centre; wire package rules into real
   flagging in both.
 - **Phase 4 — Full Packaging tab** both siblings (grid, auto-package, per-day refine).

@@ -3,11 +3,11 @@ import * as XLSX from "xlsx";
 import {
   T0, T1, N, SLOT, DAYS, fmt, parseHM, cloneSeg,
   buildSupply, computeEngine, generateBoard, validateSeg, autofixSeg,
-  findSuggestions, parseSignupWorkbook,
+  findSuggestions, parseSignupWorkbook, retimeBoard, deepOptimize, refinePerDay,
   TimeField, NumField, Nudge, Stat, CoverageChart, Sketcher, DeltaAreaChart,
   CoveragePriorityShapePreview, ScheduleStabilityPreview, COVERAGE_RESOLUTIONS,
 } from "./App.jsx";
-import { ImportTab, CompareTab } from "./CallCentre.jsx";
+import { ImportTab, CompareTab, SuggestTab, OptResultBanner } from "./CallCentre.jsx";
 import { DISPATCH_SAMPLE } from "./dispatchSampleData.js";
 
 /* Dispatch Desks — a third sibling of the operator workbench, reusing the shared coverage engine
@@ -93,6 +93,7 @@ const NAV = [
   { key: "demand", label: "DEMAND" },
   { key: "build", label: "BUILD" },
   { key: "coverage", label: "COVERAGE" },
+  { key: "suggest", label: "SUGGESTIONS" },
   { key: "compare", label: "COMPARE" },
   { key: "schedule", label: "SCHEDULE" },
 ];
@@ -315,6 +316,48 @@ export default function Dispatch({ onHome }) {
     setBoard(baselineBoard.map(cloneSeg));
     setSelId(null); setBuildResult(null);
   };
+
+  /* ---------- optimizer tools (Suggestions tab + Retime) ---------- */
+  const [sugs, setSugs] = useState(null);
+  const [optResult, setOptResult] = useState(null);
+  const scoreOf = (b) => computeEngine(DEM, buildSupply(b), false, glob.minVeh, spans, 0, glob.offPeakBias, glob.coveragePriority, 0, 0, glob).weekScore;
+  const findSugs = () => setSugs(findSuggestions(board, eng, DEM, allRules, glob, spans));
+  const applySug = (s) => {
+    commit((b) => b.map((sg) => (sg.id === s.id ? { ...cloneSeg(sg), s: s.payload.s, e: s.payload.e, b: s.payload.b ? [...s.payload.b] : null } : sg)));
+    setSugs(null);
+  };
+  const runDeep = () => {
+    const before = eng.weekScore;
+    const r = deepOptimize(board, [DEM, false, glob.minVeh, spans, 0], allRules, glob);
+    const after = scoreOf(r.board);
+    commit(() => r.board.map(cloneSeg));
+    setOptResult({ kind: "Deep optimize", detail: `${r.moves} moves · ${r.created} day-variant${r.created === 1 ? "" : "s"} created · ${(r.evaluated || 0).toLocaleString()} candidates evaluated`, before, after });
+    setSugs(null);
+  };
+  const runRefine = () => {
+    const before = eng.weekScore;
+    const r = refinePerDay(board, allRules, glob, DEM, false, glob.minVeh, spans);
+    const after = scoreOf(r.board);
+    commit(() => r.board.map(cloneSeg));
+    setOptResult({ kind: "Day-to-day refine", detail: `${r.moves} per-day moves · ${r.created} day-variant${r.created === 1 ? "" : "s"} created`, before, after });
+    setSugs(null);
+  };
+  const runRetime = () => {
+    const before = eng.weekScore;
+    const r = retimeBoard(board, rules, glob, DEM, spans, glob.minVeh, false, { stability: glob.scheduleStability });
+    const after = scoreOf(r.segs);
+    commit(() => r.segs.map(cloneSeg));
+    setOptResult({ kind: "Retime", detail: `${(r.evaluated || 0).toLocaleString()} candidates evaluated`, before, after });
+    setSugs(null);
+  };
+  // Size the build from the dispatcher-ratio requirement: weekly dispatcher-hours implied by
+  // the operators-working curve, ÷40 paid hours per weekly package.
+  const reqPackages = useMemo(() => {
+    let h = 0;
+    for (const d of DAYS) for (const v of (operators[d] || [])) h += requiredDispatchers(v, glob.ratioPerDispatcher, glob.minOnDuty) / 12;
+    return Math.max(1, Math.ceil(h / 40));
+  }, [operators, glob.ratioPerDispatcher, glob.minOnDuty]);
+  const sizeToReq = () => setNDispatchers(reqPackages);
 
   /* ---------- export / project ---------- */
   const exportSchedule = () => {
@@ -618,9 +661,10 @@ export default function Dispatch({ onHome }) {
           }} />
         )}
         {tab === "import" && <ImportTab {...{ scheduleSource, scheduleUpload, uploadSchedule, downloadScheduleTemplate, resetToBaseline, changedCount, baselineBoard, scheduleFileRef, noun: "dispatcher" }} />}
+        {tab === "suggest" && <SuggestTab {...{ sugs, findSugs, applySug, runDeep, runRefine, optResult, tColor, noun: "dispatcher" }} />}
         {tab === "compare" && <CompareTab {...{ boardDiff, changedCount, scheduleSource, eng, baseEng, tColor, noun: "dispatcher" }} />}
         {tab === "demand" && <DemandTab {...{ day, operators, demSource, uploadInfo, sketchRaw, setSketchRaw, peakOps, setPeakOps, applySketch, useSample, uploadOperators, uploadSignupBoard, downloadTemplate, P }} />}
-        {tab === "build" && <BuildTab {...{ nDispatchers, setNDispatchers, generate, buildResult, distinctShifts, flagCount, tColor, ptEnabled }} />}
+        {tab === "build" && <BuildTab {...{ nDispatchers, setNDispatchers, generate, buildResult, distinctShifts, flagCount, tColor, ptEnabled, sizeToReq, reqPackages, runRetime, optResult }} />}
         {tab === "coverage" && (
           <div>
             {P.floorViol.length > 0 && (
@@ -932,7 +976,7 @@ function DemandTab({ day, operators, demSource, uploadInfo, sketchRaw, setSketch
 }
 
 /* ================= BUILD ================= */
-function BuildTab({ nDispatchers, setNDispatchers, generate, buildResult, distinctShifts, flagCount, tColor, ptEnabled }) {
+function BuildTab({ nDispatchers, setNDispatchers, generate, buildResult, distinctShifts, flagCount, tColor, ptEnabled, sizeToReq, reqPackages, runRetime, optResult }) {
   return (
     <div>
       <div style={cardStyle}>
@@ -943,9 +987,20 @@ function BuildTab({ nDispatchers, setNDispatchers, generate, buildResult, distin
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: 13 }}>Number of full-time dispatchers (weekly packages)</span>
           <NumField value={nDispatchers} onCommit={(v) => setNDispatchers(Math.max(1, Math.round(v)))} />
+          {sizeToReq && <button style={nudgeBtn} onClick={sizeToReq} title="Set the package count from the weekly dispatcher-ratio requirement">Size to requirement ({reqPackages})</button>}
           <button style={primaryBtn} onClick={generate}>Generate schedule</button>
         </div>
       </div>
+      {runRetime && (
+        <div style={cardStyle}>
+          <div style={hTitle}>Retime the current schedule</div>
+          <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 10 }}>
+            Keeps every shift and its type — only re-chooses start times and breaks within the rules to better fit the operators-working curve, honoring the schedule-stability setting. Undo available in SCHEDULE.
+          </div>
+          <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }} onClick={runRetime}>Retime schedule</button>
+          <div style={{ marginTop: 10 }}><OptResultBanner optResult={optResult && optResult.kind === "Retime" ? optResult : null} /></div>
+        </div>
+      )}
       {buildResult && (
         <div style={cardStyle}>
           <div style={hTitle}>Generated</div>

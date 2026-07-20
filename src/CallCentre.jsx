@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import {
   T0, T1, N, SLOT, DAYS, WEEKEND_DAYS, fmt, parseHM, cloneSeg,
   buildSupply, computeEngine, generateBoard, validateSeg, autofixSeg,
-  findSuggestions, parseSignupWorkbook,
+  findSuggestions, parseSignupWorkbook, retimeBoard, deepOptimize, refinePerDay,
   TimeField, NumField, Nudge, Stat, CoverageChart, Sketcher, DeltaAreaChart,
   CoveragePriorityShapePreview, ScheduleStabilityPreview, COVERAGE_RESOLUTIONS,
 } from "./App.jsx";
@@ -159,6 +159,7 @@ const NAV = [
   { key: "demand", label: "DEMAND" },
   { key: "build", label: "BUILD" },
   { key: "coverage", label: "COVERAGE" },
+  { key: "suggest", label: "SUGGESTIONS" },
   { key: "compare", label: "COMPARE" },
   { key: "schedule", label: "SCHEDULE" },
 ];
@@ -364,6 +365,49 @@ export default function CallCentre({ onHome }) {
     setBoard(baselineBoard.map(cloneSeg));
     setSelId(null); setBuildResult(null);
   };
+
+  /* ---------- optimizer tools (Suggestions tab + Retime) ---------- */
+  const [sugs, setSugs] = useState(null);
+  const [optResult, setOptResult] = useState(null);
+  const scoreOf = (b) => computeEngine(DEM, buildSupply(b), false, glob.minVeh, spans, 0, glob.offPeakBias, glob.coveragePriority, 0, 0, glob).weekScore;
+  const findSugs = () => setSugs(findSuggestions(board, eng, DEM, rules, glob, spans));
+  const applySug = (s) => {
+    commit((b) => b.map((sg) => (sg.id === s.id ? { ...cloneSeg(sg), s: s.payload.s, e: s.payload.e, b: s.payload.b ? [...s.payload.b] : null } : sg)));
+    setSugs(null);
+  };
+  const runDeep = () => {
+    const before = eng.weekScore;
+    const r = deepOptimize(board, [DEM, false, glob.minVeh, spans, 0], rules, glob);
+    const after = scoreOf(r.board);
+    commit(() => r.board.map(cloneSeg));
+    setOptResult({ kind: "Deep optimize", detail: `${r.moves} moves · ${r.created} day-variant${r.created === 1 ? "" : "s"} created · ${(r.evaluated || 0).toLocaleString()} candidates evaluated`, before, after });
+    setSugs(null);
+  };
+  const runRefine = () => {
+    const before = eng.weekScore;
+    const r = refinePerDay(board, rules, glob, DEM, false, glob.minVeh, spans);
+    const after = scoreOf(r.board);
+    commit(() => r.board.map(cloneSeg));
+    setOptResult({ kind: "Day-to-day refine", detail: `${r.moves} per-day moves · ${r.created} day-variant${r.created === 1 ? "" : "s"} created`, before, after });
+    setSugs(null);
+  };
+  const runRetime = () => {
+    const before = eng.weekScore;
+    const r = retimeBoard(board, rules, glob, DEM, spans, glob.minVeh, false, { stability: glob.scheduleStability });
+    const after = scoreOf(r.segs);
+    commit(() => r.segs.map(cloneSeg));
+    setOptResult({ kind: "Retime", detail: `${(r.evaluated || 0).toLocaleString()} candidates evaluated`, before, after });
+    setSugs(null);
+  };
+  // Size the build from the Erlang requirement: weekly agent-hours the service-level target
+  // implies across all seven days, ÷40 paid hours per weekly package.
+  const reqPackages = useMemo(() => {
+    const pctSL = glob.slTargetPct > 1 ? glob.slTargetPct / 100 : glob.slTargetPct;
+    let h = 0;
+    for (const d of DAYS) for (const A of (calls[d] || [])) h += requiredAgents(A, glob.ahtMin, glob.slTargetSec, pctSL) / 12;
+    return Math.max(1, Math.ceil(h / 40));
+  }, [calls, glob.ahtMin, glob.slTargetSec, glob.slTargetPct]);
+  const sizeToReq = () => setNAgents(reqPackages);
 
   /* ---------- export / project ---------- */
   const exportSchedule = () => {
@@ -660,9 +704,10 @@ export default function CallCentre({ onHome }) {
 
         {tab === "rules" && <RulesTab {...{ rules, setRule, glob, setGlob, spans, setSpans, tColor, board, day, setDay, P }} />}
         {tab === "import" && <ImportTab {...{ scheduleSource, scheduleUpload, uploadSchedule, downloadScheduleTemplate, resetToBaseline, changedCount, baselineBoard, scheduleFileRef, noun: "agent" }} />}
+        {tab === "suggest" && <SuggestTab {...{ sugs, findSugs, applySug, runDeep, runRefine, optResult, tColor, noun: "agent" }} />}
         {tab === "compare" && <CompareTab {...{ boardDiff, changedCount, scheduleSource, eng, baseEng, tColor, noun: "agent" }} />}
         {tab === "demand" && <DemandTab {...{ day, calls, arrivals, showArrivals, setShowArrivals, demSource, uploadInfo, callSummary, sketchRaw, setSketchRaw, peakCalls, setPeakCalls, applySketch, useSample, uploadCalls, downloadTemplate, P }} />}
-        {tab === "build" && <BuildTab {...{ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor }} />}
+        {tab === "build" && <BuildTab {...{ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor, sizeToReq, reqPackages, runRetime, optResult, noun: "agent" }} />}
         {tab === "coverage" && (
           <div>
             {P.floorViol.length > 0 && (
@@ -825,6 +870,59 @@ export function CompareTab({ boardDiff, changedCount, scheduleSource, eng, baseE
         <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 10, lineHeight: 1.6 }}>
           Coverage percentages are the honest weekly score (share of {noun === "agent" ? "call volume" : "workload"} aligned with staffing) for each schedule, measured identically. Removed shifts from a full regenerate are listed too — a generated schedule replaces every baseline shift.
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================= SUGGESTIONS (shared by Call Centre + Dispatch) ================= */
+export function OptResultBanner({ optResult }) {
+  if (!optResult) return null;
+  const b = Math.round(optResult.before * 1000) / 10, a = Math.round(optResult.after * 1000) / 10;
+  const d = Math.round((a - b) * 10) / 10;
+  return (
+    <div style={{ background: "var(--tint-teal-a, rgba(15,123,122,.08))", border: `1px solid ${supplyTeal}`, padding: "8px 12px", marginBottom: 12, fontSize: 12.5 }}>
+      <b>{optResult.kind}:</b> coverage {b}% → {a}% ({d > 0 ? "+" : ""}{d} pts) · {optResult.detail}. Undo available in SCHEDULE.
+    </div>
+  );
+}
+
+export function SuggestTab({ sugs, findSugs, applySug, runDeep, runRefine, optResult, tColor, noun }) {
+  return (
+    <div>
+      <div style={cardStyle}>
+        <div style={hTitle}>Ranked improvements</div>
+        <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 10 }}>
+          Legal single moves (shift slides, break slides) ranked by whole-week coverage gain, respecting every rule and the schedule-stability setting. Nothing is applied until you choose — the {noun} schedule always stays yours to edit.
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+          <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }} onClick={findSugs}>{sugs ? "Recompute" : "Find suggestions"}</button>
+          <button style={{ ...nudgeBtn, borderColor: supplyTeal, color: supplyTeal }} onClick={runDeep}>Deep optimize (slides, breaks, per-day)</button>
+          <button style={nudgeBtn} onClick={runRefine}>Refine day-to-day times</button>
+        </div>
+        <OptResultBanner optResult={optResult} />
+        {sugs && sugs.length === 0 && <div style={{ fontSize: 13, color: sampleGray }}>No improving moves found — this schedule is locally optimal under the current rules.</div>}
+        {sugs && sugs.length > 0 && (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ borderCollapse: "collapse", width: "100%" }}>
+              <thead><tr style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", color: sampleGray, textAlign: "left" }}>
+                <th style={{ padding: "4px 8px" }}>Shift</th><th style={{ padding: "4px 8px" }}>Type</th><th style={{ padding: "4px 8px" }}>Move</th><th style={{ padding: "4px 8px" }}>Gain</th><th style={{ padding: "4px 8px" }}></th>
+              </tr></thead>
+              <tbody>
+                {sugs.map((s, i) => (
+                  <tr key={i} style={{ borderTop: "1px solid var(--border-light)", fontSize: 12.5 }}>
+                    <td style={{ padding: "4px 8px" }}>{s.shift}</td>
+                    <td style={{ padding: "4px 8px" }}><span style={{ background: tColor(s.type), color: "#fff", padding: "1px 6px", borderRadius: 2, fontSize: 11 }}>{s.type}</span></td>
+                    <td style={{ padding: "4px 8px" }}>{s.label}</td>
+                    <td style={{ padding: "4px 8px", color: supplyTeal }}>+{(s.delta * 100).toFixed(2)} pts</td>
+                    <td style={{ padding: "4px 8px" }}><button style={{ ...nudgeBtn, fontSize: 12, padding: "3px 8px" }} onClick={() => applySug(s)}>Apply</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {!sugs && <div style={{ fontSize: 13, color: sampleGray }}>Click Find suggestions to rank the best legal moves for this schedule.</div>}
       </div>
     </div>
   );
@@ -998,7 +1096,7 @@ function DemandTab({ day, calls, arrivals, showArrivals, setShowArrivals, demSou
 }
 
 /* ================= BUILD ================= */
-function BuildTab({ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor }) {
+function BuildTab({ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor, sizeToReq, reqPackages, runRetime, optResult, noun }) {
   return (
     <div>
       <div style={cardStyle}>
@@ -1007,11 +1105,22 @@ function BuildTab({ nAgents, setNAgents, generate, buildResult, distinctShifts, 
           Greedily builds weekly packages (5 days on, 2 off) from your shift types, placing each shift where it most improves coverage of the active-calls curve. The result lands as a fully editable schedule.
         </div>
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 13 }}>Number of agents (weekly packages)</span>
+          <span style={{ fontSize: 13 }}>Number of {noun}s (weekly packages)</span>
           <NumField value={nAgents} onCommit={(v) => setNAgents(Math.max(1, Math.round(v)))} />
+          {sizeToReq && <button style={nudgeBtn} onClick={sizeToReq} title="Set the package count from the weekly requirement">Size to requirement ({reqPackages})</button>}
           <button style={primaryBtn} onClick={generate}>Generate schedule</button>
         </div>
       </div>
+      {runRetime && (
+        <div style={cardStyle}>
+          <div style={hTitle}>Retime the current schedule</div>
+          <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 10 }}>
+            Keeps every shift and its type — only re-chooses start times and breaks within the rules to better fit the demand curve, honoring the schedule-stability setting. Undo available in SCHEDULE.
+          </div>
+          <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }} onClick={runRetime}>Retime schedule</button>
+          <div style={{ marginTop: 10 }}><OptResultBanner optResult={optResult && optResult.kind === "Retime" ? optResult : null} /></div>
+        </div>
+      )}
       {buildResult && (
         <div style={cardStyle}>
           <div style={hTitle}>Generated</div>
