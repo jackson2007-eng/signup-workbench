@@ -2188,16 +2188,19 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
   const aggregatedData = useMemo(() => aggregateCoverageRows(data, aggregateMin), [data, aggregateMin]);
   // Trip volume (raw event counts, summed per bucket) lives on a completely different scale
   // than the vehicle-level series — plotting it unscaled would blow out the y-axis and squash
-  // everything else flat. Rescaled here so its peak sits at ~85% of the tallest vehicle value,
-  // purely for shape comparison: a light backdrop showing where and how much demand volume
-  // grows, not a value meant to be read against the vehicle axis.
+  // everything else flat. The scale is anchored to the COARSEST resolution's peak (hourly),
+  // not the current view's own max: renormalizing per-resolution pinned every view's tallest
+  // bar to the same height, hiding the fact that an hourly bucket really holds ~12× the
+  // events of a 5-minute one. Anchored this way, bars visibly grow as the resolution coarsens
+  // — hourly peaks near 85% of the tallest vehicle value, finer views proportionally lower.
   const displayData = useMemo(() => {
     if (!showTripBar) return aggregatedData;
     const maxVeh = Math.max(1, minVeh, fleetCap || 0, ...aggregatedData.map((r) => Math.max(r.target || 0, r.sup || 0)));
-    const maxEvents = Math.max(1, ...aggregatedData.map((r) => r.events || 0));
-    const scale = (maxVeh * 0.85) / maxEvents;
+    const hourly = aggregateCoverageRows(data, 60);
+    const maxEventsHourly = Math.max(1, ...hourly.map((r) => r.events || 0));
+    const scale = (maxVeh * 0.85) / maxEventsHourly;
     return aggregatedData.map((r) => ({ ...r, tripBar: Math.round(r.events * scale * 10) / 10 }));
-  }, [aggregatedData, showTripBar, minVeh, fleetCap]);
+  }, [aggregatedData, data, showTripBar, minVeh, fleetCap]);
   // ~10 visible x-axis labels regardless of how many buckets that resolution produces
   const xInterval = Math.max(0, Math.ceil(displayData.length / 10) - 1);
   return (
