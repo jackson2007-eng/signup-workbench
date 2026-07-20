@@ -6,6 +6,7 @@ import {
 } from "recharts";
 
 import { RAW } from "./sampleData.js";
+import { useTier, hasFeature, FEATURES, UpgradeModal } from "./tier.jsx";
 
 /* ---------- constants ---------- */
 const DAYS = RAW.days;
@@ -2540,6 +2541,9 @@ export default function App({ onHome }) {
     return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   });
   useEffect(() => { localStorage.setItem("theme", theme); }, [theme]);
+  const [tier] = useTier();
+  const [showUpgrade, setShowUpgrade] = useState(null); // null | a FEATURES value
+  const gate = (feature) => { if (hasFeature(tier, feature)) return true; setShowUpgrade(feature); return false; };
   const [tab, setTab] = useState("rules");
   const [tourStep, setTourStep] = useState(null); // null = inactive; index into TOUR_STEPS
   // the tour drives the real tab state so each step spotlights the actual live element,
@@ -2681,6 +2685,7 @@ export default function App({ onHome }) {
   };
 
   const startOptimize = (mode) => {
+    if (!gate(FEATURES.OPTIMIZER)) return;
     if (optRef.current && !optRef.current.abort) return;
     const cfg = {
       mode,
@@ -2884,6 +2889,7 @@ export default function App({ onHome }) {
   }, [hdCtor, signupPeriod.start, signupPeriod.end, signupPeriod.country, signupPeriod.region]);
 
   const saveProject = () => {
+    if (!gate(FEATURES.PROJECT_FILES)) return;
     const payload = {
       v: 1, savedAt: new Date().toISOString(),
       demSource, sketch, trips, sketchMode, uploadedDem, demNormalized, board, rules, glob, spans,
@@ -2899,6 +2905,7 @@ export default function App({ onHome }) {
     URL.revokeObjectURL(a.href);
   };
   const exportBoard = () => {
+    if (!gate(FEATURES.EXPORT)) return;
     const DOW = { Sunday: "SU", Monday: "MO", Tuesday: "TU", Wednesday: "WE", Thursday: "TH", Friday: "FR", Saturday: "SA" };
     const hm = (m) => `${Math.floor(m / 60) % 24}:${String(m % 60).padStart(2, "0")}`;
     const mil = (m) => `${String(Math.floor(m / 60) % 24).padStart(2, "0")}${String(m % 60).padStart(2, "0")}`;
@@ -3170,6 +3177,7 @@ export default function App({ onHome }) {
   };
 
   const uploadDemand = (file) => {
+    if (!gate(FEATURES.UPLOAD_DATA)) return;
     const rd = new FileReader();
     rd.onload = () => {
       try {
@@ -3191,6 +3199,7 @@ export default function App({ onHome }) {
   };
 
   const uploadSignup = (file) => {
+    if (!gate(FEATURES.UPLOAD_DATA)) return;
     const isCsv = /\.csv$/i.test(file.name);
     const rd = new FileReader();
     rd.onload = () => {
@@ -3923,7 +3932,7 @@ export default function App({ onHome }) {
           </button>
           <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={exportBoard}>Export Completed Signup</button>
           <button style={nudgeBtn} onClick={saveProject}>Save project</button>
-          <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Load project</button>
+          <button style={nudgeBtn} onClick={() => { if (gate(FEATURES.PROJECT_FILES)) fileRef.current && fileRef.current.click(); }}>Load project</button>
           <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }}
             onChange={(e) => { if (e.target.files && e.target.files[0]) loadProject(e.target.files[0]); e.target.value = ""; }} />
         </div>
@@ -4410,6 +4419,7 @@ export default function App({ onHome }) {
                 )}
                 <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink, opacity: buildBusy || optRunning ? 0.5 : 1 }} disabled={buildBusy || optRunning}
                   onClick={() => {
+                    if (!gate(FEATURES.AUTO_BUILD)) return;
                     setBuildBusy(true);
                     setTimeout(() => {
                       let typeSequence = null, startShiftNumber = null;
@@ -4511,6 +4521,7 @@ export default function App({ onHome }) {
                 <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink, opacity: retimeBusy || optRunning || !baselineBoard.length ? 0.5 : 1 }}
                   disabled={retimeBusy || optRunning || !baselineBoard.length}
                   onClick={() => {
+                    if (!gate(FEATURES.OPTIMIZER)) return;
                     setRetimeBusy(true);
                     setTimeout(() => {
                       const r = retimeBoard(baselineBoard, rules, glob, DEM, spans, glob.minVeh, includePT, { stability: glob.scheduleStability });
@@ -5430,6 +5441,7 @@ export default function App({ onHome }) {
                   {singleDay > 0 && (
                     <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: "transparent" }}
                       onClick={() => {
+                        if (!gate(FEATURES.PACKAGING)) return;
                         const r = autoPackage(board, rules, glob);
                         mutate(() => r.board);
                         setSelId(null);
@@ -5441,6 +5453,7 @@ export default function App({ onHome }) {
                   <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: "transparent", opacity: refineBusy ? 0.5 : 1 }}
                     disabled={refineBusy}
                     onClick={() => {
+                      if (!gate(FEATURES.OPTIMIZER)) return;
                       setRefineBusy(true);
                       setTimeout(() => {
                         const before = eng.weekScore;
@@ -5519,11 +5532,12 @@ export default function App({ onHome }) {
                   Top ranked moves — whole-week impact
                 </div>
                 <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }}
-                  onClick={() => { setSugs(findSuggestions(board, eng, DEM, allRules, glob, spans)); setSugsStale(false); }}>
+                  onClick={() => { if (!gate(FEATURES.OPTIMIZER)) return; setSugs(findSuggestions(board, eng, DEM, allRules, glob, spans)); setSugsStale(false); }}>
                   {sugs ? "Recompute" : "Find suggestions"}
                 </button>
                 <button style={{ ...nudgeBtn, borderColor: supplyTeal, color: supplyTeal, opacity: optBusy ? 0.5 : 1 }} disabled={optBusy}
                   onClick={() => {
+                    if (!gate(FEATURES.OPTIMIZER)) return;
                     setOptBusy(true);
                     setTimeout(() => {
                       const before = eng.weekScore;
@@ -6257,6 +6271,7 @@ export default function App({ onHome }) {
           onSkip={() => setTourStep(null)}
         />
       )}
+      <UpgradeModal feature={showUpgrade} onClose={() => setShowUpgrade(null)} />
     </div>
   );
 }

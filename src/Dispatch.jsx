@@ -8,6 +8,7 @@ import {
   CoveragePriorityShapePreview, ScheduleStabilityPreview, COVERAGE_RESOLUTIONS,
 } from "./App.jsx";
 import { DISPATCH_SAMPLE } from "./dispatchSampleData.js";
+import { useTier, hasFeature, FEATURES, UpgradeModal } from "./tier.jsx";
 
 /* Dispatch Desks — a third sibling of the operator workbench, reusing the shared coverage engine
    (imported above) exactly as Call Centre Staffing does. The one thing that's genuinely different
@@ -104,6 +105,9 @@ export default function Dispatch({ onHome }) {
     localStorage.setItem("theme", theme);
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
+  const [tier] = useTier();
+  const [showUpgrade, setShowUpgrade] = useState(null); // null | a FEATURES value
+  const gate = (feature) => { if (hasFeature(tier, feature)) return true; setShowUpgrade(feature); return false; };
   const [board, setBoard] = useState(() => DISPATCH_SAMPLE.board.map(cloneSeg));
   const [rules, setRules] = useState(() => clone(DISPATCH_SAMPLE.rules));
   const [ptRules, setPtRules] = useState(() => clone(DISPATCH_SAMPLE.ptRules));
@@ -170,6 +174,7 @@ export default function Dispatch({ onHome }) {
 
   /* ---------- generate ---------- */
   const generate = () => {
+    if (!gate(FEATURES.AUTO_BUILD)) return;
     const r = generateBoard(0, Math.max(1, Math.round(nDispatchers)), rules, glob, DEM, spans,
       glob.minVeh, false, null, glob.shiftSeriesBase, {}, ptEnabled ? ptRules : {}, ptEnabled ? ptCount : 0);
     const segs = r.segs.map((s) => ({ ...cloneSeg(s), id: nextId.current++ }));
@@ -192,6 +197,7 @@ export default function Dispatch({ onHome }) {
   const useSample = () => { setOperators(clone(DISPATCH_SAMPLE.operators)); setDemSource("sample"); setUploadInfo(null); };
 
   const uploadOperators = (file) => {
+    if (!gate(FEATURES.UPLOAD_DATA)) return;
     const rd = new FileReader();
     rd.onload = () => {
       try {
@@ -222,6 +228,7 @@ export default function Dispatch({ onHome }) {
   // board — the literal vehicle-in-service curve becomes Dispatch's demand input. Flag-never-block:
   // a bad file shows an alert, never crashes, and never partially mutates state.
   const uploadSignupBoard = (file) => {
+    if (!gate(FEATURES.UPLOAD_DATA)) return;
     const rd = new FileReader();
     rd.onload = () => {
       try {
@@ -239,6 +246,7 @@ export default function Dispatch({ onHome }) {
 
   /* ---------- export / project ---------- */
   const exportSchedule = () => {
+    if (!gate(FEATURES.EXPORT)) return;
     const header = ["Shift", "Type", "Days Off", "Days Worked", "Report Time", "Break", "End"];
     const rows = [header];
     const byShift = new Map();
@@ -258,6 +266,7 @@ export default function Dispatch({ onHome }) {
     XLSX.writeFile(wb, "dispatcher-schedule.xlsx");
   };
   const saveProject = () => {
+    if (!gate(FEATURES.PROJECT_FILES)) return;
     const blob = new Blob([JSON.stringify({ kind: "dispatch", board, rules, ptRules, ptEnabled, ptCount, glob, spans, operators, demSource, typeColors }, null, 0)], { type: "application/json" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "dispatch-project.json"; a.click();
   };
@@ -494,7 +503,7 @@ export default function Dispatch({ onHome }) {
             <div style={{ fontSize: 12, color: sampleGray }}>Weekly coverage <b style={{ color: text, fontSize: 15 }}>{weekPct}%</b></div>
             <button style={primaryBtn} onClick={exportSchedule}>Export Schedule</button>
             <button style={nudgeBtn} onClick={saveProject}>Save project</button>
-            <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Load project</button>
+            <button style={nudgeBtn} onClick={() => { if (gate(FEATURES.PROJECT_FILES)) fileRef.current && fileRef.current.click(); }}>Load project</button>
             <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }}
               onChange={(e) => { if (e.target.files && e.target.files[0]) loadProject(e.target.files[0]); e.target.value = ""; }} />
             <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"
@@ -587,6 +596,7 @@ export default function Dispatch({ onHome }) {
           }} />
         )}
       </div>
+      <UpgradeModal feature={showUpgrade} onClose={() => setShowUpgrade(null)} />
     </div>
   );
 }

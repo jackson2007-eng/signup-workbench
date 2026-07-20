@@ -8,6 +8,7 @@ import {
   CoveragePriorityShapePreview, ScheduleStabilityPreview, COVERAGE_RESOLUTIONS,
 } from "./App.jsx";
 import { CALL_SAMPLE } from "./callSampleData.js";
+import { useTier, hasFeature, FEATURES, UpgradeModal } from "./tier.jsx";
 
 /* Call Centre Staffing — a lean sibling of the operator workbench. It reuses the shared coverage
    engine (imported above), scoring agents-on-shift against an Active-calls curve. Vehicle-specific
@@ -171,6 +172,9 @@ export default function CallCentre({ onHome }) {
     localStorage.setItem("theme", theme);
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
+  const [tier] = useTier();
+  const [showUpgrade, setShowUpgrade] = useState(null); // null | a FEATURES value
+  const gate = (feature) => { if (hasFeature(tier, feature)) return true; setShowUpgrade(feature); return false; };
   const [board, setBoard] = useState(() => CALL_SAMPLE.board.map(cloneSeg));
   const [rules, setRules] = useState(() => clone(CALL_SAMPLE.rules));
   const [glob, setGlob] = useState(() => clone(CALL_SAMPLE.global));
@@ -235,6 +239,7 @@ export default function CallCentre({ onHome }) {
 
   /* ---------- generate ---------- */
   const generate = () => {
+    if (!gate(FEATURES.AUTO_BUILD)) return;
     const r = generateBoard(0, Math.max(1, Math.round(nAgents)), rules, glob, DEM, spans, glob.minVeh, false, null, glob.shiftSeriesBase);
     const segs = r.segs.map((s) => ({ ...cloneSeg(s), id: nextId.current++ }));
     setHist((h) => [...h.slice(-40), board]); setFuture([]);
@@ -256,6 +261,7 @@ export default function CallCentre({ onHome }) {
   const useSample = () => { setCalls(clone(CALL_SAMPLE.calls)); setDemSource("sample"); setUploadInfo(null); setCallSummary(CALL_SAMPLE.summary || null); setArrivals(CALL_SAMPLE.arrivals || null); };
 
   const uploadCalls = (file) => {
+    if (!gate(FEATURES.UPLOAD_DATA)) return;
     const rd = new FileReader();
     rd.onload = () => {
       try {
@@ -289,6 +295,7 @@ export default function CallCentre({ onHome }) {
 
   /* ---------- export / project ---------- */
   const exportSchedule = () => {
+    if (!gate(FEATURES.EXPORT)) return;
     const header = ["Shift", "Type", "Days Off", "Days Worked", "Report Time", "Break", "End"];
     const rows = [header];
     const byShift = new Map();
@@ -308,6 +315,7 @@ export default function CallCentre({ onHome }) {
     XLSX.writeFile(wb, "agent-schedule.xlsx");
   };
   const saveProject = () => {
+    if (!gate(FEATURES.PROJECT_FILES)) return;
     const blob = new Blob([JSON.stringify({ kind: "callcentre", board, rules, glob, spans, calls, arrivals, demSource, typeColors, callSummary }, null, 0)], { type: "application/json" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "callcentre-project.json"; a.click();
   };
@@ -543,7 +551,7 @@ export default function CallCentre({ onHome }) {
             <div style={{ fontSize: 12, color: sampleGray }}>Weekly coverage <b style={{ color: text, fontSize: 15 }}>{weekPct}%</b></div>
             <button style={primaryBtn} onClick={exportSchedule}>Export Schedule</button>
             <button style={nudgeBtn} onClick={saveProject}>Save project</button>
-            <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Load project</button>
+            <button style={nudgeBtn} onClick={() => { if (gate(FEATURES.PROJECT_FILES)) fileRef.current && fileRef.current.click(); }}>Load project</button>
             <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }}
               onChange={(e) => { if (e.target.files && e.target.files[0]) loadProject(e.target.files[0]); e.target.value = ""; }} />
             <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"
@@ -630,6 +638,7 @@ export default function CallCentre({ onHome }) {
           }} />
         )}
       </div>
+      <UpgradeModal feature={showUpgrade} onClose={() => setShowUpgrade(null)} />
     </div>
   );
 }
