@@ -56,11 +56,84 @@ A tracker for the daily service report agencies already keep in Excel (modelled 
 
 **Revenue expectations (honest):** Yr 1: 3–8 agencies ($15–40k ARR, own network + one CTAA/TRB demand-response conference). Yr 2–3: 20–40 ($100–200k, references + validated-against-real-data case study). Mature niche standard: 100–200 ($500k–1M). Caveats: 3–12-month gov sales cycles, hands-on first customers, "solo tool" objection (answered by the no-data-stored architecture).
 
-**Payment/licensing plan (stateless, fits the no-backend doctrine):**
+**Tiers (added 2026-07-19)** — the free tier is a genuine planning tool, not a countdown demo; the paywall sits on automation and on taking work out of the browser, not on thinking:
+
+- **Free — Individual/Explorer.** Full Rules tab (classification, breaks, limits, scheduling-algorithm sliders — no reason to gate settings). Demand tab, sketch mode only. Shift Builder fully manual (add shift, drag, nudge, duplicate, remove). Full Coverage scoring/chart, so the free tier shows real payoff, not a teaser. Usable solo, indefinitely, for real planning — not sample-data-only.
+- **Premium — monthly/annual**, the existing fleet-size pricing table below. Everything in Free, plus: real demand-data upload, Signup Builder auto-generate, the full optimizer suite (Suggestions/Deep Optimize/Retime), Packaging tab, and — the actual trigger — **Save/Load project and Export**. Open question: bundle Call Centre/Dispatch into Premium, or sell as add-on modules once they have optimizer/Suggestions parity with the operator tool?
+- **Enterprise — custom quote.** Real multi-user accounts (phase-2 accounts work below: D1 + KV + email-link auth) so more than one planner shares live project state instead of passing JSON files around, plus procurement paperwork (security questionnaires, insurance certs, W9) and hands-on onboarding. Note the honest tradeoff: accounts mean agency data leaves the browser and lives on our infrastructure — a real departure from "nothing leaves your browser," acceptable specifically at the tier where a customer expects and pays for infrastructure, not a free upgrade to build.
+
+**Payment/licensing mechanics (stateless, fits the no-backend doctrine — Free/Premium only; Enterprise needs phase-2 accounts):**
 1. Merchant-of-record (Lemon Squeezy or Paddle) for checkout, subscriptions, tax, and native license keys — customer billing data lives entirely with them.
 2. One Worker route validates a license key against the provider's API and returns a ~7-day signed token cached in the browser; weekly re-validation, offline grace. No user database — only a signing secret in Worker env.
-3. **Trial = demo mode, not a countdown:** everything free and fully interactive on the shipped sample data; upload demand/signup, save/load project, and export gated behind the license. Maps the paywall onto the value line (playing free, operating paid) and stays procurement-friendly.
+3. Gate lives entirely client-side (Free vs. Premium feature checks), same posture as the "everything ships to the browser regardless" reality already discussed — this is a monetization/conversion gate, not a code-secrecy measure.
 4. Optional hard gate later: Worker withholds the app bundle without a valid token — real enforcement, still no customer DB. License keys become the entitlement behind phase-2 accounts when those arrive.
+
+## AI-assisted schedule import (Premium, parked — added 2026-07-19)
+
+Removes the real friction in switching to the tool: today, an agency with an existing
+roster/schedule in whatever format they already use has to manually re-key it into the
+signup template (`parseSignupWorkbook`) or the demand template (`parseDemandWorkbook`) —
+real work that costs adoption. The ask: upload *whatever document they already have* — any
+spreadsheet layout, no fixed columns — and have it auto-populate the board.
+
+**How it fits the existing architecture:** the app already tries multiple known formats
+before giving up (Call Centre's `uploadCalls` tries a raw ACD export via
+`deriveActiveCalls`, then falls back to the simple template via `parseSimpleCalls`). This
+extends that same idea to arbitrary layouts, which deterministic column-matching can't
+handle — a genuine AI extraction problem, not an exotic one. Shape: a new Worker route holds
+an LLM API key server-side (never in the browser bundle), takes the uploaded file's content,
+and returns structured JSON matching the board schema (`{shift, run, type, daysOff, days[],
+s, e, b}`). Per the app's flag-never-block doctrine, the result lands as a **draft the user
+reviews and confirms** before it touches real state — reuse the Signup Builder's existing
+"Changes since upload" diff panel pattern for the review step, just fed from an AI-extracted
+board instead of a generated one.
+
+**Tradeoffs on record, not to be glossed over when this gets built:**
+1. First feature that sends real operational data off the browser — not PII (schedules
+   aren't the personal data the no-PII doctrine protects), but a real, honest departure from
+   "nothing leaves your browser," which is currently a stated sales differentiator. Needs
+   careful wording to customers, distinct from the phase-2-accounts tradeoff already noted
+   above.
+2. Costs money per use (LLM tokens) — fits naturally as a Premium-gated feature economically
+   (same instinct as gating Save/Export), but needs real per-account usage limits, not just a
+   feature flag, or a single customer's large uploads have no cost ceiling.
+3. Won't be perfect on messy real-world documents (merged cells, inconsistent time formats,
+   agency shorthand) — the review-before-commit step is load-bearing for trust, not optional
+   polish.
+
+**Depends on:** the Free/Premium/Enterprise tier system (`src/tier.jsx`, dark-launched
+2026-07-19) actually going live — this is a Premium-tier feature, gated the same way as
+Save/Export/Auto-Build once enforcement is turned on. Needs its own scoping pass (provider
+choice, cost/rate-limit design, review-UI details) before implementation starts.
+
+## Mobile strategy (added 2026-07-19)
+
+Phone is a feeder/discovery surface, not a second editing environment. Real scheduling work
+(Shift Builder drag-editing, Signup Builder, optimizer runs) stays desktop-only for the
+foreseeable future — the dense HASTUS-inspired panels and Gantt-style drag interactions
+aren't a good fit for touch, and building a parallel mobile-editing experience isn't worth
+the effort until there's real demand for it. Landing and other marketing-facing surfaces
+should stay reasonably responsive (mostly already true — Landing.jsx is a simple card
+layout, not the dense module UI) so someone can get a sense of what the tool does from a
+phone before switching to desktop to actually use it. Standing rule: don't invest in
+touch-friendly editing for the scheduling modules without a specific reason to revisit this.
+
+## Analytics strategy (added 2026-07-19)
+
+- **Marketing-site traffic (approved, low effort):** Cloudflare Web Analytics on the public
+  site (Landing + pricing page once it exists) — cookieless, aggregate-only, no consent
+  banner needed since it doesn't track individuals across sites. Answers "which channel
+  brought this visitor" and "does the pricing page convert" without touching the "nothing
+  leaves your browser" story the modules themselves rely on.
+- **In-app usage telemetry (deliberately deferred, not a default yes):** tracking which tabs
+  or features agencies actually use inside the scheduling tools would mean the app starts
+  phoning home — a real architecture departure, same category as the AI-import tradeoff
+  above, not a small add-on to bolt on reflexively. At current revenue expectations
+  (3–8 agencies in year one, per Commercialization), direct conversation with customers
+  covers this need better than a telemetry pipeline would. Revisit if/when customer count
+  makes personal conversation stop scaling.
+- **Usage dashboard:** follows from the above — premature infrastructure for a customer
+  count that doesn't need it yet. Parked alongside phase-2 accounts, not scheduled.
 
 ## Ops / infra chores
 - Connect a real domain (replace `transit-toolkit.jackson2007.workers.dev`).

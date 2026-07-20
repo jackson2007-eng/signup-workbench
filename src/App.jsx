@@ -2362,13 +2362,15 @@ function ShapePreviewFrame({ legend, day, setDay, children, rightSlot }) {
 // (P.target — already gamma-weighted by glob.offPeakBias inside computeEngine, so it redraws
 // on every drag tick for free via the existing eng useMemo) against the day's actual current
 // supply. No separate math here — this is the exact curve the optimizer is chasing right now.
-function OffPeakShapePreview({ P, day, setDay }) {
+function OffPeakShapePreview({ P, day, setDay, baseTarget }) {
   return (
     <ShapePreviewFrame day={day} setDay={setDay} legend={[
       { color: demandAmber, label: "reshaped target (moves with the slider)" },
+      { color: "var(--muted)", label: "unweighted demand — fixed 0% reference" },
       { color: supplyTeal, label: "actual supply today" },
     ]}>
       <ShapePreviewChart layers={[
+        { values: baseTarget, color: "var(--muted)", width: 1.4, dash: "4 3", lineOpacity: 0.7 },
         { values: P.target, color: demandAmber, width: 2, area: true },
         { values: P.sup, color: supplyTeal, width: 1.8, lineOpacity: 0.85 },
       ]} />
@@ -2389,16 +2391,18 @@ const COV_PRIORITY_VALUES = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4];
 // gets lost in the noise of two nearly-identical lines. A delta chart makes the trade itself
 // the picture: shaded up where this priority adds coverage relative to today, shaded down
 // where it pulls coverage away, against a faint demand-shape backdrop for landmarks.
-function DeltaAreaChart({ delta, demandRef, width = 700, height = 168 }) {
+function DeltaAreaChart({ delta, demandRef, refDelta, width = 700, height = 168 }) {
   const padL = 30, padR = 8, padT = 8, padB = 20;
   const innerW = width - padL - padR, innerH = height - padT - padB;
   const n = delta.length;
-  const maxAbs = Math.max(1, ...delta.map((v) => Math.abs(v))) * 1.25;
+  const allVals = refDelta ? delta.concat(refDelta) : delta;
+  const maxAbs = Math.max(1, ...allVals.map((v) => Math.abs(v))) * 1.25;
   const x = (i) => padL + (i / (n - 1)) * innerW;
   const y = (v) => padT + innerH / 2 - (v / maxAbs) * (innerH / 2);
   const zeroY = y(0);
+  const linePath = (vals) => vals.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
   const areaPath = (vals) => {
-    let d = vals.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+    let d = linePath(vals);
     d += ` L${x(n - 1).toFixed(1)},${zeroY.toFixed(1)} L${x(0).toFixed(1)},${zeroY.toFixed(1)} Z`;
     return d;
   };
@@ -2420,6 +2424,7 @@ function DeltaAreaChart({ delta, demandRef, width = 700, height = 168 }) {
         );
       })}
       <path d={demandLine} fill="none" stroke={demandAmber} strokeWidth={1.2} opacity={0.35} />
+      {refDelta && <path d={linePath(refDelta)} fill="none" stroke="var(--muted)" strokeWidth={1.4} strokeDasharray="4 3" opacity={0.65} />}
       <path d={areaPath(pos)} fill={supplyTeal} opacity={0.55} />
       <path d={areaPath(neg)} fill={gapRed} opacity={0.5} />
     </svg>
@@ -2429,20 +2434,20 @@ function DeltaAreaChart({ delta, demandRef, width = 700, height = 168 }) {
 function CoveragePriorityShapePreview({ P, day, setDay, coveragePriority, previewCache }) {
   const previewSup = previewCache && previewCache[coveragePriority] ? previewCache[coveragePriority][day] : null;
   const delta = previewSup ? previewSup.map((v, i) => v - P.sup[i]) : null;
-  const shifted = delta ? delta.reduce((a, v) => a + Math.max(0, v), 0) * (5 / 60) : 0;
+  // Priority 0 (max concentration into the single biggest gap) as a fixed dashed reference,
+  // so the trend toward spreading as the slider rises stays legible even where the current
+  // position's own shape isn't moving in a simple, monotonic way.
+  const zeroSup = previewCache && previewCache[0] ? previewCache[0][day] : null;
+  const refDelta = coveragePriority !== 0 && zeroSup ? zeroSup.map((v, i) => v - P.sup[i]) : null;
   return (
     <ShapePreviewFrame day={day} setDay={setDay} legend={[
       { color: supplyTeal, label: "gains coverage at this priority" },
       { color: gapRed, label: "loses coverage at this priority" },
       { color: demandAmber, label: "demand shape (for landmarks)" },
-    ]}
-      rightSlot={previewSup && (
-        <div style={{ fontSize: 11, color: "var(--muted)" }}>
-          ≈{shifted.toFixed(1)} vehicle-hours reallocated vs. today
-        </div>
-      )}>
+      { color: "var(--muted)", label: "priority 0 — fixed reference (max concentration)" },
+    ]}>
       {previewSup ? (
-        <DeltaAreaChart delta={delta} demandRef={P.target} />
+        <DeltaAreaChart delta={delta} demandRef={P.target} refDelta={refDelta} />
       ) : (
         <div style={{ fontSize: 12, color: "var(--muted)", padding: "20px 0", textAlign: "center" }}>
           Computing retimed preview…
@@ -2490,18 +2495,11 @@ function MovementScatterChart({ points, width = 700, height = 168 }) {
 
 function ScheduleStabilityPreview({ board, scheduleStability, previewCache }) {
   const moves = previewCache && previewCache[scheduleStability] ? previewCache[scheduleStability] : null;
-  const moved = moves ? moves.filter((m) => m.moveMin !== 0).length : 0;
-  const avgMove = moves && moves.length ? moves.reduce((a, m) => a + Math.abs(m.moveMin), 0) / moves.length : 0;
   return (
     <ShapePreviewFrame legend={[
       { color: targetInk, label: "shift moved" },
       { color: supplyTeal, label: "shift kept in place" },
-    ]}
-      rightSlot={moves && (
-        <div style={{ fontSize: 11, color: "var(--muted)" }}>
-          {moved} of {moves.length} shifts move · {avgMove.toFixed(1)} min avg
-        </div>
-      )}>
+    ]}>
       {moves ? (
         <MovementScatterChart points={moves} />
       ) : (
@@ -3238,6 +3236,10 @@ export default function App({ onHome }) {
   const holidayCountForDay = useMemo(() => holidays.filter((h) => h.runsAs === day).length, [holidays, day]);
   const ftCov = useMemo(() => buildSupply(board), [board]);
   const eng = useMemo(() => computeEngine(DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime]);
+  // Fixed 0%-bias reference for the off-peak preview's ghost line — deliberately excludes
+  // glob.offPeakBias from its deps so it doesn't recompute while dragging that slider; it's
+  // the one thing on the chart that's supposed to hold still.
+  const engBase0 = useMemo(() => computeEngine(DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, 0, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime]);
   const base = useMemo(() => computeEngine(DEM, buildSupply(baselineBoard), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, baselineBoard, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime]);
   const recycleViol = useMemo(() => recycleViolations(board, glob), [board, glob.recycleEnabled, glob.recycleTurnaround, glob.recycleWindow, glob.recycleCount]);
   const P = eng.perDay[day];
@@ -5954,7 +5956,7 @@ export default function App({ onHome }) {
                   </div>
                 </div>
                 <CoveragePriorityShapePreview P={P} day={day} setDay={setDay} coveragePriority={glob.coveragePriority ?? 0} previewCache={covPreviewCache} />
-                <OffPeakShapePreview P={P} day={day} setDay={setDay} />
+                <OffPeakShapePreview P={P} day={day} setDay={setDay} baseTarget={engBase0.perDay[day].target} />
                 <ScheduleStabilityPreview board={board} scheduleStability={glob.scheduleStability ?? 3} previewCache={stabPreviewCache} />
                 <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10, lineHeight: 1.6 }}>
                   <b>Coverage priority</b> spreads resources across busy times: 0 sends everything to the single biggest gap first; higher (0.5–2) spreads resources more evenly across all under-served times before deepening any one gap.<br /><br />
