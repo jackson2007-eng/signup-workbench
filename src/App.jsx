@@ -2409,11 +2409,14 @@ const COV_PRIORITY_VALUES = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4];
 // gets lost in the noise of two nearly-identical lines. A delta chart makes the trade itself
 // the picture: shaded up where this priority adds coverage relative to today, shaded down
 // where it pulls coverage away, against a faint demand-shape backdrop for landmarks.
-function DeltaAreaChart({ delta, demandRef, width = 700, height = 168 }) {
+function DeltaAreaChart({ delta, demandRef, fixedMax, width = 700, height = 168 }) {
   const padL = 30, padR = 8, padT = 8, padB = 20;
   const innerW = width - padL - padR, innerH = height - padT - padB;
   const n = delta.length;
-  const maxAbs = Math.max(1, ...delta.map((v) => Math.abs(v))) * 1.25;
+  // fixedMax pins the scale to the largest delta the slider can ever produce, same reasoning
+  // as ShapePreviewChart's own fixedMax — otherwise a growing peak/valley drags the scale up
+  // with it and the pixel height plateaus before the slider's real end.
+  const maxAbs = (fixedMax ?? Math.max(1, ...delta.map((v) => Math.abs(v)))) * 1.25;
   const x = (i) => padL + (i / (n - 1)) * innerW;
   const y = (v) => padT + innerH / 2 - (v / maxAbs) * (innerH / 2);
   const zeroY = y(0);
@@ -2463,25 +2466,23 @@ function intensifyTarget(target, coveragePriority) {
 }
 
 function CoveragePriorityShapePreview({ P, day, setDay, coveragePriority }) {
+  // Diverging delta from the unweighted baseline: positive (green, up) where this priority
+  // intensifies coverage above today's demand shape — the peaks — negative (red, down) where
+  // it recedes — the valleys. Pinned to the max delta at priority 4 so the shading's own
+  // growth stays visible the whole way across the slider instead of the scale quietly
+  // rescaling to hide it.
   const intensified = intensifyTarget(P.target, coveragePriority);
-  // Pin the vertical scale to the tallest the peak can ever get (gamma at its max, priority 4)
-  // rather than letting it auto-scale to the current draw — otherwise the growing peak drags
-  // its own axis up with it and the pixel height plateaus well before the slider's real end.
+  const delta = intensified.map((v, i) => v - P.target[i]);
   const maxIntensity = intensifyTarget(P.target, 4);
-  const fixedMax = Math.max(1, ...P.target, ...maxIntensity, ...P.sup);
+  const maxDelta = maxIntensity.map((v, i) => v - P.target[i]);
+  const fixedMax = Math.max(1, ...maxDelta.map((v) => Math.abs(v)));
   return (
     <ShapePreviewFrame day={day} setDay={setDay} legend={[
-      { color: demandAmber, label: "intensified target (moves with the slider)" },
-      { color: "var(--muted)", label: "demand shape — fixed 0 reference" },
-      { color: supplyTeal, label: "actual supply today" },
+      { color: supplyTeal, label: "intensifies here (peaks)" },
+      { color: gapRed, label: "recedes here (valleys)" },
+      { color: demandAmber, label: "demand shape (for landmarks)" },
     ]}>
-      <ShapePreviewChart fixedMax={fixedMax} layers={[
-        { values: P.target, color: "var(--muted)", width: 1.4, dash: "4 3", lineOpacity: 0.7,
-          peakMarker: true, peakWidth: 2.5, peakOpacity: 0.5 },
-        { values: intensified, color: demandAmber, width: 2, area: true,
-          peakMarker: true, peakWidth: 4, peakOpacity: 0.95 },
-        { values: P.sup, color: supplyTeal, width: 1.8, lineOpacity: 0.85 },
-      ]} />
+      <DeltaAreaChart delta={delta} demandRef={P.target} fixedMax={fixedMax} />
     </ShapePreviewFrame>
   );
 }
