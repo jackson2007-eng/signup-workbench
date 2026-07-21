@@ -162,9 +162,10 @@ exception days for now; phase strip yes but NO guided tour.
 - **Phase 4 — Full Packaging tab** both siblings (grid, auto-package, per-day refine).
   SHIPPED as a shared PackagingTab exported from CallCentre.jsx.
 - **Phase 5 — Editing depth + chrome**: phase strip SHIPPED (shared PhaseStrip, Setup →
-  Build → Review → Handoff, done/pending tints). DEFERRED to follow-up passes: the
-  operator-style week-strip/3-state package editor in the siblings, redo for the operator
-  module, and the background Optimization monitor port (same deferral as Phase 2).
+  Build → Review → Handoff, done/pending tints). Redo exists in all three modules
+  (the earlier deferral note was stale). STILL DEFERRED: the operator-style week-strip/
+  3-state package editor in the siblings, the background Optimization monitor port, and
+  the guided-setup wizard for the operator module (needs trips/fleet mapping).
 - **Follow-up (2026-07-20, SHIPPED)**: Guided setup wizard in both siblings — a shared
   4-step SetupWizard (demand pattern, service hours, headcount, shift kinds) that
   pre-fills Rules classifications, hours of operation, Build counts, part-time, and a
@@ -178,8 +179,8 @@ exception days for now; phase strip yes but NO guided tour.
   shifts must fit) or builds a classification from the observed times (windows ±1h,
   grid-snapped, modal work value); runs automatically at schedule upload, and a Rules-tab
   banner + "Auto-match & build rules" button handles already-loaded projects. Retime card
-  warns when unrecognized codes are present. Operator-module wiring of reconcileTypes is a
-  possible follow-up (its signup importer already auto-classifies typeless rows).
+  warns when unrecognized codes are present. 2026-07-21: the operator module now has the
+  same Rules-tab banner + button, so all three modules are aligned.
 - **Follow-up (2026-07-20, SHIPPED)**: operator-style sketch experience in both siblings'
   Demand tabs (day-keyed sketch/peaks, Split-the-week modes, Start-from presets, per-group
   peak inputs, persisted in project files) and click-to-rename type codes in both siblings'
