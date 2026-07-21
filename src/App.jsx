@@ -2242,22 +2242,16 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
     return rows;
   }, [P, day, avgCycleTime, demandShare, fleetCap, extraSeries, onDutyCounts]);
   const aggregatedData = useMemo(() => aggregateCoverageRows(data, aggregateMin), [data, aggregateMin]);
-  // Trip volume gets its OWN right-hand axis, plotted raw — no rescaling to the vehicle
-  // axis. Earlier versions squeezed the bar onto the vehicle scale, which made its height
-  // unreadable against the axis numbers (300 events rendered at "60" on the vehicle line).
-  // The events axis domain is anchored to the COARSEST resolution's peak (hourly) and held
-  // fixed across resolutions, so the bar reads its true value on its own axis AND visibly
-  // grows as buckets coarsen: an hourly bucket's ~12× events over a 5-minute one shows as a
-  // ~12× taller bar, reaching the axis number the tooltip reports.
+  // Trip volume shares the ONE left axis with the vehicle series, plotted raw. The axis
+  // auto-scales to the tallest series at the CURRENT resolution, so coarsening the buckets
+  // (5 min → hourly) raises the left-axis counts with the trip totals — and the vehicle
+  // lines, staying at their absolute values, visibly sink toward the baseline as demand
+  // counts climb. (An earlier design gave events their own fixed right-hand axis; replaced
+  // 2026-07-21 at the user's request for a single shared count.)
   const displayData = useMemo(() => {
     if (!showTripBar) return aggregatedData;
     return aggregatedData.map((r) => ({ ...r, tripBar: r.events }));
   }, [aggregatedData, showTripBar]);
-  const eventsAxisMax = useMemo(() => {
-    if (!showTripBar) return 0;
-    const hourly = aggregateCoverageRows(data, 60);
-    return Math.ceil(Math.max(1, ...hourly.map((r) => r.events || 0)) * 1.05);
-  }, [data, showTripBar]);
   // ~10 visible x-axis labels regardless of how many buckets that resolution produces
   const xInterval = Math.max(0, Math.ceil(displayData.length / 10) - 1);
   return (
@@ -2273,10 +2267,6 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         <CartesianGrid stroke="#EBF0F2" vertical={false} />
         <XAxis dataKey="time" tick={{ fontSize: 10.5 }} interval={xInterval} tickLine={false} />
         <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-        {showTripBar && (
-          <YAxis yAxisId="events" orientation="right" domain={[0, eventsAxisMax]}
-            tick={{ fontSize: 11, fill: demandAmber }} tickLine={false} axisLine={false} />
-        )}
         <Tooltip
           formatter={(v, name, item) => {
             // the gap Area's drawing value is the TARGET height (so the red fill spans
@@ -2307,7 +2297,7 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
           contentStyle={{ fontSize: 12, border: "1px solid var(--border-light)" }} />
         <Legend wrapperStyle={{ fontSize: 12 }} />
         {showTripBar && (
-          <Area type="stepAfter" yAxisId="events" dataKey="tripBar" name="Trip volume (this period)" stroke="none" fill={demandAmber} fillOpacity={0.28} tooltipType="none" isAnimationActive={false} />
+          <Area type="stepAfter" dataKey="tripBar" name="Trip volume (this period)" stroke="none" fill={demandAmber} fillOpacity={0.28} tooltipType="none" isAnimationActive={false} />
         )}
         <Area type="stepAfter" dataKey="target" name={targetName} stroke={targetInk} strokeWidth={1.5} fill="#233746" fillOpacity={0.07} tooltipType={slim ? "none" : undefined} />
         <Area type="stepAfter" dataKey="gap" name="Gap" stroke="none" fill={gapRed} fillOpacity={0.22} legendType="none" />
