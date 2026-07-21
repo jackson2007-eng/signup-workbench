@@ -807,7 +807,7 @@ export default function CallCentre({ onHome }) {
         {tab === "rules" && <RulesTab {...{ rules, setRule, glob, setGlob, spans, setSpans, tColor, board, day, setDay, P, ptRules, setPtRules, ptEnabled, setPtEnabled, newPtType, setNewPtType, allRules, renameType, unknownTypes, runReconcile, reconcileResult }} />}
         {tab === "import" && <ImportTab {...{ scheduleSource, scheduleUpload, uploadSchedule, downloadScheduleTemplate, resetToBaseline, changedCount, baselineBoard, scheduleFileRef, noun: "agent" }} />}
         {tab === "suggest" && <SuggestTab {...{ sugs, findSugs, applySug, runDeep, runRefine, optResult, tColor, noun: "agent" }} />}
-        {tab === "compare" && <CompareTab {...{ boardDiff, changedCount, scheduleSource, eng, baseEng, tColor, noun: "agent" }} />}
+        {tab === "compare" && <CompareTab {...{ boardDiff, changedCount, scheduleSource, eng, baseEng, tColor, noun: "agent", board, baselineBoard, day }} />}
         {tab === "demand" && <DemandTab {...{ day, calls, arrivals, showArrivals, setShowArrivals, demSource, uploadInfo, callSummary, sketch, sketchPeaks, sketchMode, setSketchMode, curveTab, setCurveTab, activeGroup, repDay, setGroupSketch, setGroupPeak, applySketch, useSample, uploadCalls, downloadTemplate, P }} />}
         {tab === "build" && <BuildTab {...{ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor, sizeToReq, reqPackages, runRetime, optResult, noun: "agent", ptEnabled, ptCount, setPtCount, unknownTypes }} />}
         {tab === "pack" && <PackagingTab {...{ board, packageIssues, tColor, runAutoPackage, runRefine, optResult, noun: "agent" }} />}
@@ -911,7 +911,40 @@ export function ImportTab({ scheduleSource, scheduleUpload, uploadSchedule, down
 }
 
 /* ================= COMPARE ================= */
-export function CompareTab({ boardDiff, changedCount, scheduleSource, eng, baseEng, tColor, noun }) {
+export function CompareTab({ boardDiff, changedCount, scheduleSource, eng, baseEng, tColor, noun, board, baselineBoard, day }) {
+  // Ghost gantt (ported from the operator tool's Compare): one row per shift for the viewed
+  // day, matched by SHIFT NUMBER — the baseline draws as a dashed outline behind the solid
+  // working bar, so every move reads as "was there, now here".
+  const [changedOnly, setChangedOnly] = useState(false);
+  const pctPos = (m) => ((Math.min(Math.max(m, T0), T1) - T0) / (T1 - T0)) * 100;
+  const sgn = (v) => (v > 0 ? `+${v}` : `${v}`);
+  const dayShifts = [...new Set([
+    ...baselineBoard.filter((s) => s.days.includes(day)).map((s) => s.shift),
+    ...board.filter((s) => s.days.includes(day)).map((s) => s.shift),
+  ])].sort((a, b) => a - b);
+  const ghostRows = dayShifts.map((sh) => {
+    const orig = baselineBoard.find((s) => s.shift === sh && s.days.includes(day)) || null;
+    const cur = board.find((s) => s.shift === sh && s.days.includes(day)) || null;
+    let status = "same";
+    const parts = [];
+    if (orig && !cur) status = "removed";
+    else if (!orig && cur) status = "added";
+    else if (orig && cur) {
+      if (cur.s !== orig.s) parts.push(`start ${sgn(cur.s - orig.s)}m`);
+      if (cur.e !== orig.e) parts.push(`end ${sgn(cur.e - orig.e)}m`);
+      if (!orig.b && cur.b) parts.push("break added");
+      else if (orig.b && !cur.b) parts.push("break removed");
+      else if (orig.b && cur.b) {
+        if (cur.b[0] !== orig.b[0]) parts.push(`brk ${sgn(cur.b[0] - orig.b[0])}m`);
+        const dl = (cur.b[1] - cur.b[0]) - (orig.b[1] - orig.b[0]);
+        if (dl !== 0) parts.push(`brk len ${sgn(dl)}m`);
+      }
+      if (cur.type !== orig.type) parts.push(`${orig.type}\u2192${cur.type}`);
+      if (parts.length) status = "changed";
+    }
+    return { sh, orig, cur, status, delta: parts.join(" \u00b7 ") };
+  });
+  const visibleGhost = changedOnly ? ghostRows.filter((r) => r.status !== "same") : ghostRows;
   const fmtB = (b) => (b ? `${fmt(b[0])}–${fmt(b[1])}` : "no break");
   const rowStyle = { borderTop: "1px solid var(--border-light)", fontSize: 12.5 };
   const cur = Math.round(eng.weekScore * 1000) / 10;
@@ -919,6 +952,80 @@ export function CompareTab({ boardDiff, changedCount, scheduleSource, eng, baseE
   const delta = Math.round((cur - base) * 10) / 10;
   return (
     <div>
+      <div style={cardStyle}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+          <div style={hTitle}>{day} — baseline (dashed) vs working schedule (solid)</div>
+          <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+            <input type="checkbox" checked={changedOnly} onChange={(e) => setChangedOnly(e.target.checked)} />
+            Changed shifts only
+          </label>
+          <div style={{ marginLeft: "auto", fontSize: 11, color: sampleGray }}>{fmt(T0)} — {fmt(T1)} · switch days with the paddles above</div>
+        </div>
+        <div style={{ display: "flex", gap: 6, margin: "6px 0 2px" }}>
+          <div style={{ width: 74, flex: "none" }} />
+          <div style={{ position: "relative", flex: 1, height: 14 }}>
+            {[6, 8, 10, 12, 14, 16, 18, 20, 22, 24].map((h) => (
+              <div key={h} style={{ position: "absolute", left: `${pctPos(h * 60)}%`, fontSize: 9.5, color: sampleGray, transform: "translateX(-50%)" }}>{h}</div>
+            ))}
+          </div>
+          <div style={{ width: 128, flex: "none" }} />
+        </div>
+        {visibleGhost.length === 0 && (
+          <div style={{ fontSize: 13, color: sampleGray, padding: "12px 4px" }}>
+            {changedOnly ? `No shifts changed on ${day} vs the baseline.` : `No shifts work ${day}.`}
+          </div>
+        )}
+        <div style={{ maxHeight: 480, overflowY: "auto" }}>
+          {visibleGhost.map(({ sh, orig, cur, status, delta }) => {
+            const show = cur || orig;
+            return (
+              <div key={sh} style={{ display: "flex", gap: 6, alignItems: "center", padding: "3px 0", opacity: status === "same" && !changedOnly ? 0.55 : 1 }}>
+                <div style={{ width: 74, flex: "none", fontSize: 11.5, fontVariantNumeric: "tabular-nums", color: status === "removed" ? gapRed : text, fontWeight: status !== "same" ? 700 : 400 }}>
+                  {sh} {show.type}
+                </div>
+                <div style={{ position: "relative", flex: 1, height: 14, background: "var(--track-bg, var(--tint-neutral-b))", borderRadius: 2 }}>
+                  {[360, 600, 840, 1080, 1320].map((m) => (
+                    <div key={m} style={{ position: "absolute", left: `${pctPos(m)}%`, top: 0, bottom: 0, width: 1, background: "var(--border)" }} />
+                  ))}
+                  {orig && (
+                    <div title={`was ${fmt(orig.s)}\u2013${fmt(orig.e)}${orig.b ? ` (break ${fmt(orig.b[0])}\u2013${fmt(orig.b[1])})` : ""}`} style={{
+                      position: "absolute", left: `${pctPos(orig.s)}%`, width: `${pctPos(Math.min(orig.e, T1)) - pctPos(orig.s)}%`,
+                      top: 0, height: 14, borderRadius: 2, background: status === "removed" ? "var(--tint-red, #F6E4E1)" : "transparent",
+                      border: `1.5px dashed ${tColor(orig.type)}`, boxSizing: "border-box", opacity: 0.85, pointerEvents: "none",
+                    }} />
+                  )}
+                  {orig && orig.b && (
+                    <div style={{
+                      position: "absolute", left: `${pctPos(orig.b[0])}%`, width: `${pctPos(orig.b[1]) - pctPos(orig.b[0])}%`,
+                      top: 0, height: 14, border: "1.5px dashed #AEBAC0", boxSizing: "border-box", opacity: 0.7, pointerEvents: "none",
+                    }} />
+                  )}
+                  {cur && (
+                    <div title={`now ${fmt(cur.s)}\u2013${fmt(cur.e)}${cur.b ? ` (break ${fmt(cur.b[0])}\u2013${fmt(cur.b[1])})` : ""}`} style={{
+                      position: "absolute", left: `${pctPos(cur.s)}%`, width: `${pctPos(Math.min(cur.e, T1)) - pctPos(cur.s)}%`,
+                      top: 3, height: 8, borderRadius: 2, background: tColor(cur.type), opacity: 0.95,
+                    }} />
+                  )}
+                  {cur && cur.b && (
+                    <div style={{
+                      position: "absolute", left: `${pctPos(cur.b[0])}%`, width: `${pctPos(cur.b[1]) - pctPos(cur.b[0])}%`,
+                      top: 3, height: 8, background: "repeating-linear-gradient(45deg,#fff,#fff 2px,#AEBAC0 2px,#AEBAC0 4px)",
+                    }} />
+                  )}
+                </div>
+                <div title={delta || status} style={{ width: 128, flex: "none", fontSize: 10.5, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                  color: status === "removed" ? gapRed : status === "added" ? supplyTeal : status === "changed" ? demandAmber : sampleGray }}>
+                  {status === "removed" ? "removed" : status === "added" ? "new" : status === "changed" ? delta : "unchanged"}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ fontSize: 11, color: sampleGray, marginTop: 8 }}>
+          Dashed outline = the shift as it was in the baseline · solid bar = the working schedule · hatched = break. Shifts are matched by shift number; a generated-from-scratch schedule therefore shows every baseline shift as removed and the new ones as added.
+        </div>
+      </div>
+
       <div style={cardStyle}>
         <div style={hTitle}>Working schedule vs. {scheduleSource === "uploaded" ? "uploaded baseline" : "sample baseline"}</div>
         <div style={{ display: "flex", gap: 24, flexWrap: "wrap", fontSize: 13, marginBottom: 10 }}>

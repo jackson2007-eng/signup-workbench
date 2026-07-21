@@ -753,7 +753,7 @@ export default function Dispatch({ onHome }) {
         )}
         {tab === "import" && <ImportTab {...{ scheduleSource, scheduleUpload, uploadSchedule, downloadScheduleTemplate, resetToBaseline, changedCount, baselineBoard, scheduleFileRef, noun: "dispatcher" }} />}
         {tab === "suggest" && <SuggestTab {...{ sugs, findSugs, applySug, runDeep, runRefine, optResult, tColor, noun: "dispatcher" }} />}
-        {tab === "compare" && <CompareTab {...{ boardDiff, changedCount, scheduleSource, eng, baseEng, tColor, noun: "dispatcher" }} />}
+        {tab === "compare" && <CompareTab {...{ boardDiff, changedCount, scheduleSource, eng, baseEng, tColor, noun: "dispatcher", board, baselineBoard, day }} />}
         {tab === "pack" && <PackagingTab {...{ board, packageIssues, tColor, runAutoPackage, runRefine, optResult, noun: "dispatcher" }} />}
         {tab === "demand" && <DemandTab {...{ day, operators, demSource, uploadInfo, sketch, sketchPeaks, sketchMode, setSketchMode, curveTab, setCurveTab, activeGroup, repDay, setGroupSketch, setGroupPeak, applySketch, useSample, uploadOperators, uploadSignupBoard, downloadTemplate, P }} />}
         {tab === "build" && <BuildTab {...{ nDispatchers, setNDispatchers, generate, buildResult, distinctShifts, flagCount, tColor, ptEnabled, sizeToReq, reqPackages, runRetime, optResult, unknownTypes }} />}
