@@ -3741,6 +3741,28 @@ export default function App({ onHome }) {
     setHist([]); setFuture([]); // old snapshots reference the old code; undoing into them would strand segments on a type that no longer exists
     return true;
   };
+  // Unknown-code reconciliation (parity with Call Centre/Dispatch): give codes not defined
+  // in Rules a home — match each to an existing classification whose windows legally fit
+  // every run of that code, else build a classification from the observed times — so
+  // Retime and the optimizers stop passing those runs through untouched.
+  const unknownTypes = useMemo(() => {
+    const m = new Map();
+    for (const sg of board) if (!allRules[sg.type]) m.set(sg.type, (m.get(sg.type) || 0) + 1);
+    return [...m.entries()];
+  }, [board, allRules]);
+  const [reconcileResult, setReconcileResult] = useState(null);
+  const runReconcile = () => {
+    const r = reconcileTypes(board, rules, glob);
+    if (!r) return;
+    setRules(r.rules);
+    mutate(() => r.board.map(cloneSeg));
+    if (r.matched.length) setBaselineBoard((b) => b.map((sg) => {
+      const hit = r.matched.find(([from]) => from === sg.type);
+      return hit ? { ...cloneSeg(sg), type: hit[1] } : sg;
+    }));
+    setReconcileResult({ matched: r.matched, built: r.built });
+    setSugs(null);
+  };
   const duplicateSel = () => {
     if (!sel) return;
     const maxShift = Math.max(...board.map((s) => s.shift));
@@ -4223,7 +4245,7 @@ export default function App({ onHome }) {
                     {signupUploadResult.exceptionDates > 0 && `${signupUploadResult.exceptionRows} exception-day shift row(s) across ${signupUploadResult.exceptionDates} date(s) were imported into Exception days (Coverage tab) — any existing custom schedule for those dates was overwritten. `}
                     {signupUploadResult.dateSpecificSkipped > 0 && `${signupUploadResult.dateSpecificSkipped} date-specific relief row(s) skipped (not part of the recurring weekly pattern). `}
                     {signupUploadResult.footerRowsSkipped > 0 && `${signupUploadResult.footerRowsSkipped} row(s) skipped (no valid shift number or times). `}
-                    {signupUploadResult.unrecognizedTypes.length > 0 && `Unrecognized shift type(s) kept as-is: ${signupUploadResult.unrecognizedTypes.join(", ")} — review in Rules.`}
+                    {signupUploadResult.unrecognizedTypes.length > 0 && `Unrecognized shift type(s) kept as-is: ${signupUploadResult.unrecognizedTypes.join(", ")} — the optimizers will skip them; use "Auto-match & build rules" on the Rules tab to give them classifications.`}
                   </>}
                 </div>
               )}
@@ -5714,6 +5736,22 @@ export default function App({ onHome }) {
                 Reset to defaults
               </button>
             </div>
+
+            {unknownTypes.length > 0 && (
+              <div style={{ background: "var(--tint-amber-a, rgba(214,138,0,.10))", border: `1px solid ${demandAmber}`, padding: "10px 14px", marginBottom: 14, fontSize: 12.5, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <span>
+                  <b>{unknownTypes.reduce((a, x) => a + x[1], 0)} run{unknownTypes.reduce((a, x) => a + x[1], 0) === 1 ? "" : "s"} use codes not defined in Rules</b> ({unknownTypes.map(([t, n]) => `${t}\u00d7${n}`).join(", ")}) — Retime and the optimizers leave them untouched until they have a classification.
+                </span>
+                <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", border: `1px solid ${supplyTeal}` }} onClick={runReconcile}>Auto-match & build rules</button>
+              </div>
+            )}
+            {reconcileResult && unknownTypes.length === 0 && (
+              <div style={{ background: "var(--tint-teal-a, rgba(15,123,122,.08))", border: `1px solid ${supplyTeal}`, padding: "8px 12px", marginBottom: 14, fontSize: 12.5 }}>
+                {reconcileResult.matched.length > 0 && <>Matched to existing rules: {reconcileResult.matched.map(([a, b]) => `${a} \u2192 ${b}`).join(", ")}. </>}
+                {reconcileResult.built.length > 0 && <>Built from the run times: <b>{reconcileResult.built.join(", ")}</b> — windows are the observed range ±1h; review and tighten below. </>}
+                The optimizers can now work these runs.
+              </div>
+            )}
 
             {/* shift types */}
             <div data-tour="rules-classification" style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14, overflowX: "auto" }}>
