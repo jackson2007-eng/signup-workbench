@@ -6,6 +6,7 @@ import {
   findSuggestions, parseSignupWorkbook, retimeBoard, deepOptimize, refinePerDay, packageInfo, autoPackage,
   TimeField, NumField, Nudge, Stat, CoverageChart, Sketcher, DeltaAreaChart,
   CoveragePriorityShapePreview, ScheduleStabilityPreview, COVERAGE_RESOLUTIONS,
+  TPL, SKETCH_GROUPS, SKETCH_MODE_LABELS,
 } from "./App.jsx";
 import { ImportTab, CompareTab, SuggestTab, OptResultBanner, PhaseStrip, PackagingTab } from "./CallCentre.jsx";
 import { DISPATCH_SAMPLE } from "./dispatchSampleData.js";
@@ -115,8 +116,11 @@ export default function Dispatch({ onHome }) {
   const [selId, setSelId] = useState(null);
   const [nDispatchers, setNDispatchers] = useState(10);
   const [buildResult, setBuildResult] = useState(null);
-  const [sketchRaw, setSketchRaw] = useState(() => [...DEFAULT_SKETCH]);
-  const [peakOps, setPeakOps] = useState(30);
+  // Day-keyed sketch + peak, grouped by sketchMode — same model as the operator Demand tab.
+  const [sketch, setSketch] = useState(() => { const o = {}; for (const d of DAYS) o[d] = [...DEFAULT_SKETCH]; return o; });
+  const [sketchPeaks, setSketchPeaks] = useState(() => { const o = {}; for (const d of DAYS) o[d] = d === "Saturday" ? 15 : d === "Sunday" ? 13 : 30; return o; });
+  const [sketchMode, setSketchMode] = useState("weekdaySatSun");
+  const [curveTab, setCurveTab] = useState("Weekday");
   const [hist, setHist] = useState([]);
   const [future, setFuture] = useState([]);
   const [coverageResolution, setCoverageResolution] = useState(5); // minutes per chart bucket
@@ -204,14 +208,25 @@ export default function Dispatch({ onHome }) {
 
   /* ---------- demand load ---------- */
   const applySketch = () => {
-    const wk = sketchToOperators(sketchRaw, peakOps);
     const o = {};
-    for (const d of DAYS) {
-      const f = d === "Saturday" ? 0.5 : d === "Sunday" ? 0.45 : 1;
-      o[d] = wk.map((v) => Math.round(v * f * 100) / 100);
-    }
+    for (const d of DAYS) o[d] = sketchToOperators(sketch[d], sketchPeaks[d]);
     setOperators(o); setDemSource("sketched"); setUploadInfo(null);
   };
+  // The active sketch group is resolved defensively every render (rather than synced via an
+  // effect) so a curveTab left over from a previous sketchMode never produces an invalid lookup.
+  const activeGroup = SKETCH_GROUPS[sketchMode].find((g) => g.key === curveTab) || SKETCH_GROUPS[sketchMode][0];
+  const repDay = activeGroup.days[0];
+  const setGroupSketch = (fn) => setSketch((s) => {
+    const v = typeof fn === "function" ? fn(s[repDay]) : fn;
+    const next = { ...s };
+    for (const d of activeGroup.days) next[d] = [...v];
+    return next;
+  });
+  const setGroupPeak = (v) => setSketchPeaks((t) => {
+    const next = { ...t };
+    for (const d of activeGroup.days) next[d] = v;
+    return next;
+  });
   const useSample = () => { setOperators(clone(DISPATCH_SAMPLE.operators)); setDemSource("sample"); setUploadInfo(null); };
 
   const uploadOperators = (file) => {
@@ -309,6 +324,21 @@ export default function Dispatch({ onHome }) {
 
   /* ---------- optimizer tools (Suggestions tab + Retime) ---------- */
   const [sugs, setSugs] = useState(null);
+  // Rename a full-time type code — the rules key, every shift on the board and baseline, and
+  // its color all follow along, same as the operator tool. Undo history is cleared because old
+  // snapshots would strand dispatcher shifts on a code that no longer exists.
+  const renameType = (oldCode, newCodeRaw) => {
+    const newCode = String(newCodeRaw || "").toUpperCase().trim();
+    if (!newCode || newCode === oldCode || allRules[newCode]) return false;
+    setRules((old) => { const next = {}; for (const k of Object.keys(old)) next[k === oldCode ? newCode : k] = old[k]; return next; });
+    const remap = (sg) => (sg.type === oldCode ? { ...cloneSeg(sg), type: newCode } : sg);
+    setBoard((b) => b.map(remap));
+    setBaselineBoard((b) => b.map(remap));
+    setTypeColors((tc) => { const n = { ...tc }; n[newCode] = n[oldCode] || DEFAULT_TCOLOR; delete n[oldCode]; return n; });
+    setSugs(null);
+    setHist([]); setFuture([]);
+    return true;
+  };
   const [optResult, setOptResult] = useState(null);
   const scoreOf = (b) => computeEngine(DEM, buildSupply(b), false, glob.minVeh, spans, 0, glob.offPeakBias, glob.coveragePriority, 0, 0, glob).weekScore;
   const findSugs = () => setSugs(findSuggestions(board, eng, DEM, allRules, glob, spans));
@@ -392,7 +422,7 @@ export default function Dispatch({ onHome }) {
     XLSX.writeFile(wb, "dispatcher-schedule.xlsx");
   };
   const saveProject = () => {
-    const blob = new Blob([JSON.stringify({ kind: "dispatch", board, baselineBoard, scheduleSource, rules, ptRules, ptEnabled, ptCount, glob, spans, operators, demSource, typeColors }, null, 0)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ kind: "dispatch", board, baselineBoard, scheduleSource, rules, ptRules, ptEnabled, ptCount, glob, spans, sketch, sketchPeaks, sketchMode, operators, demSource, typeColors }, null, 0)], { type: "application/json" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "dispatch-project.json"; a.click();
   };
   const loadProject = (file) => {
@@ -406,6 +436,9 @@ export default function Dispatch({ onHome }) {
         if (p.ptRules) setPtRules(p.ptRules);
         setPtEnabled(!!p.ptEnabled);
         setPtCount(p.ptCount || 0);
+        if (p.sketch) setSketch(p.sketch);
+        if (p.sketchPeaks) setSketchPeaks(p.sketchPeaks);
+        if (p.sketchMode) setSketchMode(p.sketchMode);
         if (p.glob) setGlob({ ...DISPATCH_SAMPLE.glob, ...p.glob });
         if (p.spans) setSpans(p.spans);
         if (p.operators) { setOperators(p.operators); setDemSource(p.demSource || "uploaded"); }
@@ -683,7 +716,7 @@ export default function Dispatch({ onHome }) {
         {tab === "rules" && (
           <RulesTab {...{
             rules, setRule, glob, setGlob, spans, setSpans, tColor,
-            ptRules, setPtRules, ptEnabled, setPtEnabled, newPtType, setNewPtType, allRules, board,
+            ptRules, setPtRules, ptEnabled, setPtEnabled, newPtType, setNewPtType, allRules, board, renameType,
             day, setDay, P,
           }} />
         )}
@@ -691,7 +724,7 @@ export default function Dispatch({ onHome }) {
         {tab === "suggest" && <SuggestTab {...{ sugs, findSugs, applySug, runDeep, runRefine, optResult, tColor, noun: "dispatcher" }} />}
         {tab === "compare" && <CompareTab {...{ boardDiff, changedCount, scheduleSource, eng, baseEng, tColor, noun: "dispatcher" }} />}
         {tab === "pack" && <PackagingTab {...{ board, packageIssues, tColor, runAutoPackage, runRefine, optResult, noun: "dispatcher" }} />}
-        {tab === "demand" && <DemandTab {...{ day, operators, demSource, uploadInfo, sketchRaw, setSketchRaw, peakOps, setPeakOps, applySketch, useSample, uploadOperators, uploadSignupBoard, downloadTemplate, P }} />}
+        {tab === "demand" && <DemandTab {...{ day, operators, demSource, uploadInfo, sketch, sketchPeaks, sketchMode, setSketchMode, curveTab, setCurveTab, activeGroup, repDay, setGroupSketch, setGroupPeak, applySketch, useSample, uploadOperators, uploadSignupBoard, downloadTemplate, P }} />}
         {tab === "build" && <BuildTab {...{ nDispatchers, setNDispatchers, generate, buildResult, distinctShifts, flagCount, tColor, ptEnabled, sizeToReq, reqPackages, runRetime, optResult }} />}
         {tab === "coverage" && (
           <div>
@@ -749,7 +782,9 @@ export default function Dispatch({ onHome }) {
 }
 
 /* ================= RULES ================= */
-function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, ptRules, setPtRules, ptEnabled, setPtEnabled, newPtType, setNewPtType, allRules, board, day, setDay, P }) {
+function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, ptRules, setPtRules, ptEnabled, setPtEnabled, newPtType, setNewPtType, allRules, board, day, setDay, P, renameType }) {
+  const [editingType, setEditingType] = useState(null);
+  const [typeDraft, setTypeDraft] = useState("");
   const setG = (k, v) => setGlob((g) => ({ ...g, [k]: v }));
   const setGArr = (k, i, v) => setGlob((g) => ({ ...g, [k]: g[k].map((x, j) => (j === i ? v : x)) }));
   return (
@@ -764,7 +799,27 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, ptRu
             <tbody>
               {Object.entries(rules).map(([t, R]) => (
                 <tr key={t} style={{ borderTop: "1px solid var(--border-light)" }}>
-                  <td><span style={{ display: "inline-block", width: 10, height: 10, background: tColor(t), marginRight: 6, borderRadius: 2 }} />{t}</td>
+                  <td>
+                    {editingType === t ? (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <input autoFocus value={typeDraft}
+                          onChange={(e) => setTypeDraft(e.target.value.toUpperCase().slice(0, 6))}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") { if (renameType(t, typeDraft) || typeDraft.trim().toUpperCase() === t) setEditingType(null); }
+                            if (e.key === "Escape") setEditingType(null);
+                          }}
+                          onBlur={() => { renameType(t, typeDraft); setEditingType(null); }}
+                          style={{ width: 64, padding: "2px 6px", fontSize: 12, fontWeight: 600, border: `2px solid ${tColor(t)}`, borderRadius: 2, background: card, color: text, textTransform: "uppercase" }} />
+                        {typeDraft.trim().toUpperCase() !== t && allRules[typeDraft.trim().toUpperCase()] && (
+                          <span style={{ fontSize: 11, color: gapRed }}>exists</span>
+                        )}
+                      </span>
+                    ) : (
+                      <span title="Click to rename — every shift using this code follows along"
+                        onClick={() => { setEditingType(t); setTypeDraft(t); }}
+                        style={{ fontSize: 12, padding: "2px 8px", background: tColor(t), color: "#fff", borderRadius: 2, fontWeight: 600, cursor: "pointer" }}>{t}</span>
+                    )}
+                  </td>
                   <td><TimeField value={R.s[0]} onCommit={(v) => setRule(t, "s", 0, v)} /></td>
                   <td><TimeField value={R.s[1]} onCommit={(v) => setRule(t, "s", 1, v)} /></td>
                   <td><TimeField value={R.e[0]} onCommit={(v) => setRule(t, "e", 0, v)} /></td>
@@ -776,7 +831,7 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, ptRu
             </tbody>
           </table>
         </div>
-        <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>Full time = 8h by default. Times are editable; the generator and coverage score follow these windows.</div>
+        <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>Full time = 8h by default. Times are editable; the generator and coverage score follow these windows. Click a type code to rename it — every shift using it follows along.</div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 14 }}>
@@ -959,7 +1014,7 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, ptRu
 }
 
 /* ================= DEMAND ================= */
-function DemandTab({ day, operators, demSource, uploadInfo, sketchRaw, setSketchRaw, peakOps, setPeakOps, applySketch, useSample, uploadOperators, uploadSignupBoard, downloadTemplate, P }) {
+function DemandTab({ day, operators, demSource, uploadInfo, sketch, sketchPeaks, sketchMode, setSketchMode, curveTab, setCurveTab, activeGroup, repDay, setGroupSketch, setGroupPeak, applySketch, useSample, uploadOperators, uploadSignupBoard, downloadTemplate, P }) {
   const upRef = useRef(null);
   const boardRef = useRef(null);
   const srcLabel = { sample: "Sample data", sketched: "Sketched", uploaded: "Uploaded operator data", derived: "Derived from a Signup board" }[demSource] || demSource;
@@ -991,11 +1046,29 @@ function DemandTab({ day, operators, demSource, uploadInfo, sketchRaw, setSketch
 
       <div style={cardStyle}>
         <div style={hTitle}>Sketch an operators-working shape</div>
-        <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 8 }}>Draw the relative shape of a weekday; it scales so the busiest interval equals your peak. Saturday/Sunday are scaled down automatically.</div>
-        <Sketcher raw={sketchRaw} setRaw={setSketchRaw} trips={peakOps} />
-        <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 10 }}>
-          <span style={{ fontSize: 13 }}>Peak operators working</span>
-          <NumField value={peakOps} onCommit={(v) => setPeakOps(Math.max(1, Math.round(v)))} />
+        <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 8 }}>Draw each pattern's relative shape; it scales so the busiest interval equals that pattern's peak. Choose how finely to split the week — a shared weekday pattern, a shared weekend pattern, or every day on its own.</div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: 11.5, color: sampleGray }}>Split the week:</span>
+          {Object.entries(SKETCH_MODE_LABELS).map(([m, label]) => (
+            <button key={m} style={{ ...nudgeBtn, ...(sketchMode === m ? { background: ink, color: "#fff", border: `1px solid ${ink}` } : {}) }} onClick={() => setSketchMode(m)}>{label}</button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+          {SKETCH_GROUPS[sketchMode].map((g) => (
+            <button key={g.key} style={{ ...nudgeBtn, ...(activeGroup.key === g.key ? { background: supplyTeal, color: "#fff", border: `1px solid ${supplyTeal}` } : {}) }} onClick={() => setCurveTab(g.key)}>{g.label.toUpperCase()}</button>
+          ))}
+          <label style={{ marginLeft: "auto", fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+            {activeGroup.days.length > 1 ? `Peak operators working (same value applied ${activeGroup.label})` : `Peak operators working on ${activeGroup.label}`}
+            <NumField value={sketchPeaks[repDay]} onCommit={(v) => setGroupPeak(Math.max(1, Math.round(v)))} />
+          </label>
+        </div>
+        <Sketcher raw={sketch[repDay]} setRaw={setGroupSketch} trips={sketchPeaks[repDay]} />
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
+          <span style={{ fontSize: 12, color: sampleGray }}>Start from:</span>
+          <button style={nudgeBtn} onClick={() => setGroupSketch([...TPL.weekday])}>Weekday pattern</button>
+          <button style={nudgeBtn} onClick={() => setGroupSketch([...TPL.hump])}>Midday hump</button>
+          <button style={nudgeBtn} onClick={() => setGroupSketch([...TPL.flat])}>Flat</button>
+          <span style={{ marginLeft: "auto", fontSize: 12, color: sampleGray }}>applies to {activeGroup.days.map((d) => d.slice(0, 3)).join(", ")}</span>
           <button style={primaryBtn} onClick={applySketch}>Apply sketch to all days</button>
         </div>
       </div>

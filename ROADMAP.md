@@ -165,6 +165,10 @@ exception days for now; phase strip yes but NO guided tour.
   Build → Review → Handoff, done/pending tints). DEFERRED to follow-up passes: the
   operator-style week-strip/3-state package editor in the siblings, redo for the operator
   module, and the background Optimization monitor port (same deferral as Phase 2).
+- **Follow-up (2026-07-20, SHIPPED)**: operator-style sketch experience in both siblings'
+  Demand tabs (day-keyed sketch/peaks, Split-the-week modes, Start-from presets, per-group
+  peak inputs, persisted in project files) and click-to-rename type codes in both siblings'
+  classification tables (board/baseline/color remap, undo history cleared).
 
 Tier/pricing note: ALL gating work is parked on the `tier-scaffolding` branch (pushed to
 GitHub) per 2026-07-20 decision to hold off on pricing. main is clean of it; merge that
