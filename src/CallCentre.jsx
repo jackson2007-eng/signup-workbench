@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
+import { ResponsiveContainer, ComposedChart, XAxis, YAxis, Line } from "recharts";
 import {
   T0, T1, N, SLOT, DAYS, WEEKEND_DAYS, fmt, parseHM, cloneSeg,
   buildSupply, computeEngine, generateBoard, validateSeg, autofixSeg,
@@ -7,6 +8,7 @@ import {
   TimeField, NumField, Nudge, Stat, CoverageChart, Sketcher, DeltaAreaChart,
   CoveragePriorityShapePreview, ScheduleStabilityPreview, COVERAGE_RESOLUTIONS,
   TPL, SKETCH_GROUPS, SKETCH_MODE_LABELS,
+  optimizeToConvergence, stabilityFraction, SLIDE_MAX_MIN,
 } from "./App.jsx";
 import { CALL_SAMPLE } from "./callSampleData.js";
 
@@ -470,6 +472,10 @@ export default function CallCentre({ onHome }) {
     setHist([]); setFuture([]); setSelId(null); setBuildResult(null); setSugs(null); setOptResult(null);
     setTab("build");
   };
+  const optMonitor = useOptimizerMonitor({
+    rules, ptRules, ptEnabled, ptCount, glob, DEM, spans, baselineBoard, buildN: nAgents,
+    onLoadBest: (best) => { commit(() => best.map(cloneSeg)); setSelId(null); setSugs(null); setTab("schedule"); },
+  });
   const [optResult, setOptResult] = useState(null);
   const scoreOf = (b) => computeEngine(DEM, buildSupply(b), false, glob.minVeh, spans, 0, glob.offPeakBias, glob.coveragePriority, 0, 0, glob).weekScore;
   const findSugs = () => setSugs(findSuggestions(board, eng, DEM, allRules, glob, spans));
@@ -854,7 +860,7 @@ export default function CallCentre({ onHome }) {
         {tab === "suggest" && <SuggestTab {...{ sugs, findSugs, applySug, runDeep, runRefine, optResult, tColor, noun: "agent" }} />}
         {tab === "compare" && <CompareTab {...{ boardDiff, changedCount, scheduleSource, eng, baseEng, tColor, noun: "agent", board, baselineBoard, day }} />}
         {tab === "demand" && <DemandTab {...{ day, calls, arrivals, showArrivals, setShowArrivals, demSource, uploadInfo, callSummary, sketch, sketchPeaks, sketchMode, setSketchMode, curveTab, setCurveTab, activeGroup, repDay, setGroupSketch, setGroupPeak, applySketch, useSample, uploadCalls, downloadTemplate, P }} />}
-        {tab === "build" && <BuildTab {...{ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor, sizeToReq, reqPackages, runRetime, optResult, noun: "agent", ptEnabled, ptCount, setPtCount, unknownTypes }} />}
+        {tab === "build" && <BuildTab {...{ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor, sizeToReq, reqPackages, runRetime, optResult, noun: "agent", ptEnabled, ptCount, setPtCount, unknownTypes, monitor: <OptimizerMonitorCard opt={optMonitor} noun="agent" buildN={nAgents} ptEnabled={ptEnabled} ptCount={ptCount} baselineBoard={baselineBoard} /> }} />}
         {tab === "pack" && <PackagingTab {...{ board, packageIssues, tColor, runAutoPackage, runRefine, optResult, noun: "agent" }} />}
         {tab === "coverage" && (
           <div>
@@ -1501,7 +1507,7 @@ function DemandTab({ day, calls, arrivals, showArrivals, setShowArrivals, demSou
 }
 
 /* ================= BUILD ================= */
-function BuildTab({ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor, sizeToReq, reqPackages, runRetime, optResult, noun, ptEnabled, ptCount, setPtCount, unknownTypes }) {
+function BuildTab({ nAgents, setNAgents, generate, buildResult, distinctShifts, flagCount, tColor, sizeToReq, reqPackages, runRetime, optResult, noun, ptEnabled, ptCount, setPtCount, unknownTypes, monitor }) {
   return (
     <div>
       <div style={cardStyle}>
@@ -1553,6 +1559,7 @@ function BuildTab({ nAgents, setNAgents, generate, buildResult, distinctShifts, 
           <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>Open the SCHEDULE tab to edit, or COVERAGE to see the fit. Generating again replaces the current schedule (undo available in SCHEDULE).</div>
         </div>
       )}
+      {monitor}
     </div>
   );
 }
@@ -2077,6 +2084,220 @@ export function SetupWizard({ open, onClose, noun, onApply }) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ================= SHARED: OPTIMIZATION MONITOR ================= */
+/* Port of the operator tool's long-running, time-sliced search: one iteration per
+   setTimeout(0) tick so the UI keeps painting. Randomized restarts until 12 consecutive
+   fail to improve, then mostly ruin-and-recreate around the best board (re-place a random
+   handful of packages, everything else locked), with occasional fresh restarts. Accepts on
+   the weighted objective discounted by schedule-stability disruption, but only if honest
+   coverage doesn't drop — so the displayed best score is monotonically non-decreasing.
+   All inputs snapshotted at Start; stop finishes with a polish pass. */
+export function useOptimizerMonitor({ rules, ptRules, ptEnabled, ptCount, glob, DEM, spans, baselineBoard, buildN, onLoadBest }) {
+  const [optRun, setOptRun] = useState(null);
+  const [optMode, setOptMode] = useState("retime"); // "retime" | "generate"
+  const [fitEachDay, setFitEachDay] = useState(true);
+  const optRef = useRef(null);
+
+  const optTick = () => {
+    const st = optRef.current;
+    if (!st || st.abort) return;
+    const { cfg } = st;
+    const rng = Math.random;
+    const inRestartPhase = st.best == null || st.restartFails < 12;
+    const doRestart = inRestartPhase || rng() < 0.05;
+    let segs, ev;
+    if (doRestart) {
+      st.restarts++;
+      const o = { rng, noise: st.iter === 0 ? 0 : 3 };
+      if (cfg.mode === "generate") {
+        const g = generateBoard(cfg.glob.min10 || 0, cfg.buildN, cfg.rules, cfg.glob, cfg.DEM, cfg.spans, cfg.glob.minVeh, false, null, cfg.glob.shiftSeriesBase, o, cfg.ptRules, cfg.ptCount);
+        segs = g.segs; ev = g.evaluated;
+      } else {
+        o.stability = cfg.glob.scheduleStability;
+        const r = retimeBoard(cfg.baseline, cfg.rules, cfg.glob, cfg.DEM, cfg.spans, cfg.glob.minVeh, false, o);
+        segs = r.segs; ev = r.evaluated;
+      }
+    } else {
+      st.refines++;
+      const shifts = [...new Set(st.best.map((s) => s.shift))];
+      const k = Math.min(shifts.length, 4 + Math.floor(rng() * 9));
+      const subset = new Set();
+      while (subset.size < k) subset.add(shifts[Math.floor(rng() * shifts.length)]);
+      const r = retimeBoard(st.best, cfg.rules, cfg.glob, cfg.DEM, cfg.spans, cfg.glob.minVeh, false, { rng, noise: 2, subsetShifts: subset, stability: cfg.glob.scheduleStability });
+      segs = r.segs; ev = r.evaluated;
+    }
+    st.iter++;
+    st.evaluated += ev;
+    const sc = st.scoreFn(segs);
+    const tSec = (performance.now() - st.startedAt) / 1000;
+    if (cfg.mode === "generate" && st.baselineScore == null) st.baselineScore = sc.cov;
+    const gain = sc.obj - st.bestObj;
+    if (gain * (1 - st.disruptionFraction(segs)) > 1e-12 && sc.cov >= st.bestScore - 1e-9) {
+      st.best = segs;
+      st.bestObj = sc.obj;
+      st.bestScore = sc.cov;
+      st.lastImproveT = tSec;
+      if (doRestart) st.restartFails = 0;
+      st.history.push({ t: Math.round(tSec * 10) / 10, score: Math.round(sc.cov * 10000) / 100 });
+    } else if (doRestart) {
+      st.restartFails++;
+    }
+    if (tSec - st.lastBeat > 5 && st.bestScore > -Infinity) {
+      st.lastBeat = tSec;
+      st.history.push({ t: Math.round(tSec * 10) / 10, score: Math.round(st.bestScore * 10000) / 100 });
+    }
+    setOptRun({
+      running: true, mode: cfg.mode, iter: st.iter, restarts: st.restarts, refines: st.refines,
+      evaluated: st.evaluated, bestScore: st.bestScore, baselineScore: st.baselineScore,
+      elapsed: tSec, lastImproveT: st.lastImproveT, history: st.history.slice(),
+    });
+    setTimeout(optTick, 0);
+  };
+
+  const startOptimize = () => {
+    if (optRef.current && !optRef.current.abort) return;
+    const mode = optMode;
+    const cfg = {
+      mode,
+      baseline: baselineBoard.map(cloneSeg),
+      rules: JSON.parse(JSON.stringify(rules)),
+      ptRules: ptEnabled ? JSON.parse(JSON.stringify(ptRules)) : {},
+      ptCount: ptEnabled ? ptCount : 0,
+      allRules: { ...JSON.parse(JSON.stringify(rules)), ...(ptEnabled ? JSON.parse(JSON.stringify(ptRules)) : {}) },
+      glob: { ...glob },
+      DEM,
+      spans: JSON.parse(JSON.stringify(spans)),
+      buildN,
+      fitEachDay,
+    };
+    const scoreFn = (segs) => {
+      const e = computeEngine(cfg.DEM, buildSupply(segs), false, cfg.glob.minVeh, cfg.spans, 0, cfg.glob.offPeakBias, cfg.glob.coveragePriority, 0, 0, cfg.glob);
+      return { obj: e.weekObjective, cov: e.weekScore };
+    };
+    const baseline = mode === "retime" ? scoreFn(cfg.baseline) : null;
+    const disruptionFraction = (segs) => {
+      if (!segs) return 0;
+      const orig = new Map(cfg.baseline.map((s) => [s.shift, s.s]));
+      const mins = segs.map((s) => Math.abs(s.s - (orig.get(s.shift) ?? s.s)));
+      const meanMin = mins.length ? mins.reduce((a, b) => a + b, 0) / mins.length : 0;
+      return stabilityFraction(meanMin, SLIDE_MAX_MIN, cfg.glob.scheduleStability || 0);
+    };
+    optRef.current = {
+      abort: false, cfg, scoreFn, disruptionFraction,
+      best: mode === "retime" ? cfg.baseline : null,
+      bestObj: mode === "retime" ? baseline.obj : -Infinity,
+      bestScore: mode === "retime" ? baseline.cov : -Infinity,
+      baselineScore: baseline ? baseline.cov : null,
+      iter: 0, restarts: 0, refines: 0, evaluated: 0, restartFails: 0,
+      startedAt: performance.now(), lastImproveT: 0, lastBeat: 0,
+      history: mode === "retime" ? [{ t: 0, score: Math.round(baseline.cov * 10000) / 100 }] : [],
+    };
+    setOptRun({ running: true, mode, iter: 0, restarts: 0, refines: 0, evaluated: 0, bestScore: null, baselineScore: optRef.current.baselineScore, elapsed: 0, lastImproveT: 0, history: [] });
+    setTimeout(optTick, 0);
+  };
+
+  const stopOptimize = () => {
+    const st = optRef.current;
+    if (!st || st.abort) return;
+    st.abort = true;
+    if (st.best) {
+      const engineArgs = [st.cfg.DEM, false, st.cfg.glob.minVeh, st.cfg.spans, 0];
+      const polished = st.cfg.fitEachDay
+        ? deepOptimize(st.best, engineArgs, st.cfg.allRules, st.cfg.glob, st.cfg.baseline).board
+        : optimizeToConvergence(st.best, engineArgs, st.cfg.allRules, st.cfg.glob, 25, st.cfg.baseline).board;
+      const pScore = st.scoreFn(polished);
+      const pGain = pScore.obj - st.bestObj;
+      if (pGain * (1 - st.disruptionFraction(polished)) >= 0 && pScore.cov >= st.bestScore - 1e-9) {
+        st.best = polished; st.bestObj = pScore.obj; st.bestScore = pScore.cov;
+      }
+      const tSec = (performance.now() - st.startedAt) / 1000;
+      st.history.push({ t: Math.round(tSec * 10) / 10, score: Math.round(st.bestScore * 10000) / 100 });
+    }
+    setOptRun((o) => (o ? {
+      ...o, running: false, bestScore: st.bestScore > -Infinity ? st.bestScore : null,
+      elapsed: (performance.now() - st.startedAt) / 1000, history: st.history.slice(),
+    } : o));
+  };
+
+  const loadBest = () => {
+    const st = optRef.current;
+    if (st && st.best) onLoadBest(st.best);
+  };
+
+  return { optRun, optMode, setOptMode, fitEachDay, setFitEachDay, optRunning: !!(optRun && optRun.running), startOptimize, stopOptimize, loadBest };
+}
+
+export function OptimizerMonitorCard({ opt, noun, buildN, ptEnabled, ptCount, baselineBoard }) {
+  const { optRun, optMode, setOptMode, fitEachDay, setFitEachDay, optRunning, startOptimize, stopOptimize, loadBest } = opt;
+  return (
+    <div style={{ ...cardStyle, border: `1px solid ${optRunning ? supplyTeal : "var(--border)"}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <div style={hTitle}>Optimization monitor</div>
+        <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+          <input type="radio" checked={optMode === "retime"} disabled={optRunning} onChange={() => setOptMode("retime")} />
+          Retime the loaded schedule
+        </label>
+        <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+          <input type="radio" checked={optMode === "generate"} disabled={optRunning} onChange={() => setOptMode("generate")} />
+          New schedule from rules &amp; demand ({buildN} packages{ptEnabled && ptCount > 0 ? ` + ${ptCount} part-time` : ""})
+        </label>
+        <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }} title="On stop, split shifts into per-day start times (within the variation limits) so a shift can sit later on days with later demand. Off keeps each shift uniform across its days.">
+          <input type="checkbox" checked={fitEachDay} disabled={optRunning} onChange={(e) => setFitEachDay(e.target.checked)} />
+          Fit start times to each day's demand
+        </label>
+        {!optRunning ? (
+          <button style={{ ...nudgeBtn, background: ink, color: "#fff", border: `1px solid ${ink}`, marginLeft: "auto", opacity: optMode === "retime" && !baselineBoard.length ? 0.5 : 1 }}
+            disabled={optMode === "retime" && !baselineBoard.length}
+            onClick={startOptimize}>
+            ▶ Start optimizing
+          </button>
+        ) : (
+          <button style={{ ...nudgeBtn, background: gapRed, color: "#fff", border: `1px solid ${gapRed}`, marginLeft: "auto" }} onClick={stopOptimize}>
+            ■ Stop
+          </button>
+        )}
+      </div>
+      <div style={{ fontSize: 12, color: sampleGray, marginTop: 6 }}>
+        Runs until you stop it: randomized full rebuilds explore different constructions, then the search digs around the best schedule found by re-placing a few shifts at a time with everything else locked. Every move stays within the day's hours and the start-time-variation limits. The best score only ever goes up. Inputs (rules, demand, schedule) are snapshotted when you press Start; keep this page open while it runs. Stopping finishes with a polish pass before the result is final.
+      </div>
+
+      {optRun && (
+        <>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "12px 0 0" }}>
+            <Stat label="Runtime" value={`${Math.floor(optRun.elapsed / 60)}:${String(Math.floor(optRun.elapsed % 60)).padStart(2, "0")}`} sub={optRun.running ? "running" : "stopped"} tone={optRun.running ? supplyTeal : sampleGray} />
+            <Stat label="Iterations" value={optRun.iter.toLocaleString()} sub={`${optRun.restarts.toLocaleString()} rebuilds \u00b7 ${optRun.refines.toLocaleString()} refinements`} tone={targetInk} />
+            <Stat label="Placements evaluated" value={optRun.evaluated.toLocaleString()} tone={demandAmber} />
+            <Stat label="Best weekly coverage"
+              value={optRun.bestScore != null ? `${(optRun.bestScore * 100).toFixed(2)}%` : "\u2014"}
+              sub={optRun.bestScore != null && optRun.baselineScore != null
+                ? `${optRun.bestScore >= optRun.baselineScore ? "+" : ""}${((optRun.bestScore - optRun.baselineScore) * 100).toFixed(2)} vs ${optRun.mode === "retime" ? "loaded schedule" : "single-shot build"}`
+                : undefined}
+              tone={supplyTeal} />
+            <Stat label="Last improvement" value={optRun.lastImproveT > 0 ? `${Math.round(optRun.elapsed - optRun.lastImproveT)}s ago` : "\u2014"} tone={sampleGray} />
+          </div>
+          {optRun.history.length > 1 && (
+            <div style={{ marginTop: 10 }}>
+              <ResponsiveContainer width="100%" height={90}>
+                <ComposedChart data={optRun.history} margin={{ top: 4, right: 14, left: -14, bottom: 0 }}>
+                  <XAxis dataKey="t" tick={{ fontSize: 9.5 }} tickLine={false} unit="s" type="number" domain={[0, "dataMax"]} />
+                  <YAxis tick={{ fontSize: 9.5 }} tickLine={false} axisLine={false} domain={["dataMin - 0.05", "dataMax + 0.05"]} width={54} tickFormatter={(v) => v.toFixed(1) + "%"} />
+                  <Line type="stepAfter" dataKey="score" stroke={supplyTeal} strokeWidth={1.8} dot={false} isAnimationActive={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+              <div style={{ fontSize: 11, color: sampleGray, textAlign: "right" }}>best coverage over time</div>
+            </div>
+          )}
+          {optRun.bestScore != null && (
+            <button style={{ ...nudgeBtn, marginTop: 10, background: supplyTeal, color: "#fff", border: `1px solid ${supplyTeal}` }} onClick={loadBest}>
+              Load best into SCHEDULE
+            </button>
+          )}
+        </>
+      )}
     </div>
   );
 }

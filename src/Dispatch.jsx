@@ -8,7 +8,7 @@ import {
   CoveragePriorityShapePreview, ScheduleStabilityPreview, COVERAGE_RESOLUTIONS,
   TPL, SKETCH_GROUPS, SKETCH_MODE_LABELS,
 } from "./App.jsx";
-import { ImportTab, CompareTab, SuggestTab, OptResultBanner, PhaseStrip, PackagingTab, SetupWizard } from "./CallCentre.jsx";
+import { ImportTab, CompareTab, SuggestTab, OptResultBanner, PhaseStrip, PackagingTab, SetupWizard, useOptimizerMonitor, OptimizerMonitorCard } from "./CallCentre.jsx";
 import { DISPATCH_SAMPLE } from "./dispatchSampleData.js";
 
 /* Dispatch Desks — a third sibling of the operator workbench, reusing the shared coverage engine
@@ -414,6 +414,10 @@ export default function Dispatch({ onHome }) {
     setHist([]); setFuture([]); setSelId(null); setBuildResult(null); setSugs(null); setOptResult(null);
     setTab("build");
   };
+  const optMonitor = useOptimizerMonitor({
+    rules, ptRules, ptEnabled, ptCount, glob, DEM, spans, baselineBoard, buildN: nDispatchers,
+    onLoadBest: (best) => { commit(() => best.map(cloneSeg)); setSelId(null); setSugs(null); setTab("schedule"); },
+  });
   const [optResult, setOptResult] = useState(null);
   const scoreOf = (b) => computeEngine(DEM, buildSupply(b), false, glob.minVeh, spans, 0, glob.offPeakBias, glob.coveragePriority, 0, 0, glob).weekScore;
   const findSugs = () => setSugs(findSuggestions(board, eng, DEM, allRules, glob, spans));
@@ -802,7 +806,7 @@ export default function Dispatch({ onHome }) {
         {tab === "compare" && <CompareTab {...{ boardDiff, changedCount, scheduleSource, eng, baseEng, tColor, noun: "dispatcher", board, baselineBoard, day }} />}
         {tab === "pack" && <PackagingTab {...{ board, packageIssues, tColor, runAutoPackage, runRefine, optResult, noun: "dispatcher" }} />}
         {tab === "demand" && <DemandTab {...{ day, operators, demSource, uploadInfo, sketch, sketchPeaks, sketchMode, setSketchMode, curveTab, setCurveTab, activeGroup, repDay, setGroupSketch, setGroupPeak, applySketch, useSample, uploadOperators, uploadSignupBoard, downloadTemplate, P }} />}
-        {tab === "build" && <BuildTab {...{ nDispatchers, setNDispatchers, generate, buildResult, distinctShifts, flagCount, tColor, ptEnabled, sizeToReq, reqPackages, runRetime, optResult, unknownTypes }} />}
+        {tab === "build" && <BuildTab {...{ nDispatchers, setNDispatchers, generate, buildResult, distinctShifts, flagCount, tColor, ptEnabled, sizeToReq, reqPackages, runRetime, optResult, unknownTypes, monitor: <OptimizerMonitorCard opt={optMonitor} noun="dispatcher" buildN={nDispatchers} ptEnabled={ptEnabled} ptCount={ptCount} baselineBoard={baselineBoard} /> }} />}
         {tab === "coverage" && (
           <div>
             {P.floorViol.length > 0 && (
@@ -1169,7 +1173,7 @@ function DemandTab({ day, operators, demSource, uploadInfo, sketch, sketchPeaks,
 }
 
 /* ================= BUILD ================= */
-function BuildTab({ nDispatchers, setNDispatchers, generate, buildResult, distinctShifts, flagCount, tColor, ptEnabled, sizeToReq, reqPackages, runRetime, optResult, unknownTypes }) {
+function BuildTab({ nDispatchers, setNDispatchers, generate, buildResult, distinctShifts, flagCount, tColor, ptEnabled, sizeToReq, reqPackages, runRetime, optResult, unknownTypes, monitor }) {
   return (
     <div>
       <div style={cardStyle}>
@@ -1215,6 +1219,7 @@ function BuildTab({ nDispatchers, setNDispatchers, generate, buildResult, distin
           <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>Open the SCHEDULE tab to edit, or COVERAGE to see the fit. Generating again replaces the current schedule (undo available in SCHEDULE).</div>
         </div>
       )}
+      {monitor}
     </div>
   );
 }

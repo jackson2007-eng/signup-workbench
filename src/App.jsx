@@ -6370,4 +6370,5 @@ export {
   COV_PRIORITY_VALUES, STABILITY_VALUES, useDebouncedValue,
   aggregateCoverageRows, COVERAGE_RESOLUTIONS,
   TPL, SKETCH_GROUPS, SKETCH_MODE_LABELS,
+  optimizeToConvergence, stabilityFraction, SLIDE_MAX_MIN,
 };

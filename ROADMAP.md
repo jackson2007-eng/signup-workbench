@@ -163,9 +163,12 @@ exception days for now; phase strip yes but NO guided tour.
   SHIPPED as a shared PackagingTab exported from CallCentre.jsx.
 - **Phase 5 — Editing depth + chrome**: phase strip SHIPPED (shared PhaseStrip, Setup →
   Build → Review → Handoff, done/pending tints). Redo exists in all three modules
-  (the earlier deferral note was stale). STILL DEFERRED: the operator-style week-strip/
-  3-state package editor in the siblings, the background Optimization monitor port, and
-  the guided-setup wizard for the operator module (needs trips/fleet mapping).
+  (the earlier deferral note was stale). Optimization monitor SHIPPED to both siblings
+  2026-07-21 (shared useOptimizerMonitor hook + OptimizerMonitorCard in CallCentre.jsx:
+  retime/generate modes, ruin-and-recreate search, stability-discounted accept gate,
+  stop-polish with fit-each-day, live sparkline, load-best). STILL DEFERRED: the
+  operator-style week-strip/3-state package editor in the siblings, and the guided-setup
+  wizard for the operator module (needs trips/fleet mapping).
 - **Follow-up (2026-07-20, SHIPPED)**: Guided setup wizard in both siblings — a shared
   4-step SetupWizard (demand pattern, service hours, headcount, shift kinds) that
   pre-fills Rules classifications, hours of operation, Build counts, part-time, and a
