@@ -2174,6 +2174,7 @@ function aggregateCoverageRows(rows, bucketMin) {
 
 function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity, avgCycleTime = 0, demandShare = 100, height = 320, selBand,
   supplyName = "Supply", targetName = "Demand-aligned target", unitLabel = "events", minName = "min", sugTooltip = true, extraSeries = null,
+  eventsPerTrip = 1, // operator demand counts pickup+dropoff (2 events) per trip; siblings pass 1
   onPointClick = null, onDutyCounts = null, slim = false, aggregateMin = 5, showTripBar = false }) {
   const data = useMemo(() => {
     const bk = RAW.bookout[day];
@@ -2250,8 +2251,8 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
   // 2026-07-21 at the user's request for a single shared count.)
   const displayData = useMemo(() => {
     if (!showTripBar) return aggregatedData;
-    return aggregatedData.map((r) => ({ ...r, tripBar: r.events }));
-  }, [aggregatedData, showTripBar]);
+    return aggregatedData.map((r) => ({ ...r, tripBar: Math.round((r.events / eventsPerTrip) * 10) / 10 }));
+  }, [aggregatedData, showTripBar, eventsPerTrip]);
   // ~10 visible x-axis labels regardless of how many buckets that resolution produces
   const xInterval = Math.max(0, Math.ceil(displayData.length / 10) - 1);
   return (
@@ -2283,7 +2284,8 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
           labelFormatter={(l, pl) => {
             const r = pl && pl[0] && pl[0].payload;
             if (!r) return l;
-            const evTxt = r.events >= 10 ? Math.round(r.events).toString() : r.events.toFixed(1);
+            const evShown = r.events / eventsPerTrip;
+            const evTxt = evShown >= 10 ? Math.round(evShown).toString() : evShown.toFixed(1);
             if (slim) return `${l} · ${evTxt} ${unitLabel}`; // clean mode: time + demand only
             // show the requirement's own arithmetic in 5-minute units: city trips this slot,
             // each occupying a vehicle for the cycle, then the cap only when it bit
@@ -4783,7 +4785,7 @@ export default function App({ onHome }) {
               </div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={false} showProductivity={false} slim avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={340}
                 onDutyCounts={onDutyCounts} onPointClick={focusRun}
-                extraSeries={null} aggregateMin={coverageResolution} showTripBar />
+                extraSeries={null} aggregateMin={coverageResolution} showTripBar eventsPerTrip={2} unitLabel="trips" />
               {ganttTimeFilter != null && (
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "var(--tint-teal-d)", border: `1px solid ${supplyTeal}`, padding: "8px 12px", margin: "6px 10px 0", fontSize: 13 }}>
                   <b>{fmt(ganttTimeFilter)} ({day}):</b>
@@ -5348,7 +5350,7 @@ export default function App({ onHome }) {
                 Live {day} coverage
               </div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={false} showProductivity={false} slim avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={280}
-                selBand={sel ? [sel.s, sel.e] : null} onDutyCounts={onDutyCounts} onPointClick={(t) => { setSelId(null); setGanttTimeFilter(t); }} />
+                selBand={sel ? [sel.s, sel.e] : null} onDutyCounts={onDutyCounts} onPointClick={(t) => { setSelId(null); setGanttTimeFilter(t); }} eventsPerTrip={2} unitLabel="trips" />
               <div style={{ fontSize: 11.5, color: "var(--muted)", padding: "2px 10px 10px" }}>
                 Dashed lines mark the selected shift. On desktop, the KPI strip and shift editor stay pinned while you scroll; on phones everything scrolls freely so the signup and this chart get the full screen.
               </div>
