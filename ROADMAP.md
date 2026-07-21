@@ -165,6 +165,15 @@ exception days for now; phase strip yes but NO guided tour.
   Build → Review → Handoff, done/pending tints). DEFERRED to follow-up passes: the
   operator-style week-strip/3-state package editor in the siblings, redo for the operator
   module, and the background Optimization monitor port (same deferral as Phase 2).
+- **Follow-up (2026-07-20, SHIPPED)**: type reconciliation in both siblings — uploaded
+  schedules whose type codes aren't in Rules previously passed through Retime/optimizers
+  silently untouched (root cause of a real user report). Now: shared `reconcileTypes`
+  engine helper auto-matches unknown codes to existing rule windows (tightest fit, all
+  shifts must fit) or builds a classification from the observed times (windows ±1h,
+  grid-snapped, modal work value); runs automatically at schedule upload, and a Rules-tab
+  banner + "Auto-match & build rules" button handles already-loaded projects. Retime card
+  warns when unrecognized codes are present. Operator-module wiring of reconcileTypes is a
+  possible follow-up (its signup importer already auto-classifies typeless rows).
 - **Follow-up (2026-07-20, SHIPPED)**: operator-style sketch experience in both siblings'
   Demand tabs (day-keyed sketch/peaks, Split-the-week modes, Start-from presets, per-group
   peak inputs, persisted in project files) and click-to-rename type codes in both siblings'

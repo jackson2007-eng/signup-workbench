@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import {
   T0, T1, N, SLOT, DAYS, fmt, parseHM, cloneSeg,
   buildSupply, computeEngine, generateBoard, validateSeg, autofixSeg,
-  findSuggestions, parseSignupWorkbook, retimeBoard, deepOptimize, refinePerDay, packageInfo, autoPackage,
+  findSuggestions, parseSignupWorkbook, retimeBoard, deepOptimize, refinePerDay, packageInfo, autoPackage, reconcileTypes,
   TimeField, NumField, Nudge, Stat, CoverageChart, Sketcher, DeltaAreaChart,
   CoveragePriorityShapePreview, ScheduleStabilityPreview, COVERAGE_RESOLUTIONS,
   TPL, SKETCH_GROUPS, SKETCH_MODE_LABELS,
@@ -304,11 +304,21 @@ export default function Dispatch({ onHome }) {
         const wb = XLSX.read(rd.result, { type: file.name.endsWith(".csv") ? "string" : "array" });
         const res = parseSignupWorkbook(wb, null, allRules);
         if (!res.ok) { alert(res.error); return; }
-        const segs = res.segments.map((s) => ({ ...cloneSeg(s), id: nextId.current++ }));
+        let segs = res.segments.map((s) => ({ ...cloneSeg(s), id: nextId.current++ }));
+        // Reconcile unknown type codes right at upload: match to an existing classification
+        // where every shift fits its windows, otherwise build one from the observed times.
+        let rec = null;
+        const r = reconcileTypes(segs, rules, glob);
+        if (r) {
+          segs = r.board;
+          setRules(r.rules);
+          rec = { matched: r.matched, built: r.built };
+          setReconcileResult(rec);
+        }
         setBoard(segs.map(cloneSeg));
         setBaselineBoard(segs.map(cloneSeg));
         setScheduleSource("uploaded");
-        setScheduleUpload(res.summary);
+        setScheduleUpload(rec ? { ...res.summary, unrecognizedTypes: [], reconciled: rec } : res.summary);
         setHist([]); setFuture([]); setSelId(null); setBuildResult(null);
       } catch (e) {
         alert("Could not read that schedule file — check it matches the dispatcher schedule template.");
@@ -338,6 +348,27 @@ export default function Dispatch({ onHome }) {
     setSugs(null);
     setHist([]); setFuture([]);
     return true;
+  };
+  // Give unknown type codes a home: match to existing classifications where the times fit,
+  // otherwise build classifications from the observed times. Applies to the baseline too —
+  // this is a labeling fix, not a schedule change, so Compare stays quiet about it.
+  const unknownTypes = useMemo(() => {
+    const m = new Map();
+    for (const sg of board) if (!allRules[sg.type]) m.set(sg.type, (m.get(sg.type) || 0) + 1);
+    return [...m.entries()];
+  }, [board, allRules]);
+  const [reconcileResult, setReconcileResult] = useState(null);
+  const runReconcile = () => {
+    const r = reconcileTypes(board, rules, glob);
+    if (!r) return;
+    setRules(r.rules);
+    commit(() => r.board.map(cloneSeg));
+    if (r.matched.length) setBaselineBoard((b) => b.map((sg) => {
+      const hit = r.matched.find(([from]) => from === sg.type);
+      return hit ? { ...cloneSeg(sg), type: hit[1] } : sg;
+    }));
+    setReconcileResult({ matched: r.matched, built: r.built });
+    setSugs(null);
   };
   const [optResult, setOptResult] = useState(null);
   const scoreOf = (b) => computeEngine(DEM, buildSupply(b), false, glob.minVeh, spans, 0, glob.offPeakBias, glob.coveragePriority, 0, 0, glob).weekScore;
@@ -716,7 +747,7 @@ export default function Dispatch({ onHome }) {
         {tab === "rules" && (
           <RulesTab {...{
             rules, setRule, glob, setGlob, spans, setSpans, tColor,
-            ptRules, setPtRules, ptEnabled, setPtEnabled, newPtType, setNewPtType, allRules, board, renameType,
+            ptRules, setPtRules, ptEnabled, setPtEnabled, newPtType, setNewPtType, allRules, board, renameType, unknownTypes, runReconcile, reconcileResult,
             day, setDay, P,
           }} />
         )}
@@ -725,7 +756,7 @@ export default function Dispatch({ onHome }) {
         {tab === "compare" && <CompareTab {...{ boardDiff, changedCount, scheduleSource, eng, baseEng, tColor, noun: "dispatcher" }} />}
         {tab === "pack" && <PackagingTab {...{ board, packageIssues, tColor, runAutoPackage, runRefine, optResult, noun: "dispatcher" }} />}
         {tab === "demand" && <DemandTab {...{ day, operators, demSource, uploadInfo, sketch, sketchPeaks, sketchMode, setSketchMode, curveTab, setCurveTab, activeGroup, repDay, setGroupSketch, setGroupPeak, applySketch, useSample, uploadOperators, uploadSignupBoard, downloadTemplate, P }} />}
-        {tab === "build" && <BuildTab {...{ nDispatchers, setNDispatchers, generate, buildResult, distinctShifts, flagCount, tColor, ptEnabled, sizeToReq, reqPackages, runRetime, optResult }} />}
+        {tab === "build" && <BuildTab {...{ nDispatchers, setNDispatchers, generate, buildResult, distinctShifts, flagCount, tColor, ptEnabled, sizeToReq, reqPackages, runRetime, optResult, unknownTypes }} />}
         {tab === "coverage" && (
           <div>
             {P.floorViol.length > 0 && (
@@ -782,13 +813,28 @@ export default function Dispatch({ onHome }) {
 }
 
 /* ================= RULES ================= */
-function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, ptRules, setPtRules, ptEnabled, setPtEnabled, newPtType, setNewPtType, allRules, board, day, setDay, P, renameType }) {
+function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, ptRules, setPtRules, ptEnabled, setPtEnabled, newPtType, setNewPtType, allRules, board, day, setDay, P, renameType, unknownTypes, runReconcile, reconcileResult }) {
   const [editingType, setEditingType] = useState(null);
   const [typeDraft, setTypeDraft] = useState("");
   const setG = (k, v) => setGlob((g) => ({ ...g, [k]: v }));
   const setGArr = (k, i, v) => setGlob((g) => ({ ...g, [k]: g[k].map((x, j) => (j === i ? v : x)) }));
   return (
     <div>
+      {unknownTypes && unknownTypes.length > 0 && (
+        <div style={{ background: "var(--tint-amber-a, rgba(214,138,0,.10))", border: `1px solid ${demandAmber}`, padding: "10px 14px", marginBottom: 14, fontSize: 12.5, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span>
+            <b>{unknownTypes.reduce((a, x) => a + x[1], 0)} shift{unknownTypes.reduce((a, x) => a + x[1], 0) === 1 ? "" : "s"} use codes not defined in Rules</b> ({unknownTypes.map(([t, n]) => `${t}\u00d7${n}`).join(", ")}) — Retime and the optimizers leave them untouched until they have a classification.
+          </span>
+          <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }} onClick={runReconcile}>Auto-match & build rules</button>
+        </div>
+      )}
+      {reconcileResult && (!unknownTypes || unknownTypes.length === 0) && (
+        <div style={{ background: "var(--tint-teal-a, rgba(15,123,122,.08))", border: "1px solid var(--supply-teal)", padding: "8px 12px", marginBottom: 14, fontSize: 12.5 }}>
+          {reconcileResult.matched.length > 0 && <>Matched to existing rules: {reconcileResult.matched.map(([a, b]) => `${a} \u2192 ${b}`).join(", ")}. </>}
+          {reconcileResult.built.length > 0 && <>Built from the shift times: <b>{reconcileResult.built.join(", ")}</b> — windows are the observed range ±1h; review and tighten below. </>}
+          The optimizers can now work these shifts.
+        </div>
+      )}
       <div style={cardStyle}>
         <div style={hTitle}>Full-time dispatcher shift types</div>
         <div style={{ overflowX: "auto" }}>
@@ -1077,7 +1123,7 @@ function DemandTab({ day, operators, demSource, uploadInfo, sketch, sketchPeaks,
 }
 
 /* ================= BUILD ================= */
-function BuildTab({ nDispatchers, setNDispatchers, generate, buildResult, distinctShifts, flagCount, tColor, ptEnabled, sizeToReq, reqPackages, runRetime, optResult }) {
+function BuildTab({ nDispatchers, setNDispatchers, generate, buildResult, distinctShifts, flagCount, tColor, ptEnabled, sizeToReq, reqPackages, runRetime, optResult, unknownTypes }) {
   return (
     <div>
       <div style={cardStyle}>
@@ -1098,6 +1144,11 @@ function BuildTab({ nDispatchers, setNDispatchers, generate, buildResult, distin
           <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 10 }}>
             Keeps every shift and its type — only re-chooses start times and breaks within the rules to better fit the operators-working curve, honoring the schedule-stability setting. Undo available in SCHEDULE.
           </div>
+          {unknownTypes && unknownTypes.length > 0 && (
+            <div style={{ background: "var(--tint-amber-a, rgba(214,138,0,.10))", border: `1px solid ${demandAmber}`, padding: "7px 11px", marginBottom: 10, fontSize: 12 }}>
+              {unknownTypes.reduce((a, x) => a + x[1], 0)} shift{unknownTypes.reduce((a, x) => a + x[1], 0) === 1 ? "" : "s"} use codes not defined in Rules ({unknownTypes.map(([t]) => t).join(", ")}) — Retime leaves them untouched. Go to RULES to auto-match & build classifications.
+            </div>
+          )}
           <button style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }} onClick={runRetime}>Retime schedule</button>
           <div style={{ marginTop: 10 }}><OptResultBanner optResult={optResult && optResult.kind === "Retime" ? optResult : null} /></div>
         </div>

@@ -603,6 +603,62 @@ function validateSeg(seg, RULES, G) {
   return issues;
 }
 
+/* ---------- type reconciliation ----------
+   For shifts whose type code isn't defined in Rules: first try to re-label them onto an
+   existing classification whose windows legally fit EVERY shift of that code (tightest
+   window wins, mirroring the signup importer's auto-classify); otherwise synthesize a new
+   classification from the observed times — start/end windows are the observed range +/-60
+   min (grid-snapped) so the optimizers have real room to move, work is the most common
+   observed value, break allowance follows the data. Flag-never-block: nothing here deletes
+   or moves a shift; it only gives unknown codes a home so Retime/Suggestions can engage
+   instead of passing them through. Returns null when every type is already known. */
+function reconcileTypes(board, rules, glob) {
+  const byType = new Map();
+  for (const sg of board) {
+    if (rules[sg.type]) continue;
+    if (!byType.has(sg.type)) byType.set(sg.type, []);
+    byType.get(sg.type).push(sg);
+  }
+  if (byType.size === 0) return null;
+  const g5up = (v) => Math.ceil(v / 5) * 5, g5dn = (v) => Math.floor(v / 5) * 5;
+  const retype = new Map();
+  const built = {};
+  for (const [t, segs] of byType) {
+    let best = null, bestW = Infinity;
+    for (const [code, R] of Object.entries(rules)) {
+      if (R.days) continue; // part-time classifications keep their own placement model
+      if (!segs.every((sg) => validateSeg({ ...sg, type: code }, rules, glob).length === 0)) continue;
+      const w = (R.s[1] - R.s[0]) + (R.e[1] - R.e[0]);
+      if (w < bestW) { bestW = w; best = code; }
+    }
+    if (best) { retype.set(t, best); continue; }
+    let sMin = Infinity, sMax = -Infinity, eMin = Infinity, eMax = -Infinity,
+      sprMin = Infinity, sprMax = -Infinity, anyBrk = false;
+    const workCount = new Map();
+    for (const sg of segs) {
+      sMin = Math.min(sMin, sg.s); sMax = Math.max(sMax, sg.s);
+      eMin = Math.min(eMin, sg.e); eMax = Math.max(eMax, sg.e);
+      const spread = sg.e - sg.s;
+      sprMin = Math.min(sprMin, spread); sprMax = Math.max(sprMax, spread);
+      if (sg.b) anyBrk = true;
+      const w = Math.round((spread - (sg.b ? sg.b[1] - sg.b[0] : 0)) / 5) * 5;
+      workCount.set(w, (workCount.get(w) || 0) + 1);
+    }
+    let work = 0, n = -1;
+    for (const [w, c] of workCount) if (c > n || (c === n && w > work)) { work = w; n = c; }
+    built[t] = {
+      s: [Math.max(T0, g5dn(sMin) - 60), g5up(sMax) + 60],
+      e: [Math.max(T0, g5dn(eMin) - 60), g5up(eMax) + 60],
+      spr: [g5dn(sprMin), g5up(sprMax)],
+      work,
+      brk: anyBrk,
+    };
+  }
+  const out = { matched: [...retype.entries()], built: Object.keys(built), rules: { ...rules, ...built } };
+  out.board = retype.size ? board.map((sg) => (retype.has(sg.type) ? { ...cloneSeg(sg), type: retype.get(sg.type) } : sg)) : board;
+  return out;
+}
+
 /* ---------- autofix ---------- */
 function autofixSeg(seg, rules, glob) {
   const R = rules[seg.type];
@@ -6269,7 +6325,7 @@ export {
   T0, T1, N, SLOT, DAYS, WEEKEND_DAYS, fmt, parseHM, cloneSeg,
   parseSignupWorkbook,
   buildSupply, computeEngine, buildCandidates, generateBoard, retimeBoard, deepOptimize, refinePerDay, autoPackage,
-  validateSeg, autofixSeg, packageInfo, startVarianceIssues, segContrib, findSuggestions,
+  validateSeg, autofixSeg, packageInfo, startVarianceIssues, segContrib, findSuggestions, reconcileTypes,
   TimeField, NumField, Nudge, WeekStrip, Stat, CoverageChart, Sketcher, ActualCurve,
   ShapePreviewChart, ShapePreviewFrame, DeltaAreaChart, MovementScatterChart,
   CoveragePriorityShapePreview, ScheduleStabilityPreview,
