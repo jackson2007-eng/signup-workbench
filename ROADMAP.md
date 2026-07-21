@@ -165,6 +165,12 @@ exception days for now; phase strip yes but NO guided tour.
   Build → Review → Handoff, done/pending tints). DEFERRED to follow-up passes: the
   operator-style week-strip/3-state package editor in the siblings, redo for the operator
   module, and the background Optimization monitor port (same deferral as Phase 2).
+- **Follow-up (2026-07-20, SHIPPED)**: Guided setup wizard in both siblings — a shared
+  4-step SetupWizard (demand pattern, service hours, headcount, shift kinds) that
+  pre-fills Rules classifications, hours of operation, Build counts, part-time, and a
+  starting demand curve, clears the sample board, and lands on BUILD ready to generate.
+  "✨ Guided setup" button in each header. Operator-module adaptation (trips/fleet
+  mapping instead of staff peaks) is a natural follow-up.
 - **Follow-up (2026-07-20, SHIPPED)**: type reconciliation in both siblings — uploaded
   schedules whose type codes aren't in Rules previously passed through Retime/optimizers
   silently untouched (root cause of a real user report). Now: shared `reconcileTypes`

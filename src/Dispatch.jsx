@@ -8,7 +8,7 @@ import {
   CoveragePriorityShapePreview, ScheduleStabilityPreview, COVERAGE_RESOLUTIONS,
   TPL, SKETCH_GROUPS, SKETCH_MODE_LABELS,
 } from "./App.jsx";
-import { ImportTab, CompareTab, SuggestTab, OptResultBanner, PhaseStrip, PackagingTab } from "./CallCentre.jsx";
+import { ImportTab, CompareTab, SuggestTab, OptResultBanner, PhaseStrip, PackagingTab, SetupWizard } from "./CallCentre.jsx";
 import { DISPATCH_SAMPLE } from "./dispatchSampleData.js";
 
 /* Dispatch Desks — a third sibling of the operator workbench, reusing the shared coverage engine
@@ -370,6 +370,50 @@ export default function Dispatch({ onHome }) {
     setReconcileResult({ matched: r.matched, built: r.built });
     setSugs(null);
   };
+  // Guided-setup apply: writes rules/spans/counts/PT and a starting demand curve from the
+  // wizard's four answers, and clears the sample schedule so Build starts from this setup.
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const applyWizard = (a) => {
+    const red = a.weekend === "reduced" ? 120 : 0;
+    const newSpans = {};
+    for (const d of DAYS) {
+      const we = d === "Saturday" || d === "Sunday";
+      newSpans[d] = we ? [a.openT + red, a.closeT - red] : [a.openT, a.closeT];
+    }
+    setSpans(newSpans);
+    const O = a.openT, C = a.closeT;
+    const R = {};
+    if (a.types.day) R.DSDAY = { s: [O, Math.min(O + 120, C - 510)], e: [O + 480, Math.min(O + 630, C)], spr: [480, 510], work: 480, brk: true };
+    if (a.types.eve) R.DSEVE = { s: [Math.max(O, C - 630), C - 480], e: [Math.max(O + 480, C - 120), C], spr: [480, 510], work: 480, brk: true };
+    if (a.types.ten) R.DS10 = { s: [O, Math.min(O + 120, C - 630)], e: [O + 600, Math.min(O + 750, C)], spr: [600, 630], work: 600, brk: true };
+    if (Object.keys(R).length) setRules(R);
+    setTypeColors((tc) => ({ ...tc, DSDAY: "#0F7B7A", DSEVE: "#2E86AB", DS10: "#6C5B9E", DSPT: "#B07D2B" }));
+    if (a.types.pt) {
+      setPtEnabled(true);
+      setPtRules({ DSPT: { s: [O, C - 240], e: [O + 240, C], spr: [240, 240], work: 240, brk: false, days: [...DAYS] } });
+      const pt = Math.max(2, Math.round(a.headcount * 0.15));
+      setPtCount(pt);
+      setNDispatchers(Math.max(1, a.headcount - pt));
+    } else {
+      setPtEnabled(false); setPtCount(0);
+      setNDispatchers(Math.max(1, a.headcount));
+    }
+    const tpl = a.pattern === "twoPeak" ? TPL.weekday : a.pattern === "hump" ? TPL.hump : TPL.flat;
+    const sk = {}, pk = {};
+    for (const d of DAYS) {
+      const we = d === "Saturday" || d === "Sunday";
+      sk[d] = [...tpl];
+      pk[d] = Math.max(1, Math.round(a.peakStaff * (we ? 0.5 : 1)));
+    }
+    setSketch(sk); setSketchPeaks(pk); setSketchMode("weekdayWeekend");
+    const o = {};
+    // dispatch demand is the operators-working curve: dispatchers on duty \u00d7 the coverage ratio
+    for (const d of DAYS) o[d] = sketchToOperators(sk[d], Math.max(1, Math.round(pk[d] * (glob.ratioPerDispatcher || 8))));
+    setOperators(o); setDemSource("sketched"); setUploadInfo(null);
+    setBoard([]); setBaselineBoard([]); setScheduleSource("sample"); setScheduleUpload(null);
+    setHist([]); setFuture([]); setSelId(null); setBuildResult(null); setSugs(null); setOptResult(null);
+    setTab("build");
+  };
   const [optResult, setOptResult] = useState(null);
   const scoreOf = (b) => computeEngine(DEM, buildSupply(b), false, glob.minVeh, spans, 0, glob.offPeakBias, glob.coveragePriority, 0, 0, glob).weekScore;
   const findSugs = () => setSugs(findSuggestions(board, eng, DEM, allRules, glob, spans));
@@ -695,6 +739,7 @@ export default function Dispatch({ onHome }) {
           <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 22, fontWeight: 700 }}>DISPATCH DESKS</div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <div style={{ fontSize: 12, color: sampleGray }}>Weekly coverage <b style={{ color: text, fontSize: 15 }}>{weekPct}%</b></div>
+            <button style={nudgeBtn} onClick={() => setWizardOpen(true)} title="Answer four questions to pre-fill rules, hours, staffing, and demand">✨ Guided setup</button>
             <button style={primaryBtn} onClick={exportSchedule}>Export Schedule</button>
             <button style={nudgeBtn} onClick={saveProject}>Save project</button>
             <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Load project</button>
@@ -708,6 +753,7 @@ export default function Dispatch({ onHome }) {
         </div>
 
         {/* nav — phase strip (Setup → Build → Review → Handoff), same model as the operator tool */}
+        <SetupWizard open={wizardOpen} onClose={() => setWizardOpen(false)} noun="dispatcher" onApply={applyWizard} />
         <PhaseStrip tab={tab} setTab={setTab} navClass="dsnav" groups={[
           { phase: "PHASE 1 · SETUP", tabs: [
             { key: "rules", label: "RULES" },
