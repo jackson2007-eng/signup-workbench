@@ -2035,7 +2035,7 @@ function aggregateCoverageRows(rows, bucketMin) {
 }
 
 function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity, avgCycleTime = 0, demandShare = 100, height = 320, selBand,
-  supplyName = "Supply", targetName = "Demand-aligned target", unitLabel = "events", minName = "min", sugTooltip = true, extraSeries = null,
+  supplyName = "Supply", targetName = "Demand-aligned target", unitLabel = "events", minName = "min", minUnitLabel = "vehicles", sugTooltip = true, extraSeries = null,
   eventsPerTrip = 1, // operator demand counts pickup+dropoff (2 events) per trip; siblings pass 1
   onPointClick = null, onDutyCounts = null, slim = false, aggregateMin = 5, showTripBar = false }) {
   const data = useMemo(() => {
@@ -2170,7 +2170,7 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
             violet over the target/gap fills so it can't be misread as rider demand */}
         <Area type="stepAfter" dataKey="staging" name="Pull-out/pull-in staging" stroke={bookoutViolet} strokeDasharray="4 3" strokeWidth={1.3} fill={bookoutViolet} fillOpacity={0.3} tooltipType="none" />
         <Line type="stepAfter" dataKey="sup" name={supplyName} stroke={supplyTeal} strokeWidth={2.2} dot={false} />
-        <ReferenceLine y={minVeh} stroke={demandAmber} strokeDasharray="4 4" label={{ value: `${minName} vehicles ${minVeh}`, position: "insideBottomRight", fontSize: 10, fill: demandAmber }} />
+        <ReferenceLine y={minVeh} stroke={demandAmber} strokeDasharray="4 4" label={{ value: `${minName} ${minUnitLabel} ${minVeh}`, position: "insideBottomRight", fontSize: 10, fill: demandAmber }} />
         {fleetCap > 0 && <ReferenceLine y={fleetCap} stroke={gapRed} strokeDasharray="6 3" label={{ value: `fleet cap ${fleetCap}`, position: "insideTopRight", fontSize: 10, fill: gapRed }} />}
         {selBand && <ReferenceLine x={fmt(selBand[0])} stroke={ink} strokeDasharray="3 3" />}
         {selBand && <ReferenceLine x={fmt(Math.min(selBand[1], T1 - 5))} stroke={ink} strokeDasharray="3 3" />}
