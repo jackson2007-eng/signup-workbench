@@ -170,14 +170,15 @@ exception days for now; phase strip yes but NO guided tour. (2026-07-21: the ope
   2026-07-21 (shared useOptimizerMonitor hook + OptimizerMonitorCard in CallCentre.jsx:
   retime/generate modes, ruin-and-recreate search, stability-discounted accept gate,
   stop-polish with fit-each-day, live sparkline, load-best). STILL DEFERRED: the
-  operator-style week-strip/3-state package editor in the siblings, and the guided-setup
-  wizard for the operator module (needs trips/fleet mapping).
-- **Follow-up (2026-07-20, SHIPPED)**: Guided setup wizard in both siblings — a shared
-  4-step SetupWizard (demand pattern, service hours, headcount, shift kinds) that
-  pre-fills Rules classifications, hours of operation, Build counts, part-time, and a
-  starting demand curve, clears the sample board, and lands on BUILD ready to generate.
-  "✨ Guided setup" button in each header. Operator-module adaptation (trips/fleet
-  mapping instead of staff peaks) is a natural follow-up.
+  operator-style week-strip/3-state package editor in the siblings.
+- **Follow-up (2026-07-20, SHIPPED, then REMOVED 2026-07-21)**: Guided setup wizard in
+  both siblings — a shared 4-step SetupWizard (demand pattern, service hours, headcount,
+  shift kinds) pre-filling Rules/hours/counts/part-time/demand and landing on BUILD. Pulled
+  entirely (SetupWizard component, applyWizard handlers, header button) alongside the
+  operator module's guided tour — single-agency (Edmonton) focus for now, no onboarding
+  needed anywhere in the toolkit. Recoverable from git history if a later multi-agency
+  rollout wants it back; the operator-module adaptation (trips/fleet mapping instead of
+  staff peaks) that was on deck is moot until then.
 - **Follow-up (2026-07-20, SHIPPED)**: type reconciliation in both siblings — uploaded
   schedules whose type codes aren't in Rules previously passed through Retime/optimizers
   silently untouched (root cause of a real user report). Now: shared `reconcileTypes`

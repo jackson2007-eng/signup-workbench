@@ -429,49 +429,6 @@ export default function CallCentre({ onHome }) {
     setReconcileResult({ matched: r.matched, built: r.built });
     setSugs(null);
   };
-  // Guided-setup apply: writes rules/spans/counts/PT and a starting demand curve from the
-  // wizard's four answers, and clears the sample schedule so Build starts from this setup.
-  const [wizardOpen, setWizardOpen] = useState(false);
-  const applyWizard = (a) => {
-    const red = a.weekend === "reduced" ? 120 : 0;
-    const newSpans = {};
-    for (const d of DAYS) {
-      const we = d === "Saturday" || d === "Sunday";
-      newSpans[d] = we ? [a.openT + red, a.closeT - red] : [a.openT, a.closeT];
-    }
-    setSpans(newSpans);
-    const O = a.openT, C = a.closeT;
-    const R = {};
-    if (a.types.day) R.FTDAY = { s: [O, Math.min(O + 120, C - 510)], e: [O + 480, Math.min(O + 630, C)], spr: [480, 510], work: 480, brk: true };
-    if (a.types.eve) R.FTEVE = { s: [Math.max(O, C - 630), C - 480], e: [Math.max(O + 480, C - 120), C], spr: [480, 510], work: 480, brk: true };
-    if (a.types.ten) R.FT10 = { s: [O, Math.min(O + 120, C - 630)], e: [O + 600, Math.min(O + 750, C)], spr: [600, 630], work: 600, brk: true };
-    if (Object.keys(R).length) setRules(R);
-    setTypeColors((tc) => ({ ...tc, FTDAY: "#0F7B7A", FTEVE: "#2E86AB", FT10: "#6C5B9E", AGPT: "#B07D2B" }));
-    if (a.types.pt) {
-      setPtEnabled(true);
-      setPtRules({ AGPT: { s: [O, C - 240], e: [O + 240, C], spr: [240, 240], work: 240, brk: false, days: [...DAYS] } });
-      const pt = Math.max(2, Math.round(a.headcount * 0.15));
-      setPtCount(pt);
-      setNAgents(Math.max(1, a.headcount - pt));
-    } else {
-      setPtEnabled(false); setPtCount(0);
-      setNAgents(Math.max(1, a.headcount));
-    }
-    const tpl = a.pattern === "twoPeak" ? TPL.weekday : a.pattern === "hump" ? TPL.hump : TPL.flat;
-    const sk = {}, pk = {};
-    for (const d of DAYS) {
-      const we = d === "Saturday" || d === "Sunday";
-      sk[d] = [...tpl];
-      pk[d] = Math.max(1, Math.round(a.peakStaff * (we ? 0.5 : 1)));
-    }
-    setSketch(sk); setSketchPeaks(pk); setSketchMode("weekdayWeekend");
-    const c = {};
-    for (const d of DAYS) c[d] = sketchToCalls(sk[d], pk[d]);
-    setCalls(c); setDemSource("sketched"); setUploadInfo(null); setCallSummary(null); setArrivals(null);
-    setBoard([]); setBaselineBoard([]); setScheduleSource("sample"); setScheduleUpload(null);
-    setHist([]); setFuture([]); setSelId(null); setBuildResult(null); setSugs(null); setOptResult(null);
-    setTab("build");
-  };
   const optMonitor = useOptimizerMonitor({
     rules, ptRules, ptEnabled, ptCount, glob, DEM, spans, baselineBoard, buildN: nAgents,
     onLoadBest: (best) => { commit(() => best.map(cloneSeg)); setSelId(null); setSugs(null); setTab("schedule"); },
@@ -804,7 +761,6 @@ export default function CallCentre({ onHome }) {
           <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 22, fontWeight: 700 }}>CALL CENTRE STAFFING</div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <div style={{ fontSize: 12, color: sampleGray }}>Weekly coverage <b style={{ color: text, fontSize: 15 }}>{weekPct}%</b></div>
-            <button style={nudgeBtn} onClick={() => setWizardOpen(true)} title="Answer four questions to pre-fill rules, hours, staffing, and demand">✨ Guided setup</button>
             <button style={primaryBtn} onClick={exportSchedule}>Export Schedule</button>
             <button style={nudgeBtn} onClick={saveProject}>Save project</button>
             <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Load project</button>
@@ -818,7 +774,6 @@ export default function CallCentre({ onHome }) {
         </div>
 
         {/* nav — phase strip (Setup → Build → Review → Handoff), same model as the operator tool */}
-        <SetupWizard open={wizardOpen} onClose={() => setWizardOpen(false)} noun="agent" onApply={applyWizard} />
         <PhaseStrip tab={tab} setTab={setTab} groups={[
           { phase: "PHASE 1 · SETUP", tabs: [
             { key: "rules", label: "RULES" },
@@ -1976,112 +1931,6 @@ export function PackagingTab({ board, packageIssues, tColor, runAutoPackage, run
               )}
             </tbody>
           </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ================= SHARED: GUIDED SETUP WIZARD ================= */
-/* Four questions — demand pattern, hours, headcount, shift types — that pre-fill Rules,
-   Hours of operation, the Build count, part-time, and a starting demand sketch. Everything
-   it writes lands fully editable; it's a starting point, never a lock-in. */
-export function SetupWizard({ open, onClose, noun, onApply }) {
-  const [step, setStep] = useState(0);
-  const [pattern, setPattern] = useState("twoPeak");
-  const [openT, setOpenT] = useState(300);
-  const [closeT, setCloseT] = useState(1440);
-  const [weekend, setWeekend] = useState("reduced");
-  const [headcount, setHeadcount] = useState(20);
-  const [peakStaff, setPeakStaff] = useState(0); // 0 = auto (60% of headcount)
-  const [types, setTypes] = useState({ day: true, eve: true, ten: false, pt: false });
-  if (!open) return null;
-  const effPeak = peakStaff > 0 ? peakStaff : Math.max(1, Math.round(headcount * 0.6));
-  const hasFT = types.day || types.eve || types.ten;
-  const finish = () => {
-    onApply({ pattern, openT, closeT, weekend, headcount, peakStaff: effPeak, types });
-    setStep(0);
-    onClose();
-  };
-  const choiceBtn = (on) => ({ ...nudgeBtn, textAlign: "left", padding: "10px 12px", width: "100%", display: "block",
-    ...(on ? { background: supplyTeal, color: "#fff", border: `1px solid ${supplyTeal}` } : {}) });
-  const checkRow = (key, label, hint) => (
-    <label key={key} style={{ display: "flex", alignItems: "flex-start", gap: 9, cursor: "pointer", padding: "7px 2px" }}>
-      <input type="checkbox" checked={types[key]} onChange={(e) => setTypes((t) => ({ ...t, [key]: e.target.checked }))} style={{ marginTop: 2 }} />
-      <span style={{ fontSize: 13.5 }}>{label}<br /><span style={{ fontSize: 11.5, color: sampleGray }}>{hint}</span></span>
-    </label>
-  );
-  const patternOpt = (key, label, hint) => (
-    <button key={key} style={choiceBtn(pattern === key)} onClick={() => setPattern(key)}>
-      <span style={{ fontSize: 14, fontWeight: 600 }}>{label}</span><br />
-      <span style={{ fontSize: 11.5, opacity: 0.85 }}>{hint}</span>
-    </button>
-  );
-  const titles = ["What does a typical day look like?", "When does the service day run?", `How many ${noun}s are we scheduling?`, "What kinds of shifts are we building?"];
-  return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(8,12,16,.55)", zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: card, border: "1px solid var(--border)", width: 540, maxWidth: "100%", maxHeight: "88vh", overflowY: "auto", padding: "18px 22px 16px" }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
-          <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 21, fontWeight: 700 }}>Guided setup</div>
-          <div style={{ fontSize: 11.5, color: sampleGray }}>step {step + 1} of 4</div>
-          <button onClick={onClose} style={{ ...nudgeBtn, marginLeft: "auto", padding: "2px 9px" }}>×</button>
-        </div>
-        <div style={{ fontSize: 15, fontWeight: 600, margin: "8px 0 10px" }}>{titles[step]}</div>
-
-        {step === 0 && (
-          <div style={{ display: "grid", gap: 8 }}>
-            {patternOpt("twoPeak", "Two peaks (AM + PM)", "Morning and late-afternoon pulses with a quieter midday — the classic weekday shape.")}
-            {patternOpt("hump", "Midday hump", "Builds through the morning, peaks midday, tapers off through the evening.")}
-            {patternOpt("flat", "Steady all day", "Roughly even demand from open to close.")}
-            <div style={{ fontSize: 11.5, color: sampleGray }}>This seeds the demand curve — you can redraw it any time in DEMAND.</div>
-          </div>
-        )}
-
-        {step === 1 && (
-          <div style={{ display: "grid", gap: 10 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "8px 12px", alignItems: "center", fontSize: 13, justifyContent: "start" }}>
-              <span>First shifts can start</span><TimeField value={openT} onCommit={(v) => setOpenT(Math.min(v, closeT - 480))} />
-              <span>Last shifts end by</span><TimeField value={closeT} onCommit={(v) => setCloseT(Math.max(v, openT + 480))} />
-            </div>
-            <div style={{ fontSize: 13 }}>Weekends:</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button style={{ ...nudgeBtn, ...(weekend === "same" ? { background: supplyTeal, color: "#fff", border: `1px solid ${supplyTeal}` } : {}) }} onClick={() => setWeekend("same")}>Same hours</button>
-              <button style={{ ...nudgeBtn, ...(weekend === "reduced" ? { background: supplyTeal, color: "#fff", border: `1px solid ${supplyTeal}` } : {}) }} onClick={() => setWeekend("reduced")}>Shorter (open 2h later, close 2h earlier)</button>
-            </div>
-          </div>
-        )}
-
-        {step === 2 && (
-          <div style={{ display: "grid", gap: 10 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "8px 12px", alignItems: "center", fontSize: 13, justifyContent: "start" }}>
-              <span>Total {noun}s on the roster</span><NumField value={headcount} onCommit={(v) => setHeadcount(Math.max(1, Math.round(v)))} />
-              <span>On duty at the busiest time</span><NumField value={peakStaff > 0 ? peakStaff : effPeak} onCommit={(v) => setPeakStaff(Math.max(1, Math.round(v)))} />
-            </div>
-            <div style={{ fontSize: 11.5, color: sampleGray }}>
-              The roster count becomes the Build tab's package count; the busiest-time number scales the starting demand curve. A rough guess is fine — both stay editable.
-            </div>
-          </div>
-        )}
-
-        {step === 3 && (
-          <div style={{ display: "grid", gap: 2 }}>
-            {checkRow("day", "8-hour day shifts", "Start near opening; 5-day weeks with a mid-shift break.")}
-            {checkRow("eve", "8-hour evening shifts", "End near close; 5-day weeks with a mid-shift break.")}
-            {checkRow("ten", "10-hour shifts", "Longer days, 4-day weeks — same 40 paid hours.")}
-            {checkRow("pt", "Part-time 4-hour shifts", `Short shifts to cover the peaks; ~15% of the roster is set aside for them.`)}
-            {!hasFT && <div style={{ fontSize: 12, color: gapRed, marginTop: 4 }}>Pick at least one full-time shift kind.</div>}
-            <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8, lineHeight: 1.55 }}>
-              Applying will write the shift classifications, hours of operation, staffing counts, and a starting demand curve — and clear the sample schedule so BUILD starts from your setup. Everything stays editable, and nothing is ever locked.
-            </div>
-          </div>
-        )}
-
-        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-          {step > 0 && <button style={nudgeBtn} onClick={() => setStep(step - 1)}>Back</button>}
-          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            {step < 3 && <button style={primaryBtn} onClick={() => setStep(step + 1)}>Next</button>}
-            {step === 3 && <button style={{ ...primaryBtn, opacity: hasFT ? 1 : 0.5, cursor: hasFT ? "pointer" : "default" }} disabled={!hasFT} onClick={finish}>Apply setup</button>}
-          </div>
         </div>
       </div>
     </div>
