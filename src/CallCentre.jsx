@@ -850,11 +850,11 @@ export default function CallCentre({ onHome }) {
                 </div>
               </div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={0} showBookout={false} showProductivity={false} demandShare={100}
-                supplyName="Agents on shift" targetName="Demand-aligned staffing" unitLabel="active calls" minName="floor" minUnitLabel="agents" sugTooltip={false}
+                supplyName="Agents on shift" targetName="Demand-aligned staffing" unitLabel="active calls" minName="floor" minUnitLabel="agents" sugTooltip={false} showTarget={false}
                 extraSeries={peakReq > 0 ? [{ key: "req", name: "Agents required (Erlang)", color: "var(--required-pink)", values: reqCurve, dash: "5 3" }] : null}
                 aggregateMin={coverageResolution} showTripBar />
               <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 6 }}>
-                Teal = agents on shift; shaded target = the demand-aligned agent shape (scale-free coverage of active calls). Amber floor line = minimum agents. Dashed red = agents an Erlang C model needs to answer {glob.slTargetPct > 1 ? glob.slTargetPct : glob.slTargetPct * 100}% of calls within {glob.slTargetSec}s (from active calls + handle time in Rules) — an absolute headcount check the scale-free coverage can't give.
+                Teal = agents on shift. Amber floor line = minimum agents. Dashed red = agents an Erlang C model needs to answer {glob.slTargetPct > 1 ? glob.slTargetPct : glob.slTargetPct * 100}% of calls within {glob.slTargetSec}s (from active calls + handle time in Rules) — an absolute headcount check the scale-free coverage can't give.
               </div>
             </div>
           </div>

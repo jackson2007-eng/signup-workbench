@@ -2037,7 +2037,7 @@ function aggregateCoverageRows(rows, bucketMin) {
 function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity, avgCycleTime = 0, demandShare = 100, height = 320, selBand,
   supplyName = "Supply", targetName = "Demand-aligned target", unitLabel = "events", minName = "min", minUnitLabel = "vehicles", sugTooltip = true, extraSeries = null,
   eventsPerTrip = 1, // operator demand counts pickup+dropoff (2 events) per trip; siblings pass 1
-  onPointClick = null, onDutyCounts = null, slim = false, aggregateMin = 5, showTripBar = false }) {
+  onPointClick = null, onDutyCounts = null, slim = false, aggregateMin = 5, showTripBar = false, showTarget = true }) {
   const data = useMemo(() => {
     const bk = RAW.bookout[day];
     const bkMap = {};
@@ -2163,7 +2163,9 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         {showTripBar && (
           <Area type="stepAfter" dataKey="tripBar" name="Trip volume (this period)" stroke="none" fill={demandAmber} fillOpacity={0.28} tooltipType="none" isAnimationActive={false} />
         )}
-        <Area type="stepAfter" dataKey="target" name={targetName} stroke={targetInk} strokeWidth={1.5} fill="#233746" fillOpacity={0.07} tooltipType={slim ? "none" : undefined} />
+        {showTarget && (
+          <Area type="stepAfter" dataKey="target" name={targetName} stroke={targetInk} strokeWidth={1.5} fill="#233746" fillOpacity={0.07} tooltipType={slim ? "none" : undefined} />
+        )}
         <Area type="stepAfter" dataKey="gap" name="Gap" stroke="none" fill={gapRed} fillOpacity={0.22} legendType="none" />
         <Area type="stepAfter" dataKey="covered" name="Aligned" stroke="none" fill={supplyTeal} fillOpacity={0.16} legendType="none" />
         {/* pull-out/pull-in staging: target at the day's edges with no demand nearby — drawn

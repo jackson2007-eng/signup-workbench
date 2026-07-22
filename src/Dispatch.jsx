@@ -794,11 +794,11 @@ export default function Dispatch({ onHome }) {
                 </div>
               </div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={0} showBookout={false} showProductivity={false} demandShare={100}
-                supplyName="Dispatchers on shift" targetName="Demand-aligned staffing" unitLabel="operators working" minName="floor" minUnitLabel="dispatchers" sugTooltip={false}
+                supplyName="Dispatchers on shift" targetName="Demand-aligned staffing" unitLabel="operators working" minName="floor" minUnitLabel="dispatchers" sugTooltip={false} showTarget={false}
                 extraSeries={peakReq > 0 ? [{ key: "req", name: "Dispatchers required (ratio)", color: "var(--required-pink)", values: reqCurve, dash: "5 3" }] : null}
                 aggregateMin={coverageResolution} showTripBar />
               <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 6 }}>
-                Teal = dispatchers on shift; shaded target = the demand-aligned dispatcher shape (scale-free coverage of concurrent operators working). Amber floor line = minimum dispatchers. Dashed red = dispatchers a simple capacity ratio needs (1 per {glob.ratioPerDispatcher} concurrent operators, floor {glob.minOnDuty}) — an absolute headcount check the scale-free coverage can't give.
+                Teal = dispatchers on shift. Amber floor line = minimum dispatchers. Dashed red = dispatchers a simple capacity ratio needs (1 per {glob.ratioPerDispatcher} concurrent operators, floor {glob.minOnDuty}) — an absolute headcount check the scale-free coverage can't give.
               </div>
             </div>
           </div>
