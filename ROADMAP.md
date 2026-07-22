@@ -147,7 +147,10 @@ note their Rules-tab package settings are currently DECORATIVE, never checked), 
 Reverse gap: siblings have redo; operator module doesn't.
 
 Scope decisions (user, 2026-07-20): full Packaging tab in both siblings; NO holidays/
-exception days for now; phase strip yes but NO guided tour.
+exception days for now; phase strip yes but NO guided tour. (2026-07-21: the operator
+  module's guided tour was removed entirely — single-agency focus for now, no onboarding
+  needed. TOUR_STEPS/TourOverlay and all data-tour anchors deleted; recoverable from git
+  history if a future multi-agency rollout wants it back.)
 
 - **Phase 1 — Schedule import + baseline + Compare** (template download, parser, upload,
   promote, diff view; "agent schedule"/"dispatcher schedule" language).

@@ -1778,144 +1778,6 @@ function refinePerDay(board0, rules, glob, DEM, includePT, minVeh, spans, origin
 }
 
 /* ---------- ui bits ---------- */
-// Guided tour: an ordered walk through the real workflow (Rules → Signup → Demand →
-// Signup Builder → Shift Builder → Coverage → Suggestions → Packaging → Export), each step
-// spotlighting one real element via its data-tour attribute rather than a mocked-up screen.
-// tab: null means "don't switch tabs for this step" (used for the welcome/closing cards and
-// the always-visible toolbar). selector: null means a centered card with no spotlight.
-const TOUR_STEPS = [
-  { tab: null, selector: null, title: "Welcome to the Signup Workbench",
-    body: "This short tour walks through building and refining a paratransit operator signup — setting your rules, loading demand and a real signup, then generating and adjusting shifts. About two minutes, and you can replay it anytime from the Take a tour button." },
-  { tab: "rules", selector: '[data-tour="rules-classification"]', title: "Start with shift classification",
-    body: "Every shift type — AM, NN10, BX, and so on — is defined here: earliest/latest start and end, spread, work hours, and whether a break is allowed. These windows drive everything downstream: what a generated shift can look like, and what gets flagged. Click any type's colored code to rename it, or use + Add type to create your own — nothing here is fixed to these examples." },
-  { tab: "rules", selector: '[data-tour="rules-limits"]', title: "Set your signup's limits",
-    body: "Signup-wide limits live here: how many 10-hour packages you'll allow, your fleet cap, sign-in stagger, and how aggressively resources chase gaps in coverage." },
-  { tab: "rules", selector: '[data-tour="rules-deadhead"]', title: "Deadhead, cycle time & share",
-    body: "Pull-out and pull-in give generated shifts room to stage before the first trip and after the last. Cycle time and demand share size the signup to your real productivity — the calibration below checks your numbers against your own uploaded data." },
-  { tab: "signup", selector: '[data-tour="signup-source"]', title: "Load your real signup",
-    body: "Download the template, fill in your current shifts, and upload it here to replace the sample data. Everything you build compares against this as your baseline." },
-  { tab: "demand", selector: '[data-tour="demand-source"]', title: "Bring in your demand",
-    body: "Upload real 5-minute pickup/dropoff counts, or sketch a curve by feel if you don't have an export handy — every screen scores against whichever source is active." },
-  { tab: "signup-builder", selector: '[data-tour="generate-signup"]', title: "Generate a starting signup",
-    body: "Set a package count — or click Size to requirement to let demand and your fleet cap set it for you — then Generate signup builds whole legal weekly packages in one pass." },
-  { tab: "board", selector: '[data-tour="envelope"]', title: "The signup package banner",
-    body: "This stays pinned as you scroll: total signed runs, and a day-by-day read of demand share vs. coverage score. Tap any day to jump straight to it." },
-  { tab: "board", selector: '[data-tour="shift-gantt"]', title: "Adjust shifts by hand",
-    body: "Drag any bar to move it, drag its edges to resize, or click it to open the full editor below. Sort by run number, start or end time, or bring flagged shifts to the top." },
-  { tab: "coverage", selector: '[data-tour="coverage-chart"]', title: "Read your coverage",
-    body: "The dark line is demand, redrawn to follow your scheduled hours. Red means you're light against demand at that moment; teal above the line means you're heavier than demand calls for. Coverage score is the single number that summarizes this." },
-  { tab: "suggest", selector: '[data-tour="suggestions"]', title: "Let the tool suggest moves",
-    body: "Find suggestions ranks single legal moves by weekly impact. Deep optimize runs a longer search across slides, breaks, and per-day timing — useful once the big structural decisions are made." },
-  { tab: "pack", selector: '[data-tour="packaging"]', title: "Review the full signup sheet",
-    body: "Every weekly package, one row each — flagged packages and single-day orphan runs stand out here, with one-click tools to package or refine them." },
-  { tab: null, selector: '[data-tour="toolbar"]', title: "Export, save, and reload",
-    body: "Export Completed Signup produces the finished signup workbook. Save project keeps everything — rules, demand, board, holidays — in one file you can reload later or hand to someone else." },
-  { tab: null, selector: null, title: "That's the workflow",
-    body: "Rules → Signup → Demand → Signup Builder → Shift Builder → Coverage → Suggestions → Packaging → Export. Replay this tour anytime from the Take a tour button." },
-];
-
-function TourOverlay({ step, stepIndex, total, onNext, onBack, onSkip }) {
-  const [rect, setRect] = useState(null);
-
-  useEffect(() => {
-    setRect(null);
-    if (!step.selector) return;
-    let raf, tries = 0, cancelled = false;
-    const measure = () => {
-      const el = document.querySelector(step.selector);
-      if (el) {
-        el.scrollIntoView({ block: "center", behavior: "auto" });
-        raf = requestAnimationFrame(() => {
-          if (cancelled) return;
-          const r = el.getBoundingClientRect();
-          setRect({ top: r.top, left: r.left, width: r.width, height: r.height });
-        });
-      } else if (tries++ < 30) {
-        raf = requestAnimationFrame(measure);
-      }
-    };
-    measure();
-    const onResize = () => {
-      const el = document.querySelector(step.selector);
-      if (el) { const r = el.getBoundingClientRect(); setRect({ top: r.top, left: r.left, width: r.width, height: r.height }); }
-    };
-    window.addEventListener("resize", onResize);
-    window.addEventListener("scroll", onResize, true);
-    return () => { cancelled = true; cancelAnimationFrame(raf); window.removeEventListener("resize", onResize); window.removeEventListener("scroll", onResize, true); };
-  }, [step]);
-
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === "Escape") onSkip();
-      else if (e.key === "ArrowRight") onNext();
-      else if (e.key === "ArrowLeft") onBack();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onNext, onBack, onSkip]);
-
-  const PAD = 8, CARD_W = 340;
-  const hasSpot = !!rect;
-  let cardTop = null, cardLeft = null;
-  if (hasSpot) {
-    const spaceBelow = window.innerHeight - (rect.top + rect.height);
-    cardTop = spaceBelow > 190 || rect.top < 190
-      ? Math.min(rect.top + rect.height + PAD + 10, window.innerHeight - 260)
-      : Math.max(16, rect.top - PAD - 10 - 220);
-    cardLeft = Math.min(Math.max(rect.left, 16), window.innerWidth - CARD_W - 16);
-  }
-
-  return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 10000 }}>
-      {hasSpot ? (
-        <>
-          <div onClick={onSkip} style={{ position: "fixed", left: 0, top: 0, right: 0, height: Math.max(0, rect.top - PAD), background: "rgba(10,16,22,0.62)" }} />
-          <div onClick={onSkip} style={{ position: "fixed", left: 0, top: rect.top + rect.height + PAD, right: 0, bottom: 0, background: "rgba(10,16,22,0.62)" }} />
-          <div onClick={onSkip} style={{ position: "fixed", left: 0, top: rect.top - PAD, width: Math.max(0, rect.left - PAD), height: rect.height + PAD * 2, background: "rgba(10,16,22,0.62)" }} />
-          <div onClick={onSkip} style={{ position: "fixed", left: rect.left + rect.width + PAD, top: rect.top - PAD, right: 0, height: rect.height + PAD * 2, background: "rgba(10,16,22,0.62)" }} />
-          <div style={{ position: "fixed", left: rect.left - PAD, top: rect.top - PAD, width: rect.width + PAD * 2, height: rect.height + PAD * 2, border: `2px solid ${supplyTeal}`, borderRadius: 4, boxShadow: `0 0 0 3px rgba(15,123,122,0.25), 0 4px 18px rgba(0,0,0,0.3)`, pointerEvents: "none" }} />
-        </>
-      ) : (
-        <div onClick={onSkip} style={{ position: "fixed", inset: 0, background: "rgba(10,16,22,0.68)" }} />
-      )}
-
-      <div style={{
-        position: "fixed",
-        ...(hasSpot ? { top: cardTop, left: cardLeft, width: CARD_W } : { top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 380 }),
-        background: card, border: "1px solid var(--border)", borderRadius: 4,
-        boxShadow: "0 14px 36px rgba(0,0,0,0.32)", padding: "16px 18px",
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-          <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".07em", color: "var(--muted-light)", textTransform: "uppercase" }}>
-            Step {stepIndex + 1} of {total}
-          </div>
-          <button onClick={onSkip} aria-label="Close tour"
-            style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 18, color: "var(--muted-light)", cursor: "pointer", lineHeight: 1, padding: 2 }}>
-            ×
-          </button>
-        </div>
-        <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700, marginBottom: 6, color: text }}>
-          {step.title}
-        </div>
-        <div style={{ fontSize: 13.5, lineHeight: 1.55, color: "var(--text-dark)", marginBottom: 14 }}>
-          {step.body}
-        </div>
-        <div style={{ height: 3, background: "var(--row-border)", borderRadius: 2, marginBottom: 14, overflow: "hidden" }}>
-          <div style={{ height: "100%", width: `${((stepIndex + 1) / total) * 100}%`, background: supplyTeal, transition: "width .2s" }} />
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button onClick={onSkip} style={{ ...nudgeBtn, border: "1px solid transparent", color: "var(--muted-light)" }}>Skip tour</button>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            {stepIndex > 0 && <button onClick={onBack} style={nudgeBtn}>← Back</button>}
-            <button onClick={onNext} style={{ ...nudgeBtn, background: ink, color: "#fff", borderColor: ink }}>
-              {stepIndex === total - 1 ? "Finish" : "Next →"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 const Stat = ({ label, value, sub, tone }) => (
   <div style={{
@@ -2589,15 +2451,6 @@ export default function App({ onHome }) {
   });
   useEffect(() => { localStorage.setItem("theme", theme); }, [theme]);
   const [tab, setTab] = useState("rules");
-  const [tourStep, setTourStep] = useState(null); // null = inactive; index into TOUR_STEPS
-  // the tour drives the real tab state so each step spotlights the actual live element,
-  // not a mocked-up screenshot — keyed on tourStep only, so switching tabs mid-tour by hand
-  // doesn't fight this back
-  useEffect(() => {
-    if (tourStep == null) return;
-    const step = TOUR_STEPS[tourStep];
-    if (step.tab) setTab(step.tab);
-  }, [tourStep]);
   const [day, setDay] = useState("Wednesday");
   const [coverageResolution, setCoverageResolution] = useState(5); // minutes per chart bucket: 5/15/30/60
   const [includePT, setIncludePT] = useState(false);
@@ -3986,11 +3839,7 @@ export default function App({ onHome }) {
         </div>
 
         {/* utility toolbar */}
-        <div data-tour="toolbar" style={{ display: "flex", justifyContent: "flex-end", gap: 6, margin: "10px 0" }}>
-          <button style={{ ...nudgeBtn, borderColor: supplyTeal, color: supplyTeal, fontWeight: 700, marginRight: "auto" }}
-            onClick={() => setTourStep(0)}>
-            ✦ Take a tour
-          </button>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, margin: "10px 0" }}>
           <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={exportBoard}>Export Completed Signup</button>
           <button style={nudgeBtn} onClick={saveProject}>Save project</button>
           <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Load project</button>
@@ -4148,7 +3997,7 @@ export default function App({ onHome }) {
         {/* envelope + day paddles, locked together while scrolling (desktop only — on
             phones the pinned stack would swallow most of the viewport, so .envlock/.seleditor/
             .kpistrip all fall back to normal scrolling under the 640px breakpoint) */}
-        <div data-tour="envelope" className="envlock" style={{ position: "sticky", top: 0, zIndex: 10, background: paper, marginBottom: 12 }}>
+        <div className="envlock" style={{ position: "sticky", top: 0, zIndex: 10, background: paper, marginBottom: 12 }}>
           <div style={{ border: "1px solid var(--border)" }}>
             <div style={{ background: ink, color: "#fff", padding: "10px 14px" }}>
               <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
@@ -4213,7 +4062,7 @@ export default function App({ onHome }) {
 
         {tab === "signup" && (
           <>
-            <div data-tour="signup-source" style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14 }}>
+            <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14 }}>
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>Signup source</div>
               <span style={{ fontSize: 13.5 }}>
                 Working from: <b>{signupSource === "uploaded" ? "your uploaded signup" : "Sample Signup"}</b>
@@ -4295,7 +4144,7 @@ export default function App({ onHome }) {
 
         {tab === "demand" && (
           <>
-            <div data-tour="demand-source" style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14 }}>
+            <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14 }}>
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>Demand source</div>
               <label style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
                 <input type="radio" checked={demSource === "imported"} onChange={() => setDemSource("imported")} />
@@ -4463,7 +4312,7 @@ export default function App({ onHome }) {
               )}
             </div>
 
-            <div data-tour="generate-signup" style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14 }}>
+            <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>
                   Generate a starting signup from the rules and demand
@@ -4767,7 +4616,7 @@ export default function App({ onHome }) {
               <Stat label="Day resources" value={`${P.supVH.toFixed(0)} vh`} sub={`${(P.resourceShare * 100).toFixed(1)}% of week vs ${(P.demandShare * 100).toFixed(1)}% demand`} tone={targetInk} />
             </div>
 
-            <div data-tour="coverage-chart" style={{ background: card, border: "1px solid var(--border)", padding: "14px 4px 4px" }}>
+            <div style={{ background: card, border: "1px solid var(--border)", padding: "14px 4px 4px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6, padding: "0 10px 6px" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600 }}>
                   {day} — service hours vs demand-aligned target
@@ -5171,7 +5020,7 @@ export default function App({ onHome }) {
             )}
 
             {/* gantt */}
-            <div data-tour="shift-gantt" style={{ background: card, border: "1px solid var(--border)", padding: "12px 10px", marginBottom: 12 }}>
+            <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 10px", marginBottom: 12 }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600 }}>
                   {day} signup — {ganttSegs.length} working segment{ganttSegs.length === 1 ? "" : "s"}
@@ -5491,7 +5340,7 @@ export default function App({ onHome }) {
           const singleDay = infos.filter((x) => x.info.daysWorked.size === 1).length;
           return (
             <>
-              <div data-tour="packaging" className="kpistrip" style={{ top: ENVELOPE_H }}>
+              <div className="kpistrip" style={{ top: ENVELOPE_H }}>
                 <div className="kpi"><span className="l">packages</span><span className="v">{shifts.length}</span></div>
                 <div className="kpi"><span className="l">single-day runs</span><span className="v" style={{ color: singleDay ? "#F5C16C" : "#fff" }}>{singleDay}</span></div>
                 <div className="kpi"><span className="l">package flags</span><span className="v" style={{ color: flagged.length ? "#F09E93" : "#7FD1C0" }}>{flagged.length}</span></div>
@@ -5583,7 +5432,7 @@ export default function App({ onHome }) {
 
         {tab === "suggest" && (
           <>
-            <div data-tour="suggestions" style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14 }}>
+            <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600 }}>
                   Top ranked moves — whole-week impact
@@ -5746,7 +5595,7 @@ export default function App({ onHome }) {
             )}
 
             {/* shift types */}
-            <div data-tour="rules-classification" style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14, overflowX: "auto" }}>
+            <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14, overflowX: "auto" }}>
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 8 }}>
                 Shift classification
               </div>
@@ -5956,7 +5805,7 @@ export default function App({ onHome }) {
                 </div>
               </div>
 
-              <div data-tour="rules-limits" style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
+              <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
                   Signup limits
                 </div>
@@ -5976,7 +5825,7 @@ export default function App({ onHome }) {
                 </div>
               </div>
 
-              <div data-tour="rules-algorithm" style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
+              <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
                   Scheduling algorithm
                 </div>
@@ -6096,7 +5945,7 @@ export default function App({ onHome }) {
                 </div>
               </div>
 
-              <div data-tour="rules-deadhead" style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
+              <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
                   Deadhead & productivity
                 </div>
@@ -6333,16 +6182,6 @@ export default function App({ onHome }) {
           </>
         )}
       </div>
-      {tourStep != null && (
-        <TourOverlay
-          step={TOUR_STEPS[tourStep]}
-          stepIndex={tourStep}
-          total={TOUR_STEPS.length}
-          onNext={() => setTourStep((s) => (s + 1 >= TOUR_STEPS.length ? null : s + 1))}
-          onBack={() => setTourStep((s) => Math.max(0, s - 1))}
-          onSkip={() => setTourStep(null)}
-        />
-      )}
     </div>
   );
 }
