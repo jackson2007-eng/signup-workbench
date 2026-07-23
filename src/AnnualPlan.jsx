@@ -276,6 +276,25 @@ export default function AnnualPlan({ onHome, user, logout }) {
     };
     rd.readAsArrayBuffer(file);
   };
+  // Pulls a Resourcing module signup's live board directly from the account — no export/upload
+  // round trip. Same target shape as the xlsx path above (hoursByDowFromBoard), since a saved
+  // signup's payload.board is exactly parseSignupWorkbook's segments shape (see App.jsx buildPayload).
+  const importProviderFromSignup = async (id, resourcingProjectId, signupName) => {
+    if (!resourcingProjectId) return;
+    try {
+      const res = await fetch(`/api/projects/resourcing/${resourcingProjectId}`, { credentials: "include" });
+      const data = await res.json();
+      if (!res.ok || !data.payload || !data.payload.board) { alert("Could not load that signup's board."); return; }
+      const board = data.payload.board;
+      const hoursByDow = hoursByDowFromBoard(board);
+      const shiftCount = new Set(board.map((sg) => sg.shift)).size;
+      setProviders((ps) => ps.map((p) => (p.id === id
+        ? { ...p, hoursMode: "imported", hoursByDow, importInfo: `${shiftCount} shift(s) from "${signupName}" (Resourcing signup)` }
+        : p)));
+    } catch (e) {
+      alert("Could not reach the server to load that signup.");
+    }
+  };
   const addProvider = (role) => setProviders((ps) => [...ps, role === "capacity"
     ? { id: nextId(), name: "New capacity provider", role: "capacity", hoursByDow: [0, 0, 0, 0, 0, 0, 0], productivityWeekday: 2, productivityWeekend: 2, hourlyRate: 50 }
     : { id: nextId(), name: "New remainder provider", role: "remainder", share: 100, perTripRate: 24 }]);
@@ -339,6 +358,10 @@ export default function AnnualPlan({ onHome, user, logout }) {
     providers, history, historyYear, planYear, growthPct, jurisdiction, historySource,
   ]);
   const { items: signups, create: createSignup, rename: renameSignup, remove: removeSignup } = useSignupList("annualplan");
+  // Read-only: lets Providers offer "import from a saved Resourcing signup" alongside the
+  // existing xlsx upload, without any backend change (project reads are already agency-scoped,
+  // not scoped to the module that issued the request — see CLAUDE.md).
+  const { items: resourcingSignups } = useSignupList("resourcing");
   const [projectId, setProjectId] = useState(null);
   useEffect(() => {
     if (!signups || projectId) return;
@@ -412,7 +435,7 @@ export default function AnnualPlan({ onHome, user, logout }) {
         ]} />
 
         {tab === "providers" && (
-          <ProvidersTab {...{ providers, updateProvider, updateProviderHour, addProvider, removeProvider, setHoursMode, updateProviderHeadcount, importProviderBoard }} />
+          <ProvidersTab {...{ providers, updateProvider, updateProviderHour, addProvider, removeProvider, setHoursMode, updateProviderHeadcount, importProviderBoard, importProviderFromSignup, resourcingSignups }} />
         )}
         {tab === "history" && (
           <HistoryTab {...{
@@ -442,7 +465,7 @@ const modeBtn = (active) => ({
   border: `1px solid ${active ? supplyTeal : "var(--border-input)"}`, borderRadius: 2, cursor: "pointer",
   background: active ? supplyTeal : card, color: active ? "#fff" : text,
 });
-function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvider, removeProvider, setHoursMode, updateProviderHeadcount, importProviderBoard }) {
+function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvider, removeProvider, setHoursMode, updateProviderHeadcount, importProviderBoard, importProviderFromSignup, resourcingSignups }) {
   return (
     <div>
       <div style={cardStyle}>
@@ -462,11 +485,23 @@ function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvid
             </div>
             {p.role === "capacity" ? (
               <>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
                   <span style={{ fontSize: 11, color: sampleGray }}>Scheduled hours:</span>
                   <button style={modeBtn((p.hoursMode || "manual") === "manual")} onClick={() => setHoursMode(p.id, "manual")}>Enter directly</button>
                   <button style={modeBtn(p.hoursMode === "headcount")} onClick={() => setHoursMode(p.id, "headcount")}>Compute from headcount</button>
-                  <button style={modeBtn(p.hoursMode === "imported")} onClick={() => document.getElementById("board-upload-" + p.id).click()}>Import from signup board</button>
+                  <select value="" onChange={(e) => {
+                      if (!e.target.value) return;
+                      const s = (resourcingSignups || []).find((s) => s.id === Number(e.target.value));
+                      if (s) importProviderFromSignup(p.id, s.id, s.name);
+                    }}
+                    style={{ ...modeBtn(p.hoursMode === "imported"), maxWidth: 220 }}>
+                    <option value="">Import from signup board…</option>
+                    {resourcingSignups === null && <option disabled>Loading your signups…</option>}
+                    {resourcingSignups && resourcingSignups.length === 0 && <option disabled>No saved Resourcing signups yet</option>}
+                    {resourcingSignups && resourcingSignups.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                  <span style={{ fontSize: 11, color: sampleGray }}>or</span>
+                  <button style={{ ...nudgeBtn, fontSize: 12, padding: "4px 10px" }} onClick={() => document.getElementById("board-upload-" + p.id).click()}>Upload a file…</button>
                   <input id={"board-upload-" + p.id} type="file" accept=".xlsx" style={{ display: "none" }}
                     onChange={(e) => { if (e.target.files && e.target.files[0]) importProviderBoard(p.id, e.target.files[0]); e.target.value = ""; }} />
                 </div>
@@ -496,7 +531,7 @@ function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvid
                 ) : p.hoursMode === "imported" ? (
                   <div style={{ background: "var(--tint-neutral-b)", border: "1px solid var(--border-light)", borderRadius: 2, padding: "10px 12px", marginBottom: 8 }}>
                     <div style={{ fontSize: 12.5, color: sampleGray }}>
-                      {p.importInfo || "Imported from a signup board."} Weekday/weekend hours below are the sum of that board's scheduled shift hours (report-to-off minus break) by day of week — upload again to refresh from a newer board.
+                      {p.importInfo || "Imported from a signup board."} Weekday/weekend hours below are the sum of that board's scheduled shift hours (report-to-off minus break) by day of week — import again to refresh from a newer board.
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 6, marginTop: 8 }}>
                       {DOW_SHORT.map((d, i) => (
