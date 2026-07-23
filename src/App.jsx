@@ -3865,7 +3865,6 @@ export default function App({ onHome, user, logout }) {
             onDelete={(id) => { removeSignup(id); if (id === projectId) setProjectId(null); }} />
           <SaveStatus status={saveStatus} />
           <AccountChip user={user} logout={logout} />
-          <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={exportBoard}>Export Completed Signup</button>
         </div>
 
         {/* phased step navigation */}
@@ -5367,6 +5366,9 @@ export default function App({ onHome, user, logout }) {
                 <div className="kpi"><span className="l">package flags</span><span className="v" style={{ color: flagged.length ? "#F09E93" : "#7FD1C0" }}>{flagged.length}</span></div>
                 <div className="kpi"><span className="l">weekly coverage</span><span className="v">{(eng.weekScore * 100).toFixed(1)}%</span></div>
                 <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: "transparent" }} onClick={exportBoard}>
+                    Export Completed Signup
+                  </button>
                   {singleDay > 0 && (
                     <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: "transparent" }}
                       onClick={() => {
