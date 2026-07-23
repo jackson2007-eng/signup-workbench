@@ -56,6 +56,11 @@ const serialToISO = (serial) => new Date(Math.round((Math.floor(serial) - EXCEL_
    which wins over the model but doesn't stop the model from still being computed — the table shows
    both so an override's effect is visible, not hidden. */
 const MAX_HISTORY_YEARS = 5;
+// The history template always offers "this year back MAX_HISTORY_YEARS" off the real calendar,
+// not whatever year happens to be loaded/previewed — so it keeps moving forward on its own every
+// year with no manual upkeep. Read once per page load; a tab left open across a New Year's
+// rollover would need a refresh to pick up the new year, same as any other page.
+const CURRENT_YEAR = new Date().getFullYear();
 
 function yearsPresent(history) {
   return [...new Set(Object.keys(history).map((iso) => +iso.slice(0, 4)))].sort((a, b) => a - b);
@@ -384,20 +389,22 @@ export default function AnnualPlan({ onHome, user, logout }) {
   });
 
   /* ---------- history upload/template/sample ---------- */
-  // One sheet per year (historyYear down to historyYear-(MAX_HISTORY_YEARS-1)), each its own blank
-  // Date/Trips table named for that year — lets a whole multi-year history be filled in and
+  // One sheet per year (CURRENT_YEAR down to CURRENT_YEAR-(MAX_HISTORY_YEARS-1)), each its own
+  // blank Date/Trips table named for that year — lets a whole multi-year history be filled in and
   // uploaded as a single file instead of one upload pass per year. Any sheet can be left blank
   // (or deleted) for a year you don't have data for; uploadHistory below skips ungrouped rows.
+  // Anchored on the real calendar year, not historyYear (which only drives the chart/stat preview
+  // below), so the offered years keep advancing on their own every year with no manual upkeep.
   const downloadTemplate = () => {
     const wb = XLSX.utils.book_new();
     for (let i = 0; i < MAX_HISTORY_YEARS; i++) {
-      const year = historyYear - i;
+      const year = CURRENT_YEAR - i;
       const rows = [["Date", "Trips"]];
       for (let doy = 0; doy < daysInYear(year); doy++) rows.push([isoForDoy(year, doy), ""]);
       const ws = XLSX.utils.aoa_to_sheet(rows);
       XLSX.utils.book_append_sheet(wb, ws, String(year));
     }
-    XLSX.writeFile(wb, `annual-plan-history-${historyYear - MAX_HISTORY_YEARS + 1}-${historyYear}-template.xlsx`);
+    XLSX.writeFile(wb, `annual-plan-history-${CURRENT_YEAR - MAX_HISTORY_YEARS + 1}-${CURRENT_YEAR}-template.xlsx`);
   };
   // Merges into existing history rather than replacing it, so a second (third, fourth…) file
   // upload adds another year instead of wiping out what's already loaded — up to MAX_HISTORY_YEARS
@@ -796,7 +803,7 @@ function HistoryTab({
       <div style={cardStyle}>
         <div style={hTitle}>Plan setup</div>
         <div style={{ display: "flex", gap: 20, flexWrap: "wrap", fontSize: 13 }}>
-          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>Preview / template year <NumField value={historyYear} onCommit={(v) => setHistoryYear(Math.round(v))} /></label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>Preview year <NumField value={historyYear} onCommit={(v) => setHistoryYear(Math.round(v))} /></label>
           <label style={{ display: "flex", alignItems: "center", gap: 6 }}>Plan year <NumField value={planYear} onCommit={(v) => setPlanYear(Math.round(v))} /></label>
           <label style={{ display: "flex", alignItems: "center", gap: 6 }}>Growth (%) <NumField value={growthPct} step={0.5} onCommit={(v) => setGrowthPct(v)} /></label>
           <label style={{ display: "flex", alignItems: "center", gap: 6 }}>Country
@@ -831,7 +838,7 @@ function HistoryTab({
           </span>
           <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
             <button style={nudgeBtn} onClick={useSample}>Use sample</button>
-            <button style={nudgeBtn} onClick={downloadTemplate}>Download {MAX_HISTORY_YEARS}-year template</button>
+            <button style={nudgeBtn} onClick={downloadTemplate}>Download {CURRENT_YEAR - MAX_HISTORY_YEARS + 1}–{CURRENT_YEAR} template</button>
             <button style={nudgeBtn} onClick={() => upRef.current && upRef.current.click()}>Upload history</button>
             <input ref={upRef} type="file" accept=".csv,.xlsx" style={{ display: "none" }}
               onChange={(e) => { if (e.target.files && e.target.files[0]) uploadHistory(e.target.files[0]); e.target.value = ""; }} />
@@ -864,7 +871,7 @@ function HistoryTab({
           </BarChart>
         </ResponsiveContainer>
         <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 6 }}>
-          The template has one sheet per year ({historyYear - MAX_HISTORY_YEARS + 1}–{historyYear}, one row per calendar date each) — fill in whichever years you have real records for, leave the rest blank, and upload the whole workbook back in one pass. Re-uploading adds to what's already loaded rather than replacing it, so separate single-year files work too.
+          The template has one sheet per year ({CURRENT_YEAR - MAX_HISTORY_YEARS + 1}–{CURRENT_YEAR}, always the current year back {MAX_HISTORY_YEARS}, one row per calendar date each) — fill in whichever years you have real records for, leave the rest blank, and upload the whole workbook back in one pass. Re-uploading adds to what's already loaded rather than replacing it, so separate single-year files work too.
         </div>
       </div>
 
