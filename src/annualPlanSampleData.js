@@ -110,17 +110,17 @@ export const ANNUALPLAN_SAMPLE = {
   dayOverrides: {},
   providers: [
     {
-      id: "inhouse", name: "In-house (direct-operated)", role: "capacity",
+      id: "inhouse", name: "In-house (direct-operated)", role: "capacity", operatorType: "inhouse",
       hoursByDow: [420, 620, 620, 620, 620, 620, 460], // Sun..Sat, daily scheduled service hours
       productivityWeekday: 2.1, productivityWeekend: 1.95, hourlyRate: 60,
     },
     {
-      id: "dedicated", name: "Dedicated contractor", role: "capacity",
+      id: "dedicated", name: "Dedicated contractor", role: "capacity", operatorType: "contractor",
       hoursByDow: [260, 520, 520, 520, 520, 520, 340],
       productivityWeekday: 2.2, productivityWeekend: 2.0, hourlyRate: 48,
     },
     {
-      id: "nondedicated", name: "Non-dedicated (taxi / vehicle-for-hire)", role: "remainder",
+      id: "nondedicated", name: "Non-dedicated (taxi / vehicle-for-hire)", role: "remainder", operatorType: "contractor",
       share: 100, perTripRate: 24,
     },
   ],

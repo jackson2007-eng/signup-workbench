@@ -268,6 +268,13 @@ function hoursByDowFromMarketShare(avgDemandByDow, sharePct, productivityWeekday
 
 const nextId = () => "p" + Math.random().toString(36).slice(2, 9);
 
+// Who actually operates a provider's vehicles (in-house staff vs a contracted company) — a
+// separate dimension from `role` (capacity/remainder, which drives the split engine's waterfall
+// math and never changes). Falls back to role for plans saved before this field existed: capacity
+// providers defaulted to in-house, remainder providers to contractor, matching this file's own
+// prior doctrine text before the split was made explicit and user-editable.
+const operatorTypeOf = (p) => p.operatorType || (p.role === "capacity" ? "inhouse" : "contractor");
+
 // Shared with other modules that need to reproduce this module's own demand-projection and
 // capacity-split math exactly (e.g. Daily Service Report deriving a per-day budget from a saved
 // Annual Plan) — real cross-module reuse for logic this central, same pattern as this file's own
@@ -423,8 +430,8 @@ export default function AnnualPlan({ onHome, user, logout }) {
     }
   };
   const addProvider = (role) => setProviders((ps) => [...ps, role === "capacity"
-    ? { id: nextId(), name: "New capacity provider", role: "capacity", hoursByDow: [0, 0, 0, 0, 0, 0, 0], productivityWeekday: 2, productivityWeekend: 2, hourlyRate: 50 }
-    : { id: nextId(), name: "New remainder provider", role: "remainder", share: 100, perTripRate: 24 }]);
+    ? { id: nextId(), name: "New capacity provider", role: "capacity", operatorType: "inhouse", hoursByDow: [0, 0, 0, 0, 0, 0, 0], productivityWeekday: 2, productivityWeekend: 2, hourlyRate: 50 }
+    : { id: nextId(), name: "New remainder provider", role: "remainder", operatorType: "contractor", share: 100, perTripRate: 24 }]);
   const removeProvider = (id) => setProviders((ps) => ps.filter((p) => p.id !== id));
   // List order is meaningful, not cosmetic: splitDay (see engine above) walks capacity providers
   // in this order for the waterfall (each takes up to its own capacity before the next gets a
@@ -666,7 +673,7 @@ function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvid
       <div style={cardStyle}>
         <div style={hTitle}>Providers</div>
         <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 12 }}>
-          <b>Capacity providers</b> (in-house / dedicated contractors) take trips up to scheduled hours × productivity for that day of week, in the order listed — hours can be set directly, computed from headcount or an uploaded signup board, or from a target <b>market share</b> of daily demand (worked backward through productivity into the hours that share requires). <b>Remainder providers</b> (non-dedicated / taxi) absorb whatever's left, priced per trip — in list order, the last one takes whatever the others didn't claim. Drag the ⠿ handle to reorder; Split and Budget reflect the new order immediately. Add as many of each as you need.
+          <b>Capacity providers</b> take trips up to scheduled hours × productivity for that day of week, in the order listed — hours can be set directly, computed from headcount or an uploaded signup board, or from a target <b>market share</b> of daily demand (worked backward through productivity into the hours that share requires). <b>Remainder providers</b> absorb whatever's left, priced per trip — in list order, the last one takes whatever the others didn't claim. Separately, each provider's dropdown marks whether it's an <b>In House Service Provider</b> or a <b>Contractor</b> — that's what the Budget tab's In House/Contractor totals roll up by, independent of the capacity/remainder split above. Drag the ⠿ handle to reorder; Split and Budget reflect the new order immediately. Add as many of each as you need.
         </div>
         {totalSharePct > 100 && (
           <div style={{ fontSize: 12, color: gapRed, background: "var(--tint-red, #F6E4E1)", border: "1px solid var(--border-light)", padding: "6px 10px", marginBottom: 12 }}>
@@ -692,6 +699,12 @@ function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvid
               <span style={{ fontSize: 11, padding: "2px 8px", background: p.role === "capacity" ? "var(--tint-teal-b)" : "var(--tint-neutral-b)", border: "1px solid var(--border-light)", color: sampleGray, borderRadius: 2 }}>
                 {p.role === "capacity" ? "capacity (hours × productivity)" : "remainder (per trip)"}
               </span>
+              <select value={operatorTypeOf(p)} onChange={(e) => updateProvider(p.id, { operatorType: e.target.value })}
+                title="Who operates this provider's vehicles — feeds the Budget tab's In House / Contractor totals"
+                style={{ fontSize: 12, padding: "3px 6px", border: "1px solid var(--border-input)", borderRadius: 2, background: card, color: text }}>
+                <option value="inhouse">In House Service Provider</option>
+                <option value="contractor">Contractor</option>
+              </select>
               <button style={{ ...nudgeBtn, marginLeft: "auto", color: gapRed, borderColor: gapRed, padding: "3px 8px", fontSize: 12 }} onClick={() => removeProvider(p.id)}>remove</button>
             </div>
             {p.role === "capacity" ? (
@@ -1138,11 +1151,11 @@ function SplitTab({ planYear, providers, rollup, annualTotals, providerColor }) 
 // budget actually gets reviewed in: providers down the side, Jan-Dec + Total across the top. v1
 // keeps one blended rate per provider (no Ambulatory/WAM/escort sub-split) — see ROADMAP.md.
 function BudgetTab({ planYear, providers, rollup, annualTotals, providerColor }) {
-  const capacityProviders = providers.filter((p) => p.role === "capacity");
-  const remainderProviders = providers.filter((p) => p.role === "remainder");
+  const inhouseProviders = providers.filter((p) => operatorTypeOf(p) === "inhouse");
+  const contractorProviders = providers.filter((p) => operatorTypeOf(p) === "contractor");
   const monthCost = (i) => providers.reduce((a, p) => a + (rollup[i].byProvider[p.id]?.cost || 0), 0);
-  const roleMonthCost = (i, role) => providers.filter((p) => p.role === role).reduce((a, p) => a + (rollup[i].byProvider[p.id]?.cost || 0), 0);
-  const annualRoleCost = (role) => providers.filter((p) => p.role === role).reduce((a, p) => a + (annualTotals.byProvider[p.id]?.cost || 0), 0);
+  const operatorMonthCost = (i, opType) => providers.filter((p) => operatorTypeOf(p) === opType).reduce((a, p) => a + (rollup[i].byProvider[p.id]?.cost || 0), 0);
+  const annualOperatorCost = (opType) => providers.filter((p) => operatorTypeOf(p) === opType).reduce((a, p) => a + (annualTotals.byProvider[p.id]?.cost || 0), 0);
   const grandCost = Object.values(annualTotals.byProvider).reduce((a, v) => a + v.cost, 0);
 
   const chartData = MONTHS.map((label, i) => {
@@ -1210,18 +1223,18 @@ function BudgetTab({ planYear, providers, rollup, annualTotals, providerColor })
                 </tr>
               )}
 
-              {capacityProviders.length > 0 && (
+              {inhouseProviders.length > 0 && (
                 <tr style={{ borderTop: "1px solid var(--border-light)", color: sampleGray }}>
-                  <td style={{ padding: "5px 8px" }}>Capacity providers</td>
-                  {MONTHS.map((_, i) => <td key={i} style={tdStyle}>{money(roleMonthCost(i, "capacity"))}</td>)}
-                  <td style={tdStyle}>{money(annualRoleCost("capacity"))}</td>
+                  <td style={{ padding: "5px 8px" }}>In House total</td>
+                  {MONTHS.map((_, i) => <td key={i} style={tdStyle}>{money(operatorMonthCost(i, "inhouse"))}</td>)}
+                  <td style={tdStyle}>{money(annualOperatorCost("inhouse"))}</td>
                 </tr>
               )}
-              {remainderProviders.length > 0 && (
+              {contractorProviders.length > 0 && (
                 <tr style={{ color: sampleGray }}>
-                  <td style={{ padding: "5px 8px" }}>Contractor cost</td>
-                  {MONTHS.map((_, i) => <td key={i} style={tdStyle}>{money(roleMonthCost(i, "remainder"))}</td>)}
-                  <td style={tdStyle}>{money(annualRoleCost("remainder"))}</td>
+                  <td style={{ padding: "5px 8px" }}>Contractor total</td>
+                  {MONTHS.map((_, i) => <td key={i} style={tdStyle}>{money(operatorMonthCost(i, "contractor"))}</td>)}
+                  <td style={tdStyle}>{money(annualOperatorCost("contractor"))}</td>
                 </tr>
               )}
 
