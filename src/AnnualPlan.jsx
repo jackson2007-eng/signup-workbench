@@ -369,6 +369,19 @@ export default function AnnualPlan({ onHome, user, logout }) {
     ? { id: nextId(), name: "New capacity provider", role: "capacity", hoursByDow: [0, 0, 0, 0, 0, 0, 0], productivityWeekday: 2, productivityWeekend: 2, hourlyRate: 50 }
     : { id: nextId(), name: "New remainder provider", role: "remainder", share: 100, perTripRate: 24 }]);
   const removeProvider = (id) => setProviders((ps) => ps.filter((p) => p.id !== id));
+  // List order is meaningful, not cosmetic: splitDay (see engine above) walks capacity providers
+  // in this order for the waterfall (each takes up to its own capacity before the next gets a
+  // shot at what's left) and remainder providers in this order for their % share, with the last
+  // one absorbing whatever's left over — so reordering here changes real numbers on Split/Budget.
+  const reorderProviders = (dragId, dropId) => setProviders((ps) => {
+    const fromIdx = ps.findIndex((p) => p.id === dragId);
+    const toIdx = ps.findIndex((p) => p.id === dropId);
+    if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return ps;
+    const next = [...ps];
+    const [moved] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, moved);
+    return next;
+  });
 
   /* ---------- history upload/template/sample ---------- */
   const downloadTemplate = () => {
@@ -527,7 +540,7 @@ export default function AnnualPlan({ onHome, user, logout }) {
         ]} />
 
         {tab === "providers" && (
-          <ProvidersTab {...{ providers, updateProvider, updateProviderHour, addProvider, removeProvider, setHoursMode, updateProviderHeadcount, importProviderBoard, importProviderFromSignup, resourcingSignups }} />
+          <ProvidersTab {...{ providers, updateProvider, updateProviderHour, addProvider, removeProvider, reorderProviders, setHoursMode, updateProviderHeadcount, importProviderBoard, importProviderFromSignup, resourcingSignups }} />
         )}
         {tab === "history" && (
           <HistoryTab {...{
@@ -558,17 +571,33 @@ const modeBtn = (active) => ({
   border: `1px solid ${active ? supplyTeal : "var(--border-input)"}`, borderRadius: 2, cursor: "pointer",
   background: active ? supplyTeal : card, color: active ? "#fff" : text,
 });
-function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvider, removeProvider, setHoursMode, updateProviderHeadcount, importProviderBoard, importProviderFromSignup, resourcingSignups }) {
+function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvider, removeProvider, reorderProviders, setHoursMode, updateProviderHeadcount, importProviderBoard, importProviderFromSignup, resourcingSignups }) {
+  // Drag-and-drop reorder, native HTML5 DnD (no library — same "keep it simple" pattern this app
+  // uses elsewhere). dragId is the provider being dragged; overId is whichever card the pointer is
+  // currently over, used only for the drop-target highlight — the actual move happens in onDrop.
+  const [dragId, setDragId] = useState(null);
+  const [overId, setOverId] = useState(null);
   return (
     <div>
       <div style={cardStyle}>
         <div style={hTitle}>Providers</div>
         <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 12 }}>
-          <b>Capacity providers</b> (in-house / dedicated contractors) take trips up to scheduled hours × productivity for that day of week, in the order listed. <b>Remainder providers</b> (non-dedicated / taxi) absorb whatever's left, priced per trip. Add as many of each as you need.
+          <b>Capacity providers</b> (in-house / dedicated contractors) take trips up to scheduled hours × productivity for that day of week, in the order listed. <b>Remainder providers</b> (non-dedicated / taxi) absorb whatever's left, priced per trip — in list order, the last one takes whatever the others didn't claim. Drag the ⠿ handle to reorder; Split and Budget reflect the new order immediately. Add as many of each as you need.
         </div>
         {providers.map((p) => (
-          <div key={p.id} style={{ border: "1px solid var(--border-light)", borderRadius: 2, padding: "10px 12px", marginBottom: 10 }}>
+          <div key={p.id}
+            onDragOver={(e) => { if (!dragId || dragId === p.id) return; e.preventDefault(); setOverId(p.id); }}
+            onDragLeave={() => setOverId((o) => (o === p.id ? null : o))}
+            onDrop={(e) => { e.preventDefault(); if (dragId && dragId !== p.id) reorderProviders(dragId, p.id); setDragId(null); setOverId(null); }}
+            style={{
+              border: `1px solid ${overId === p.id ? supplyTeal : "var(--border-light)"}`, borderRadius: 2, padding: "10px 12px", marginBottom: 10,
+              opacity: dragId === p.id ? 0.4 : 1, background: card,
+            }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+              <span title="Drag to reorder" draggable
+                onDragStart={(e) => { setDragId(p.id); e.dataTransfer.effectAllowed = "move"; }}
+                onDragEnd={() => { setDragId(null); setOverId(null); }}
+                style={{ cursor: "grab", color: sampleGray, fontSize: 16, lineHeight: 1, userSelect: "none" }}>⠿</span>
               <input value={p.name} onChange={(e) => updateProvider(p.id, { name: e.target.value })}
                 style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 600, padding: "4px 8px", border: "1px solid var(--border-input)", borderRadius: 2, background: card, color: text, minWidth: 220 }} />
               <span style={{ fontSize: 11, padding: "2px 8px", background: p.role === "capacity" ? "var(--tint-teal-b)" : "var(--tint-neutral-b)", border: "1px solid var(--border-light)", color: sampleGray, borderRadius: 2 }}>
