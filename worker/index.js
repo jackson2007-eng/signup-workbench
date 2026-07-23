@@ -7,7 +7,7 @@ import {
 } from "./db.js";
 import { sendPasswordResetEmail } from "./email.js";
 
-const PROJECT_KINDS = new Set(["resourcing", "callcentre", "dispatch", "annualplan", "vacationplan"]);
+const PROJECT_KINDS = new Set(["resourcing", "callcentre", "dispatch", "annualplan", "vacationplan", "dailyservice"]);
 const ALLOWED_LOGO_MIME = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"]);
 const MAX_LOGO_BYTES = 300 * 1024;
 const REQUEST_ACCESS_LIMIT_PER_DAY = 10;

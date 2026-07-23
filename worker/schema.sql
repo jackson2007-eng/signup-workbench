@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS projects (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   agency_id   INTEGER NOT NULL REFERENCES agencies(id),
-  kind        TEXT NOT NULL CHECK (kind IN ('resourcing','callcentre','dispatch','annualplan','vacationplan')),
+  kind        TEXT NOT NULL CHECK (kind IN ('resourcing','callcentre','dispatch','annualplan','vacationplan','dailyservice')),
   name        TEXT NOT NULL,
   start_date  TEXT,
   end_date    TEXT,

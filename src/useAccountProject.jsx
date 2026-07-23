@@ -48,6 +48,17 @@ export function useAccountProject(kind, projectId, payloadJson, applyPayload) {
           seeded.signupPeriod = { ...seeded.signupPeriod, start: data.startDate || seeded.signupPeriod.start, end: data.endDate || seeded.signupPeriod.end };
         }
         applyRef.current(seeded);
+        // A brand-new signup's seeded defaults would otherwise never reach the server: the
+        // autosave effect below only re-fires when payloadJson's *string* changes, and applying
+        // these same defaults the component already mounted with produces byte-identical JSON —
+        // nothing ever triggers that effect. Every module tolerates a null payload fine on its
+        // own (it just re-seeds the same defaults again next load), but a consumer that reads
+        // *another* project's payload directly (Daily Service Report importing a saved Annual
+        // Plan) needs that payload to actually exist. Fire an explicit one-time save here rather
+        // than relying on change-detection to catch a case where nothing changed.
+        fetch(`/api/projects/${kind}/${projectId}`, {
+          method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(seeded),
+        }).catch(() => {});
       })
       .catch(() => {})
       .finally(() => { if (!cancelled) { loadedRef.current = true; setStatus("idle"); } });

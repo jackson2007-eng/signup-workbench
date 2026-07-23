@@ -268,6 +268,15 @@ function hoursByDowFromMarketShare(avgDemandByDow, sharePct, productivityWeekday
 
 const nextId = () => "p" + Math.random().toString(36).slice(2, 9);
 
+// Shared with other modules that need to reproduce this module's own demand-projection and
+// capacity-split math exactly (e.g. Daily Service Report deriving a per-day budget from a saved
+// Annual Plan) — real cross-module reuse for logic this central, same pattern as this file's own
+// import of parseSignupWorkbook/DAYS from App.jsx, rather than each module re-deriving it.
+export {
+  MONTHS, DOW_SHORT, daysInYear, isoForDoy, dowOfIso, monthOfIso, yearsPresent,
+  buildProjection, splitDay, avgTripsByDow, hoursByDowFromMarketShare,
+};
+
 export default function AnnualPlan({ onHome, user, logout }) {
   const [theme, setTheme] = useState(() => {
     if (!DARK_MODE_ENABLED) return "light";

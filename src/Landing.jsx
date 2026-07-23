@@ -36,6 +36,12 @@ const MODULES = [
     tag: "Seniority bidding · weekly caps",
     body: "Plan a seniority-ordered vacation sign-up: roster each operator's entitlement in weeks, set a maximum-off cap per week of the year, and auto-balance who gets which weeks against those caps.",
   },
+  {
+    key: "dailyservice", path: "/dailyservice", status: "live", accent: supplyTeal,
+    title: "Daily Service Report",
+    tag: "Day-by-day budget calendar",
+    body: "Import a saved Annual Plan and see its budget broken down day by day: trips, hours, and cost per provider across the whole plan year, exactly as the capacity split computes it.",
+  },
 ];
 
 export default function Landing({ navigate, authState }) {

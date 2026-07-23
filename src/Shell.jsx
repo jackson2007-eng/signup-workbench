@@ -4,6 +4,7 @@ import CallCentre from "./CallCentre.jsx";
 import Dispatch from "./Dispatch.jsx";
 import AnnualPlan from "./AnnualPlan.jsx";
 import VacationPlan from "./VacationPlan.jsx";
+import DailyServiceReport from "./DailyServiceReport.jsx";
 
 const ink = "var(--chrome)", text = "var(--text)", paper = "var(--paper)", card = "var(--card)",
   demandAmber = "var(--demand-amber)", supplyTeal = "var(--supply-teal)", bookoutViolet = "var(--bookout-violet)",
@@ -19,6 +20,7 @@ export const TOOLS = [
   { kind: "dispatch", path: "/dispatch", code: "DSP", label: "Dispatch", tag: "Concurrent workload", accent: demandAmber, Comp: Dispatch },
   { kind: "annualplan", path: "/annualplan", code: "ASP", label: "Annual Plan", tag: "Trip forecast & capacity split", accent: bookoutViolet, Comp: AnnualPlan },
   { kind: "vacation", path: "/vacation", code: "VAC", label: "Vacation", tag: "Seniority bidding & caps", accent: demandAmber, Comp: VacationPlan },
+  { kind: "dailyservice", path: "/dailyservice", code: "DSR", label: "Daily Service Report", tag: "Day-by-day budget calendar", accent: supplyTeal, Comp: DailyServiceReport },
 ];
 const KIND_TO_TOOL = Object.fromEntries(TOOLS.map((t) => [t.kind, t]));
 const PATH_TO_KIND = Object.fromEntries(TOOLS.map((t) => [t.path, t.kind]));
@@ -34,6 +36,7 @@ const ICONS = {
   dispatch: <svg {...svgProps}><circle cx="12" cy="12" r="1.8" /><path d="M8.7 8.7a5 5 0 0 0 0 6.6M15.3 8.7a5 5 0 0 1 0 6.6M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8" /></svg>,
   annualplan: <svg {...svgProps}><rect x="4" y="5.5" width="16" height="15" rx="1.5" /><path d="M4 10h16M8 3.5v4M16 3.5v4" /><path d="M8.5 14.7l2 2 4.5-5" /></svg>,
   vacation: <svg {...svgProps}><circle cx="12" cy="12" r="4.2" /><path d="M12 3.5v2.2M12 18.3v2.2M4.6 12H6.8M17.2 12h2.2M6.5 6.5l1.5 1.5M16 16l1.5 1.5M17.5 6.5 16 8M8 16l-1.5 1.5" /></svg>,
+  dailyservice: <svg {...svgProps}><rect x="4" y="5.5" width="16" height="15" rx="1.5" /><path d="M4 10h16M8 3.5v4M16 3.5v4" /><circle cx="8.5" cy="14" r="0.9" fill="currentColor" stroke="none" /><circle cx="12" cy="14" r="0.9" fill="currentColor" stroke="none" /><circle cx="15.5" cy="14" r="0.9" fill="currentColor" stroke="none" /><circle cx="8.5" cy="17.3" r="0.9" fill="currentColor" stroke="none" /><circle cx="12" cy="17.3" r="0.9" fill="currentColor" stroke="none" /></svg>,
   admin: <svg {...svgProps}><path d="M12 3.5 5 6v6c0 4.5 3 7.5 7 8.5 4-1 7-4 7-8.5V6l-7-2.5Z" /><path d="M9 12l2 2 4-4.5" /></svg>,
   logout: <svg {...svgProps}><path d="M10 19H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4" /><path d="M16 15l4-3-4-3M20 12H9" /></svg>,
 };

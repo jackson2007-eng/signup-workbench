@@ -13,21 +13,20 @@ Design doctrine (flag-never-block, no PII, agency-generic language, no speculati
 | `/dispatch` | Dispatch Desks — concurrent-incident load, dispatcher-ratio sizing, full parity with the operator workbench |
 | `/annualplan` | Annual Service Plan — v1: total daily trips projected from prior-year history (day-of-week + statutory-holiday matched) + growth %, split across capacity/remainder providers by scheduled hours × productivity |
 | `/vacation` | Vacation Signup Planner — seniority-ordered roster with entitlement in weeks, editable per-week caps (with a headcount-derived suggestion), auto-balance allocation against those caps |
+| `/dailyservice` | Daily Service Report — v1: day-by-day, per-provider budget calendar snapshot-imported from a saved Annual Plan signup (trips/hours/cost per day, exactly as Annual Plan's own Split/Budget tabs compute it) |
 
 ## Next up
 
-### Daily Service Report (new module, `/dailyservice`) — added 2026-07-22, paused
+### Daily Service Report v2 — actuals entry (parked, added 2026-07-23)
 
-Reviewed against a real 2026 DATS Daily Service Report export (44 pages) — a before/after-
-service-day tracker per provider: budgeted (before-the-day) vs. actual (after-the-day)
-hours, trips, AMB/non-AMB (WAM) passenger splits, escorts, trips/hr, cost/trip, attrition %,
-wait-list carryover, same-day trips. Explicitly paused by the user in favor of building the
-Annual Service Plan tool first (`/annualplan`, shipped 2026-07-22) — the annual plan's
-per-day/per-provider projected-trips output is meant to hand off as the Daily Service
-Report's budgeted baseline calendar, so building it second avoids rework. Pick this up once
-that handoff (annual plan → daily budgeted baseline) is scoped. v1 of the annual plan is
-total-trips-only (no AMB/WAM split) — the Daily Service Report will need that granularity
-layered on, either in its own v1 or as a shared follow-up to the annual plan.
+v1 (shipped 2026-07-23, see "Recently shipped") is the budgeted half only. The original
+before/after-service-day vision (reviewed against a real 2026 DATS Daily Service Report
+export, 44 pages) also wants actual (after-the-day) hours, trips, AMB/non-AMB (WAM)
+passenger splits, escorts, trips/hr, cost/trip, attrition %, wait-list carryover, same-day
+trips — a budget-vs-actual comparison, not just the budget. v1 of the annual plan is
+total-trips-only (no AMB/WAM split), so that granularity needs layering onto Annual Plan
+first (or its own actuals-only field) before a real budget-vs-actual AMB/WAM comparison is
+possible here.
 
 ### Service Performance Tracker (new module, `/service`) — added 2026-07-15
 A tracker for the daily service report agencies already keep in Excel (modelled on the DATS Daily Service Report): daily date × provider records of booked/delivered trips, hours, passengers, and optionally cost.
@@ -223,6 +222,30 @@ branch when pricing resumes.
 - Rename the GitHub repo (signup-workbench → toolkit-wide name).
 
 ## Recently shipped
+- 2026-07-23 — **Daily Service Report module (`/dailyservice`, new, v1: budgeted-only
+  calendar).** Picks up the handoff the roadmap had been waiting on: import a saved Annual
+  Plan signup and see its budget broken down day by day — trips, hours, and cost per
+  provider across the whole plan year — computed by literally reusing Annual Plan's own
+  projection/split engine (`buildProjection`/`splitDay`/`avgTripsByDow`/
+  `hoursByDowFromMarketShare`, newly exported from `AnnualPlan.jsx`) rather than
+  reimplementing it, so the two modules can never silently drift apart. Import is a
+  deliberate snapshot, not a live link — Setup tab picks a saved Annual Plan signup and
+  fetches its payload once; Daily Calendar tab shows the resulting day-by-day table
+  (sticky header, month grouping, same pattern as Annual Plan's own History-tab forecast
+  table). No actuals entry in this pass (see "Daily Service Report v2" above). Verified
+  live against a real imported plan: annual total matched Annual Plan's own figure exactly
+  before and after a growth-% change + re-import, and four spot-checked days (a holiday
+  running Sunday-level hours, a regular weekday, two more holidays) matched hand-calculated
+  capacity-waterfall numbers exactly. Two real, pre-existing bugs surfaced and fixed along
+  the way, both narrower than this feature: (1) `projects.kind`'s D1 CHECK constraint
+  wasn't wired to the same allowlist as the app-layer `PROJECT_KINDS` set — fixed via a new
+  migration (`0005_dailyservice_kind.sql`) recreating the table with the wider constraint,
+  data preserved. (2) `useAccountProject`'s first-load path seeded a brand-new signup's
+  defaults into memory but never actually persisted them to the server (the autosave effect
+  only fires on a payload *change*, and re-applying the same defaults produces byte-identical
+  JSON) — invisible to every existing module, which just re-seed the same defaults again
+  next load, but broken for the first consumer that reads *another* project's payload
+  directly. Fixed by firing an explicit one-time save right after seeding.
 - 2026-07-23 — **Agencies: multi-tenant data sharing.** Saved signups now belong to an **agency**,
   not an individual user — every user at the same agency sees and edits the same set of saved
   signups, so a team stops passing project state around by hand. Admins create agencies from a
