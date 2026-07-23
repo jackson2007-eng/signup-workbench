@@ -384,45 +384,65 @@ export default function AnnualPlan({ onHome, user, logout }) {
   });
 
   /* ---------- history upload/template/sample ---------- */
+  // One sheet per year (historyYear down to historyYear-(MAX_HISTORY_YEARS-1)), each its own blank
+  // Date/Trips table named for that year — lets a whole multi-year history be filled in and
+  // uploaded as a single file instead of one upload pass per year. Any sheet can be left blank
+  // (or deleted) for a year you don't have data for; uploadHistory below skips ungrouped rows.
   const downloadTemplate = () => {
-    const rows = [["Date", "Trips"]];
-    for (let doy = 0; doy < daysInYear(historyYear); doy++) rows.push([isoForDoy(historyYear, doy), ""]);
-    const ws = XLSX.utils.aoa_to_sheet(rows);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Daily Trips");
-    XLSX.writeFile(wb, `annual-plan-history-${historyYear}-template.xlsx`);
+    for (let i = 0; i < MAX_HISTORY_YEARS; i++) {
+      const year = historyYear - i;
+      const rows = [["Date", "Trips"]];
+      for (let doy = 0; doy < daysInYear(year); doy++) rows.push([isoForDoy(year, doy), ""]);
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      XLSX.utils.book_append_sheet(wb, ws, String(year));
+    }
+    XLSX.writeFile(wb, `annual-plan-history-${historyYear - MAX_HISTORY_YEARS + 1}-${historyYear}-template.xlsx`);
   };
   // Merges into existing history rather than replacing it, so a second (third, fourth…) file
   // upload adds another year instead of wiping out what's already loaded — up to MAX_HISTORY_YEARS
-  // years are kept, oldest dropped first once a newer one pushes past the cap.
+  // years are kept, oldest dropped first once a newer one pushes past the cap. Reads every sheet
+  // in the workbook (not just the first) so the multi-year template's one-sheet-per-year layout
+  // uploads in a single pass; a plain single-sheet file (or a .csv, which has no sheet concept)
+  // still works exactly as before.
   const uploadHistory = (file) => {
     const rd = new FileReader();
     rd.onload = () => {
       try {
         const wb = XLSX.read(rd.result, { type: file.name.endsWith(".csv") ? "string" : "array" });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(ws, { header: 1 }).slice(1);
         const out = {}; let parsed = 0, skipped = 0, years = new Set();
-        for (const row of rows) {
-          if (!row || row[0] == null || row[0] === "") continue;
-          let iso = null;
-          if (typeof row[0] === "number") iso = serialToISO(row[0]);
-          else { const d = new Date(row[0]); if (!isNaN(d)) iso = d.toISOString().slice(0, 10); }
-          const trips = Number(row[1]);
-          if (!iso || !Number.isFinite(trips)) { skipped++; continue; }
-          out[iso] = trips; parsed++; years.add(+iso.slice(0, 4));
+        for (const sheetName of wb.SheetNames) {
+          const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1 }).slice(1);
+          for (const row of rows) {
+            if (!row || row[0] == null || row[0] === "") continue;
+            let iso = null;
+            if (typeof row[0] === "number") iso = serialToISO(row[0]);
+            else { const d = new Date(row[0]); if (!isNaN(d)) iso = d.toISOString().slice(0, 10); }
+            if (!iso) { skipped++; continue; }
+            // A blank Trips cell means "not filled in yet" (common for a year's sheet you're only
+            // partway through, or left blank entirely) — not an error, so it's silently skipped
+            // rather than counted against the file.
+            if (row[1] == null || row[1] === "") continue;
+            const trips = Number(row[1]);
+            if (!Number.isFinite(trips)) { skipped++; continue; }
+            out[iso] = trips; parsed++; years.add(+iso.slice(0, 4));
+          }
         }
         if (!parsed) { alert("Could not find any valid Date/Trips rows in that file."); return; }
-        setHistory((h) => {
-          const merged = { ...h, ...out };
-          const keepYears = new Set(yearsPresent(merged).slice(-MAX_HISTORY_YEARS));
-          const capped = {};
-          for (const [iso, v] of Object.entries(merged)) if (keepYears.has(+iso.slice(0, 4))) capped[iso] = v;
-          return capped;
-        });
-        setHistoryYear(years.size === 1 ? [...years][0] : Math.max(...years));
+        const merged = { ...history, ...out };
+        const keepYears = new Set(yearsPresent(merged).slice(-MAX_HISTORY_YEARS));
+        const capped = {};
+        for (const [iso, v] of Object.entries(merged)) if (keepYears.has(+iso.slice(0, 4))) capped[iso] = v;
+        setHistory(capped);
+        // Prefer the most recent *surviving* uploaded year for the preview/template-anchor year —
+        // an uploaded year that's older than the app's other MAX_HISTORY_YEARS years gets evicted
+        // by the cap above in this same pass, and previewing an evicted year would show "0 trips"
+        // for a year that isn't actually loaded.
+        const uploadedYearsKept = [...years].filter((y) => keepYears.has(y));
+        const droppedYears = [...years].filter((y) => !keepYears.has(y)).sort((a, b) => a - b);
+        setHistoryYear(uploadedYearsKept.length ? Math.max(...uploadedYearsKept) : Math.max(...keepYears));
         setHistorySource("uploaded");
-        setUploadInfo(`Loaded ${parsed} day(s)${skipped ? `, skipped ${skipped} unreadable row(s)` : ""} — up to the ${MAX_HISTORY_YEARS} most recent years are kept.`);
+        setUploadInfo(`Loaded ${parsed} day(s) across ${years.size} year(s)${skipped ? `, skipped ${skipped} unreadable row(s)` : ""} — up to the ${MAX_HISTORY_YEARS} most recent years are kept.${droppedYears.length ? ` ${droppedYears.join(", ")} ${droppedYears.length === 1 ? "was" : "were"} older than the other loaded years and got dropped by that cap.` : ""}`);
       } catch (e) {
         alert("Could not read that file — check it matches the Date / Trips template.");
       }
@@ -811,7 +831,7 @@ function HistoryTab({
           </span>
           <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
             <button style={nudgeBtn} onClick={useSample}>Use sample</button>
-            <button style={nudgeBtn} onClick={downloadTemplate}>Download template</button>
+            <button style={nudgeBtn} onClick={downloadTemplate}>Download {MAX_HISTORY_YEARS}-year template</button>
             <button style={nudgeBtn} onClick={() => upRef.current && upRef.current.click()}>Upload history</button>
             <input ref={upRef} type="file" accept=".csv,.xlsx" style={{ display: "none" }}
               onChange={(e) => { if (e.target.files && e.target.files[0]) uploadHistory(e.target.files[0]); e.target.value = ""; }} />
@@ -844,7 +864,7 @@ function HistoryTab({
           </BarChart>
         </ResponsiveContainer>
         <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 6 }}>
-          Template is one row per calendar date in {historyYear} — download it, fill in the Trips column from your own records, and upload it back. Uploading another year's file adds to what's already loaded (up to {MAX_HISTORY_YEARS} years); it doesn't replace it.
+          The template has one sheet per year ({historyYear - MAX_HISTORY_YEARS + 1}–{historyYear}, one row per calendar date each) — fill in whichever years you have real records for, leave the rest blank, and upload the whole workbook back in one pass. Re-uploading adds to what's already loaded rather than replacing it, so separate single-year files work too.
         </div>
       </div>
 
