@@ -7,6 +7,7 @@ import {
 const PROJECT_KINDS = new Set(["resourcing", "callcentre", "dispatch", "annualplan", "vacationplan"]);
 const REQUEST_ACCESS_LIMIT_PER_DAY = 10;
 const LOGIN_FAILURE_LIMIT = 8;
+const LOGIN_IP_FAILURE_LIMIT = 25; // looser than the per-username cap — one IP can be a whole agency's office
 const LOGIN_FAILURE_WINDOW_SECONDS = 15 * 60;
 
 function json(data, init = {}) {
@@ -67,6 +68,13 @@ async function handleApi(request, env, url) {
     if (!isSameOrigin(request)) return forbidden();
     const body = await request.json().catch(() => null);
     if (!body || !body.username || !body.password) return badRequest("Username and password are required.");
+
+    // Per-IP cap in addition to the per-username one below — without it, an attacker can
+    // brute-force many different usernames from a single IP without ever tripping any one
+    // username's limit.
+    const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+    const ipOk = await throttle(env, `throttle:login-ip:${ip}`, LOGIN_IP_FAILURE_LIMIT, LOGIN_FAILURE_WINDOW_SECONDS);
+    if (!ipOk) return json({ error: "Too many failed attempts. Try again in a few minutes." }, { status: 429 });
 
     const failKey = `throttle:login:${String(body.username).toLowerCase()}`;
     const attemptsOk = await throttle(env, failKey, LOGIN_FAILURE_LIMIT, LOGIN_FAILURE_WINDOW_SECONDS);

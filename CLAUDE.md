@@ -4,19 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A scheduler's workbench (Vite + React SPA) for designing paratransit/microtransit operator signups (shift bids). Users are operations planners, not engineers — the UI is the product. Read [PROJECT_NOTES.md](PROJECT_NOTES.md) before touching engine code (`src/App.jsx`) — it documents the scoring metric, domain model, and several non-obvious design decisions that were already tried and reverted once.
+**Paratransit Companion** (formerly "Transit Operations Toolkit") — a suite of planning tools for paratransit/microtransit agencies (resourcing, budget, operations), built on a shared coverage-scoring engine. Users are operations planners, not engineers — the UI is the product. Read [PROJECT_NOTES.md](PROJECT_NOTES.md) before touching engine code (`src/App.jsx`) — it documents the scoring metric, domain model, and several non-obvious design decisions that were already tried and reverted once.
+
+Every tool module requires a signed-in, approved account (2026-07-23 pivot — see Architecture and ROADMAP.md's "Recently shipped"); the public `/` landing page stays open for marketing + requesting access. This is a real architecture departure from the project's original no-backend design — read the account-data note under Design doctrine before assuming "nothing leaves the browser" still applies everywhere.
 
 ## Commands
 
 ```
 npm install       # install deps
-npm run dev       # start dev server (vite, default http://localhost:5173)
+npm run dev       # start dev server, frontend only, no /api/* (vite, default http://localhost:5173)
+npm run dev:api   # start dev server WITH the Worker backend (accounts, project persistence) — use this whenever touching auth/API/persistence code
 npm run build     # production build -> dist/
 npm run preview   # build + run a local Wrangler dev server (Cloudflare Workers emulation)
 npm run deploy    # build + wrangler deploy — this is how the live site actually updates
 ```
 
-No test suite, linter, or type checker is configured. There is no backend in the app-logic sense: all data enters/exits at runtime via Save/Load project (JSON) and Export board (xlsx) — nothing is persisted server-side.
+No test suite, linter, or type checker is configured. `npm run dev` alone has no backend (the plain frontend dev server, kept fast and free of the Cloudflare Vite plugin's macOS-13.5+ requirement — see the note below); if a page shows "Can't reach the API," that's expected there and `npm run dev:api` is what you want instead.
 
 **Deployment is NOT git-triggered.** The site is hosted on Cloudflare Workers (`wrangler.jsonc`), and pushing to GitHub does nothing on its own — there is no CI/build hook connected. Someone must run `npm run deploy` locally (or in a pipeline, if one is ever added) after pushing for changes to actually go live. This has caused real confusion before (a push was mistaken for a deploy) — don't assume `git push` ships anything.
 
@@ -26,13 +29,16 @@ No test suite, linter, or type checker is configured. There is no backend in the
 
 - Algorithms are advisors, never autocrats. Tools *flag* rule violations, they never *block* edits — the scheduler always holds the pen.
 - Generated output must always land as a fully editable board, same as an imported one.
-- No personal information anywhere: aggregate demand + shift structures only, no rider data, no operator names. This is a deliberate procurement/security property — protect it.
+- **No personal information in scheduling-domain data**: aggregate demand + shift structures only, no rider data, no operator names, in any module's own content (boards, demand curves, rosters). This is a deliberate procurement/security property — protect it. It does **not** extend to account data (see below) — that's a separate, newer category with its own, narrower rules.
+- **Account data** (username, contact name, work email, agency, request message) is a real, intentional exception to "no personal information anywhere" — the 2026-07-23 accounts pivot means this specific, minimal set of fields now lives server-side in D1 by design. Collect only what `/request-access` already asks for, nothing more. Never expose it to a non-admin API response (`/api/admin/*` routes are the only place contact fields and pending-user lists may appear); `/api/me` and login responses return only `{username, isAdmin}`. Each user's saved project payload (`projects.payload` in D1) is treated as an opaque JSON blob by the Worker — it's never parsed or inspected server-side, so the "no PII in scheduling-domain data" rule above is what actually protects it, not access control.
 - Agency-specific values (shift types, rules, thresholds) live in editable data (Rules tab, project files), never hardcoded. UI language stays industry-generic ("extra board", not local slang).
-- Real agency data belongs only in private project files (JSON), never in this repo or the deployed bundle. The repo/deployed app ships synthetic sample data only (`src/sampleData.js`).
+- Real agency data belongs only in each account's own saved project (D1) or private project files (JSON) — never in this repo or the deployed bundle. The repo/deployed app ships synthetic sample data only (`src/sampleData.js` and its per-module siblings).
 
 ## Architecture
 
-The entire app — engine, UI, and state — lives in `src/App.jsx` (~2,600 lines); `src/sampleData.js` holds the shipped synthetic demand/board, `src/main.jsx` is the React entry point. There is no routing or backend; state is held in React and round-trips through project-file JSON. One external dependency beyond the core stack: `date-holidays` (statutory holiday lookup, offline/bundled data, dynamically `import()`-ed only when the Rules tab is opened so it doesn't bloat the main chunk).
+**Frontend**: `src/main.jsx` is the entry point and router (no library — `history.pushState`/`popstate`); it gates the five tool paths plus authed `/` behind a session check and hands them to `src/Shell.jsx`, the app-shell (icon rail + in-app tab strip + Home dashboard) that keeps every opened tool mounted so switching tabs never loses in-progress state. `src/Landing.jsx` is the public marketing page (signed-out `/`), `src/Auth.jsx` holds Sign in / Request access / Admin. Each of the five tool modules is still a large, mostly self-contained file — `src/App.jsx` (~6,200 lines, the original engine + Resourcing UI + shared exports the siblings import from), `src/CallCentre.jsx`, `src/Dispatch.jsx`, `src/AnnualPlan.jsx`, `src/VacationPlan.jsx` — each with its own `sampleData.js`-style synthetic dataset. `src/useAccountProject.jsx` is the shared load-on-mount/debounced-autosave hook every module uses to persist its project to the account backend, replacing the old download/upload-a-JSON-file flow (kept as a secondary "Export/Import backup JSON" feature). One external dependency beyond the core stack: `date-holidays` (statutory holiday lookup, offline/bundled data, dynamically `import()`-ed only when the Rules tab is opened so it doesn't bloat the main chunk).
+
+**Backend**: `worker/index.js` is the Worker's `fetch` handler (`wrangler.jsonc`'s `main`) — routes `/api/*`, falls through to `env.ASSETS.fetch(request)` for everything else (the SPA, served as static assets same as before the pivot). `worker/auth.js` does PBKDF2 password hashing (100,000 iterations — Cloudflare's production runtime hard-caps it there; don't raise without checking that cap first) and opaque-token session management via KV. `worker/db.js` holds the D1 query helpers. `worker/schema.sql` is the D1 schema (`users`, `projects` tables). No ORM, no ROUTER library — deliberately matches the frontend's own no-framework, hand-rolled style.
 
 ### Scoring metric (the core idea everything else serves)
 
@@ -91,4 +97,4 @@ The Signup Package banner + day paddles, the `.kpistrip`, and (on Shift Builder,
 
 ## Roadmap context (for scoping new work)
 
-The living backlog is [ROADMAP.md](ROADMAP.md) — check it before scoping new work, and move items there when they ship or get parked. Standing rule: SaaS/multi-tenant accounts are explicitly parked until a second agency is real — don't add backend/auth infrastructure speculatively (the Service Tracker's phase 2 in ROADMAP.md is the designated path when that changes).
+The living backlog is [ROADMAP.md](ROADMAP.md) — check it before scoping new work, and move items there when they ship or get parked. The account/backend infrastructure ROADMAP.md previously described as "parked until a second agency is real" (Service Tracker's phase 2) **shipped toolkit-wide 2026-07-23** — see ROADMAP.md's "Recently shipped" for what actually landed (username+password, not the email-link auth originally sketched there) and the superseded-note callouts left in place where the old plan is now stale. Don't take that document's Commercialization/tier framing (accounts as an Enterprise-only upsell) as still accurate without checking those notes first.

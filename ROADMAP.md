@@ -35,7 +35,7 @@ A tracker for the daily service report agencies already keep in Excel (modelled 
 - **Phase 1 — file-based (build first):** downloadable template + xlsx upload, plus a quick daily-entry form. Derived KPIs, computed never typed: productivity (pax/hr, revenue-vs-paid hours explicit), attrition % (booked vs delivered), provider share of delivered trips, cost per trip/hour via a contractor-rates card. Views: day-of-week patterns, month-over-month trends, provider-mix stacked bars, threshold flags. History rides in project JSON. **Data model = flat rows from day one** (`{date, provider, booked, delivered, hours, passengers, cost}`) so later phases are plumbing, not redesign.
 - **Killer feature:** "Calibrate signup tool from actuals" — sets `demandShare` and validates `avgCycleTime` in `/resourcing` from measured share-by-day-type and productivity (the two numbers behind the vehicle over-inflation problem).
 - **Phase 1.5 — local persistence:** localStorage/IndexedDB so daily entry survives closing the tab, + export-history button. No backend.
-- **Phase 2 — accounts (parked until a second agency is real):** Cloudflare D1 (records) + KV (sessions) + email-link auth on the existing Workers deploy. Daily-entry habit is what justifies accounts; signup/call-centre project saves can join later. Changes the security posture from "nothing leaves your browser" to "we store your operational data" — needs ToS/backup/support answers before building.
+- **Phase 2 — accounts:** *(superseded 2026-07-23 — accounts shipped toolkit-wide, not gated to a second agency or scoped to this tracker specifically, and using username+password rather than the email-link auth sketched below. See "Recently shipped." When this tracker is built, it plugs into the same D1/KV/session system already live rather than standing up its own.)* ~~Cloudflare D1 (records) + KV (sessions) + email-link auth on the existing Workers deploy. Daily-entry habit is what justifies accounts; signup/call-centre project saves can join later. Changes the security posture from "nothing leaves your browser" to "we store your operational data" — needs ToS/backup/support answers before building.~~
 
 ### Carried from earlier planning
 - Compare & Publish module — scenario comparison, posting-format export, change memo.
@@ -75,7 +75,7 @@ A tracker for the daily service report agencies already keep in Excel (modelled 
 
 - **Free — Individual/Explorer.** Full Rules tab (classification, breaks, limits, scheduling-algorithm sliders — no reason to gate settings). Demand tab, sketch mode only. Shift Builder fully manual (add shift, drag, nudge, duplicate, remove). Full Coverage scoring/chart, so the free tier shows real payoff, not a teaser. Usable solo, indefinitely, for real planning — not sample-data-only.
 - **Premium — monthly/annual**, the existing fleet-size pricing table below. Everything in Free, plus: real demand-data upload, Signup Builder auto-generate, the full optimizer suite (Suggestions/Deep Optimize/Retime), Packaging tab, and — the actual trigger — **Save/Load project and Export**. Open question: bundle Call Centre/Dispatch into Premium, or sell as add-on modules once they have optimizer/Suggestions parity with the operator tool?
-- **Enterprise — custom quote.** Real multi-user accounts (phase-2 accounts work below: D1 + KV + email-link auth) so more than one planner shares live project state instead of passing JSON files around, plus procurement paperwork (security questionnaires, insurance certs, W9) and hands-on onboarding. Note the honest tradeoff: accounts mean agency data leaves the browser and lives on our infrastructure — a real departure from "nothing leaves your browser," acceptable specifically at the tier where a customer expects and pays for infrastructure, not a free upgrade to build.
+- **Enterprise — custom quote.** Real multi-user accounts (phase-2 accounts work below: D1 + KV + email-link auth) so more than one planner shares live project state instead of passing JSON files around, plus procurement paperwork (security questionnaires, insurance certs, W9) and hands-on onboarding. Note the honest tradeoff: accounts mean agency data leaves the browser and lives on our infrastructure — a real departure from "nothing leaves your browser," acceptable specifically at the tier where a customer expects and pays for infrastructure, not a free upgrade to build. *(Note 2026-07-23 — accounts have since shipped toolkit-wide via username+password, not gated to Enterprise; this tier's pricing framing needs a deliberate revisit, not an assumption it still holds. See "Recently shipped.")*
 
 **Payment/licensing mechanics (stateless, fits the no-backend doctrine — Free/Premium only; Enterprise needs phase-2 accounts):**
 1. Merchant-of-record (Lemon Squeezy or Paddle) for checkout, subscriptions, tax, and native license keys — customer billing data lives entirely with them.
@@ -223,6 +223,30 @@ branch when pricing resumes.
 - Rename the GitHub repo (signup-workbench → toolkit-wide name).
 
 ## Recently shipped
+- 2026-07-23 — **Paratransit Companion pivot: accounts, server-side persistence, app-shell.**
+  Product owner decided to stop offering anonymous/local-only usage — every tool module now
+  requires a signed-in, approved account, replacing browser Save/Load-as-file with Cloudflare
+  D1 (per-user per-module payload, treated as an opaque blob server-side) behind Cloudflare KV
+  session cookies. Approval-gated signup (a `/request-access` form the requester fills in
+  themselves, an admin approves via `/admin`) rather than fully open self-serve, and
+  **username+password** rather than the email-link auth this Roadmap previously sketched for
+  the accounts phase (see the superseded note above) — chosen to avoid an external
+  email-service dependency for v1; password resets are a manual admin action for now. PBKDF2
+  iterations dropped from the initially-planned 210,000 to 100,000 after deploy revealed
+  Cloudflare's production Workers runtime hard-caps it there (local `wrangler dev` doesn't
+  enforce the cap, so this only surfaced live). Runs entirely on Cloudflare's free tier at
+  current pilot scale — D1/KV usage confirmed nowhere near either service's free-tier limits.
+  Also shipped: a persistent app-shell (`src/Shell.jsx` — icon rail + in-app tab strip + Home
+  dashboard) replacing the old one-page-at-a-time module navigation, so every opened tool stays
+  mounted and switching tabs never loses in-progress edits; the public Landing page rebranded
+  "Paratransit Companion" with auth-aware CTAs. Dark mode is temporarily switched off app-wide
+  (`src/themeFlag.js`, one constant) — with several tools mountable at once in the shell, each
+  module's independent theme state caused visible cross-tab mismatches; the underlying
+  dark-mode CSS and toggle buttons are untouched, so this is a one-line revert once theme state
+  is properly shared instead of per-module. Login/signup also gained per-IP and per-username
+  rate limiting (KV counters) and a security pass confirmed no non-admin API response returns
+  another user's payload, password fields, or contact info, and that the session cookie carries
+  `HttpOnly; Secure; SameSite=Lax` with no `Domain=` in the deployed environment.
 - 2026-07-22 — Vacation Signup Planner module (`/vacation`, new, separate from Annual Plan).
   Reviewed a real DATS operator vacation sign-up sheet — it contains real operator names and
   badge numbers, never reproduced, stored, or used as sample data anywhere; only the
