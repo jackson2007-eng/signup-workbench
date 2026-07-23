@@ -1,18 +1,17 @@
 import React, { useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
-import App from "./App.jsx";
-import CallCentre from "./CallCentre.jsx";
-import Dispatch from "./Dispatch.jsx";
-import AnnualPlan from "./AnnualPlan.jsx";
-import VacationPlan from "./VacationPlan.jsx";
 import Landing from "./Landing.jsx";
 import { SignIn, RequestAccess, Admin } from "./Auth.jsx";
+import Shell, { TOOLS } from "./Shell.jsx";
 
 // Minimal path router — no library. history.pushState + popstate keep the URL honest so deep
 // links and the browser back button work (Cloudflare serves index.html for any path via the
 // single-page-application asset fallback in wrangler.jsonc). Tracks pathname+search as one
 // string so `next=` redirects (e.g. /signin?next=/annualplan) work without extra state.
-const PROTECTED = { "/resourcing": App, "/callcentre": CallCentre, "/dispatch": Dispatch, "/annualplan": AnnualPlan, "/vacation": VacationPlan };
+// Tool paths are gated here (auth + loading states) but actually rendered by Shell, which keeps
+// every opened tool mounted at once behind an icon rail + tab strip instead of swapping a single
+// full-page component per route.
+const TOOL_PATHS = new Set(TOOLS.map((t) => t.path));
 
 function AuthLoading() {
   return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "system-ui, sans-serif", color: "#5B6B75" }}>Loading…</div>;
@@ -65,7 +64,7 @@ function Root() {
   };
   const onSignedIn = (u) => { setUser(u); setAuthState("authed"); };
 
-  const needsAuth = !!PROTECTED[path];
+  const needsAuth = TOOL_PATHS.has(path);
   useEffect(() => {
     if (needsAuth && authState === "anon") navigate(`/signin?next=${encodeURIComponent(path)}`);
   }, [needsAuth, authState, path]);
@@ -79,8 +78,7 @@ function Root() {
     if (authState === "loading") return <AuthLoading />;
     if (authState === "unreachable") return <ApiUnreachable />;
     if (authState !== "authed") return <AuthLoading />; // redirect effect above is about to fire
-    const Comp = PROTECTED[path];
-    return <Comp onHome={() => navigate("/")} user={user} logout={logout} />;
+    return <Shell path={path} navigate={navigate} user={user} logout={logout} />;
   }
 
   if (path === "/signin") return <SignIn navigate={navigate} params={params} onSignedIn={onSignedIn} />;
@@ -89,6 +87,9 @@ function Root() {
     if (authState === "loading") return <AuthLoading />;
     if (authState !== "authed" || !user?.isAdmin) return <AuthLoading />; // redirect effect above
     return <Admin navigate={navigate} />;
+  }
+  if (path === "/" && authState === "authed") {
+    return <Shell path="/" navigate={navigate} user={user} logout={logout} />;
   }
   return <Landing navigate={navigate} authState={authState} user={user} logout={logout} />;
 }
