@@ -1,12 +1,17 @@
 // Small D1 query helpers. The Worker's route handlers call these rather than embedding SQL
 // inline — keeps worker/index.js focused on routing/auth-checking, not query construction.
 
+// Both joined to agencies so the session-resolved user always carries its agency's name in one
+// query (agency_name is null for a pending user, who has no agency_id yet).
+const USER_SELECT = `SELECT users.*, agencies.name AS agency_name FROM users
+  LEFT JOIN agencies ON agencies.id = users.agency_id`;
+
 export async function getUserByUsername(env, username) {
-  return env.DB.prepare("SELECT * FROM users WHERE username = ?").bind(username).first();
+  return env.DB.prepare(`${USER_SELECT} WHERE users.username = ?`).bind(username).first();
 }
 
 export async function getUserById(env, id) {
-  return env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(id).first();
+  return env.DB.prepare(`${USER_SELECT} WHERE users.id = ?`).bind(id).first();
 }
 
 export async function createPendingUser(env, { username, hash, salt, iterations, name, email, agency, message }) {
@@ -26,10 +31,10 @@ export async function listPendingUsers(env) {
   return results;
 }
 
-export async function approveUser(env, id, approvedByUserId) {
+export async function approveUser(env, id, approvedByUserId, agencyId) {
   await env.DB.prepare(
-    `UPDATE users SET status = 'approved', approved_at = datetime('now'), approved_by = ? WHERE id = ?`
-  ).bind(approvedByUserId, id).run();
+    `UPDATE users SET status = 'approved', approved_at = datetime('now'), approved_by = ?, agency_id = ? WHERE id = ?`
+  ).bind(approvedByUserId, agencyId, id).run();
 }
 
 export async function rejectUser(env, id) {
@@ -42,51 +47,78 @@ export async function setUserPassword(env, id, { hash, salt, iterations }) {
   ).bind(hash, salt, iterations, id).run();
 }
 
-// projects: many named, datable signups per (user, kind) — every query below binds user_id
-// from the session-derived caller, never a client-supplied value. That's the load-bearing IDOR
-// guard now that ids are visible/sequential across the whole table, not implicitly scoped by a
-// (user_id, kind) composite key the way the old single-row-per-kind design was.
+export async function setUserAgency(env, id, agencyId) {
+  await env.DB.prepare(`UPDATE users SET agency_id = ? WHERE id = ?`).bind(agencyId, id).run();
+}
 
-export async function listProjects(env, userId, kind) {
+export async function listApprovedUsers(env) {
   const { results } = await env.DB.prepare(
-    `SELECT id, name, start_date, end_date, created_at, updated_at FROM projects
-     WHERE user_id = ? AND kind = ? ORDER BY updated_at DESC`
-  ).bind(userId, kind).all();
+    `SELECT users.id, users.username, users.contact_name, users.contact_email, users.is_admin,
+            users.agency_id, agencies.name AS agency_name
+     FROM users LEFT JOIN agencies ON agencies.id = users.agency_id
+     WHERE users.status = 'approved' ORDER BY users.username COLLATE NOCASE`
+  ).all();
   return results;
 }
 
-export async function getProjectById(env, userId, kind, id) {
-  return env.DB.prepare(
-    `SELECT id, name, start_date, end_date, payload, updated_at FROM projects
-     WHERE id = ? AND user_id = ? AND kind = ?`
-  ).bind(id, userId, kind).first();
+// agencies: the data-sharing unit every approved user belongs to (see projects below).
+export async function listAgencies(env) {
+  const { results } = await env.DB.prepare(`SELECT id, name FROM agencies ORDER BY name COLLATE NOCASE`).all();
+  return results;
 }
 
-export async function createProject(env, userId, kind, { name, startDate, endDate }) {
-  const { meta } = await env.DB.prepare(
-    `INSERT INTO projects (user_id, kind, name, start_date, end_date) VALUES (?, ?, ?, ?, ?)`
-  ).bind(userId, kind, name, startDate || null, endDate || null).run();
+export async function createAgency(env, name) {
+  const existing = await env.DB.prepare(`SELECT id FROM agencies WHERE name = ?`).bind(name).first();
+  if (existing) throw new Error("An agency with that name already exists.");
+  const { meta } = await env.DB.prepare(`INSERT INTO agencies (name) VALUES (?)`).bind(name).run();
   return meta.last_row_id;
 }
 
-export async function updateProjectPayload(env, userId, kind, id, payloadJson) {
+// projects: many named, datable signups per (agency, kind), shared by every user at that
+// agency — every query below binds agency_id from the session-resolved caller's own
+// user.agency_id, never a client-supplied value. That's the load-bearing IDOR guard: a signup
+// is only reachable by a session whose user resolves to that same agency.
+
+export async function listProjects(env, agencyId, kind) {
+  const { results } = await env.DB.prepare(
+    `SELECT id, name, start_date, end_date, created_at, updated_at FROM projects
+     WHERE agency_id = ? AND kind = ? ORDER BY updated_at DESC`
+  ).bind(agencyId, kind).all();
+  return results;
+}
+
+export async function getProjectById(env, agencyId, kind, id) {
+  return env.DB.prepare(
+    `SELECT id, name, start_date, end_date, payload, updated_at FROM projects
+     WHERE id = ? AND agency_id = ? AND kind = ?`
+  ).bind(id, agencyId, kind).first();
+}
+
+export async function createProject(env, agencyId, kind, { name, startDate, endDate }) {
   const { meta } = await env.DB.prepare(
-    `UPDATE projects SET payload = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ? AND kind = ?`
-  ).bind(payloadJson, id, userId, kind).run();
+    `INSERT INTO projects (agency_id, kind, name, start_date, end_date) VALUES (?, ?, ?, ?, ?)`
+  ).bind(agencyId, kind, name, startDate || null, endDate || null).run();
+  return meta.last_row_id;
+}
+
+export async function updateProjectPayload(env, agencyId, kind, id, payloadJson) {
+  const { meta } = await env.DB.prepare(
+    `UPDATE projects SET payload = ?, updated_at = datetime('now') WHERE id = ? AND agency_id = ? AND kind = ?`
+  ).bind(payloadJson, id, agencyId, kind).run();
   return meta.changes > 0;
 }
 
-export async function renameProject(env, userId, kind, id, { name, startDate, endDate }) {
+export async function renameProject(env, agencyId, kind, id, { name, startDate, endDate }) {
   const { meta } = await env.DB.prepare(
     `UPDATE projects SET name = ?, start_date = ?, end_date = ?, updated_at = datetime('now')
-     WHERE id = ? AND user_id = ? AND kind = ?`
-  ).bind(name, startDate || null, endDate || null, id, userId, kind).run();
+     WHERE id = ? AND agency_id = ? AND kind = ?`
+  ).bind(name, startDate || null, endDate || null, id, agencyId, kind).run();
   return meta.changes > 0;
 }
 
-export async function deleteProject(env, userId, kind, id) {
+export async function deleteProject(env, agencyId, kind, id) {
   const { meta } = await env.DB.prepare(
-    `DELETE FROM projects WHERE id = ? AND user_id = ? AND kind = ?`
-  ).bind(id, userId, kind).run();
+    `DELETE FROM projects WHERE id = ? AND agency_id = ? AND kind = ?`
+  ).bind(id, agencyId, kind).run();
   return meta.changes > 0;
 }

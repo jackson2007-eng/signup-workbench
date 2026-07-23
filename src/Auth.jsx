@@ -38,6 +38,11 @@ const fieldStyle = { width: "100%", padding: "9px 10px", fontSize: 14, borderRad
 const labelStyle = { display: "block", fontSize: 12.5, fontWeight: 600, color: sampleGray, fontFamily: "'Barlow Condensed', sans-serif", letterSpacing: ".02em" };
 const primaryBtn = { width: "100%", fontFamily: "'Barlow Condensed', sans-serif", fontSize: 15, fontWeight: 600, padding: "10px 12px", background: supplyTeal, color: "#fff", border: "none", borderRadius: 2, cursor: "pointer" };
 const nudgeBtn = { fontFamily: "'Barlow Condensed', sans-serif", fontSize: 12, fontWeight: 600, padding: "4px 9px", background: card, border: "1px solid var(--border-input)", color: text, cursor: "pointer", borderRadius: 2 };
+const cardTitleStyle = { fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 700, marginBottom: 10 };
+const mutedStyle = { fontSize: 13, color: sampleGray };
+const rowCardStyle = { border: "1px solid var(--border-light)", borderRadius: 2, padding: "12px 14px" };
+const agencyChipStyle = { fontSize: 12, fontWeight: 600, padding: "4px 9px", background: "var(--paper)", border: "1px solid var(--border-light)", borderRadius: 2, color: text };
+const selectStyle = { padding: "5px 7px", fontSize: 12.5, border: "1px solid var(--border-input)", background: card, color: text, borderRadius: 2 };
 
 function AuthShell({ navigate, title, subtitle, children, wide }) {
   const [theme, setTheme] = useTheme();
@@ -165,43 +170,185 @@ export function RequestAccess({ navigate }) {
   );
 }
 
+// Inline agency picker shown when an admin clicks "Approve" — approving now requires assigning
+// an agency in the same step, so a user is never left approved-but-unassigned. Pick an existing
+// agency or type a brand-new one; either way "Confirm approve" fires a single approve call.
+function PendingRow({ u, agencies, busy, onApprove, onReject }) {
+  const [choosing, setChoosing] = useState(false);
+  const [agencyId, setAgencyId] = useState("");
+  const [creatingNew, setCreatingNew] = useState(false);
+  const [newName, setNewName] = useState("");
+
+  const confirm = () => {
+    if (creatingNew) {
+      if (!newName.trim()) return;
+      onApprove(u.id, null, newName.trim());
+    } else {
+      if (!agencyId) return;
+      onApprove(u.id, Number(agencyId), null);
+    }
+    setChoosing(false);
+  };
+
+  return (
+    <div style={rowCardStyle}>
+      <div style={{ fontWeight: 700, fontSize: 14.5 }}>{u.contact_name} <span style={{ fontWeight: 400, color: sampleGray, fontSize: 12.5 }}>({u.username})</span></div>
+      <div style={{ fontSize: 12.5, color: sampleGray, marginTop: 2 }}>{u.agency} · {u.contact_email}</div>
+      {u.request_message && <div style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.5 }}>{u.request_message}</div>}
+      <div style={{ fontSize: 11, color: sampleGray, marginTop: 6 }}>Requested {u.created_at}</div>
+
+      {!choosing && (
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button disabled={busy} style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={() => setChoosing(true)}>Approve</button>
+          <button disabled={busy} style={{ ...nudgeBtn, color: gapRed, borderColor: gapRed }} onClick={() => onReject(u.id)}>Reject</button>
+        </div>
+      )}
+      {choosing && (
+        <div style={{ marginTop: 10, padding: "10px 12px", background: "var(--paper)", border: "1px solid var(--border-light)" }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Assign to an agency to approve:</div>
+          {!creatingNew ? (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <select value={agencyId} onChange={(e) => setAgencyId(e.target.value)} style={selectStyle}>
+                <option value="">Choose agency…</option>
+                {agencies.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+              <span style={{ fontSize: 12, color: supplyTeal, cursor: "pointer", fontWeight: 600 }} onClick={() => setCreatingNew(true)}>+ New agency…</span>
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <input type="text" placeholder="New agency name" value={newName} onChange={(e) => setNewName(e.target.value)} style={{ ...fieldStyle, marginBottom: 0, width: 200 }} autoFocus />
+              <span style={{ fontSize: 12, color: sampleGray, cursor: "pointer", textDecoration: "underline" }} onClick={() => setCreatingNew(false)}>choose existing instead</span>
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <button disabled={busy} style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={confirm}>Confirm approve</button>
+            <button disabled={busy} style={nudgeBtn} onClick={() => setChoosing(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Admin({ navigate }) {
   const [pending, setPending] = useState(null);
+  const [members, setMembers] = useState(null);
+  const [agencies, setAgencies] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  const [newAgencyName, setNewAgencyName] = useState("");
+  const [agencyBusy, setAgencyBusy] = useState(false);
 
-  const refresh = () => fetch("/api/admin/pending", { credentials: "include" }).then((r) => r.json()).then((d) => setPending(d.users || []));
-  useEffect(() => { refresh(); }, []);
+  const refreshPending = () => fetch("/api/admin/pending", { credentials: "include" }).then((r) => r.json()).then((d) => setPending(d.users || []));
+  const refreshMembers = () => fetch("/api/admin/users", { credentials: "include" }).then((r) => r.json()).then((d) => setMembers(d.users || []));
+  const refreshAgencies = () => fetch("/api/admin/agencies", { credentials: "include" }).then((r) => r.json()).then((d) => setAgencies(d.agencies || []));
+  useEffect(() => { refreshPending(); refreshMembers(); refreshAgencies(); }, []);
 
-  const act = async (id, action) => {
+  const createAgency = async (e) => {
+    e.preventDefault();
+    if (!newAgencyName.trim()) return;
+    setAgencyBusy(true);
+    try {
+      const res = await fetch("/api/admin/agencies", {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newAgencyName.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok) { setNewAgencyName(""); await refreshAgencies(); }
+      else alert(data.error || "Could not create that agency.");
+    } finally {
+      setAgencyBusy(false);
+    }
+  };
+
+  const approve = async (id, agencyId, newAgencyNameForRow) => {
     setBusyId(id);
     try {
-      await fetch(`/api/admin/users/${id}/${action}`, { method: "POST", credentials: "include" });
-      await refresh();
+      await fetch(`/api/admin/users/${id}/approve`, {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agencyId, newAgencyName: newAgencyNameForRow }),
+      });
+      await Promise.all([refreshPending(), refreshMembers(), refreshAgencies()]);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const reject = async (id) => {
+    setBusyId(id);
+    try {
+      await fetch(`/api/admin/users/${id}/reject`, { method: "POST", credentials: "include" });
+      await refreshPending();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const reassign = async (id, agencyId) => {
+    setBusyId(id);
+    try {
+      await fetch(`/api/admin/users/${id}/set-agency`, {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agencyId }),
+      });
+      await refreshMembers();
     } finally {
       setBusyId(null);
     }
   };
 
   return (
-    <AuthShell navigate={navigate} title="Pending access requests" subtitle="Approve or reject accounts requesting access to the toolkit." wide>
-      {pending == null && <div style={{ fontSize: 13, color: sampleGray }}>Loading…</div>}
-      {pending && pending.length === 0 && <div style={{ fontSize: 13, color: sampleGray }}>No pending requests.</div>}
-      {pending && pending.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {pending.map((u) => (
-            <div key={u.id} style={{ border: "1px solid var(--border-light)", borderRadius: 2, padding: "12px 14px" }}>
-              <div style={{ fontWeight: 700, fontSize: 14.5 }}>{u.contact_name} <span style={{ fontWeight: 400, color: sampleGray, fontSize: 12.5 }}>({u.username})</span></div>
-              <div style={{ fontSize: 12.5, color: sampleGray, marginTop: 2 }}>{u.agency} · {u.contact_email}</div>
-              {u.request_message && <div style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.5 }}>{u.request_message}</div>}
-              <div style={{ fontSize: 11, color: sampleGray, marginTop: 6 }}>Requested {u.created_at}</div>
-              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                <button disabled={busyId === u.id} style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={() => act(u.id, "approve")}>Approve</button>
-                <button disabled={busyId === u.id} style={{ ...nudgeBtn, color: gapRed, borderColor: gapRed }} onClick={() => act(u.id, "reject")}>Reject</button>
+    <AuthShell navigate={navigate} title="Admin" subtitle="Manage agencies, approve access requests, and reassign team members." wide>
+      <div style={{ marginBottom: 26 }}>
+        <div style={cardTitleStyle}>Agencies</div>
+        {agencies == null && <div style={mutedStyle}>Loading…</div>}
+        {agencies && agencies.length === 0 && <div style={mutedStyle}>No agencies yet — create one below.</div>}
+        {agencies && agencies.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+            {agencies.map((a) => <span key={a.id} style={agencyChipStyle}>{a.name}</span>)}
+          </div>
+        )}
+        <form onSubmit={createAgency} style={{ display: "flex", gap: 8 }}>
+          <input type="text" placeholder="New agency name" value={newAgencyName} onChange={(e) => setNewAgencyName(e.target.value)} style={{ ...fieldStyle, marginBottom: 0, flex: 1, maxWidth: 280 }} />
+          <button type="submit" disabled={agencyBusy} style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }}>{agencyBusy ? "Creating…" : "Create agency"}</button>
+        </form>
+      </div>
+
+      <div style={{ marginBottom: 26 }}>
+        <div style={cardTitleStyle}>Pending access requests</div>
+        {pending == null && <div style={mutedStyle}>Loading…</div>}
+        {pending && pending.length === 0 && <div style={mutedStyle}>No pending requests.</div>}
+        {pending && pending.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {pending.map((u) => (
+              <PendingRow key={u.id} u={u} agencies={agencies || []} busy={busyId === u.id} onApprove={approve} onReject={reject} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <div style={cardTitleStyle}>Team members</div>
+        {members == null && <div style={mutedStyle}>Loading…</div>}
+        {members && members.length === 0 && <div style={mutedStyle}>No approved users yet.</div>}
+        {members && members.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {members.map((m) => (
+              <div key={m.id} style={rowCardStyle}>
+                <div style={{ fontWeight: 700, fontSize: 13.5 }}>
+                  {m.contact_name} <span style={{ fontWeight: 400, color: sampleGray, fontSize: 12 }}>({m.username}{m.is_admin ? " · admin" : ""})</span>
+                </div>
+                <div style={{ fontSize: 12, color: sampleGray, marginTop: 2 }}>{m.contact_email}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+                  <span style={{ fontSize: 12, color: sampleGray }}>Agency:</span>
+                  <select value={m.agency_id || ""} disabled={busyId === m.id} onChange={(e) => reassign(m.id, Number(e.target.value))} style={selectStyle}>
+                    {(agencies || []).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </div>
     </AuthShell>
   );
 }

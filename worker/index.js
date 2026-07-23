@@ -2,7 +2,7 @@ import { hashPassword, verifyPassword, createSession, destroySession, readSessio
 import {
   getUserByUsername, getUserById, createPendingUser, listPendingUsers, approveUser, rejectUser,
   setUserPassword, listProjects, getProjectById, createProject, updateProjectPayload,
-  renameProject, deleteProject,
+  renameProject, deleteProject, listAgencies, createAgency, listApprovedUsers, setUserAgency,
 } from "./db.js";
 
 const PROJECT_KINDS = new Set(["resourcing", "callcentre", "dispatch", "annualplan", "vacationplan"]);
@@ -16,7 +16,7 @@ function json(data, init = {}) {
 }
 function badRequest(message) { return json({ error: message }, { status: 400 }); }
 function unauthorized() { return json({ error: "Not signed in." }, { status: 401 }); }
-function forbidden() { return json({ error: "Not allowed." }, { status: 403 }); }
+function forbidden(message) { return json({ error: message || "Not allowed." }, { status: 403 }); }
 function notFound() { return json({ error: "Not found." }, { status: 404 }); }
 
 // Best-effort per-IP/per-username throttling via KV counters. This itself spends KV write
@@ -44,7 +44,7 @@ async function handleApi(request, env, url) {
   if (path === "/api/me" && method === "GET") {
     const user = await requireUser(request, env);
     if (!user) return json({ authenticated: false });
-    return json({ authenticated: true, user: { username: user.username, isAdmin: !!user.is_admin } });
+    return json({ authenticated: true, user: { username: user.username, isAdmin: !!user.is_admin, agencyName: user.agency_name } });
   }
 
   if (path === "/api/request-access" && method === "POST") {
@@ -89,7 +89,7 @@ async function handleApi(request, env, url) {
     if (user.status !== "approved") return json({ error: "Your account is not yet approved. You'll be able to sign in once it is." }, { status: 403 });
 
     const token = await createSession(env, user.id);
-    return json({ ok: true, user: { username: user.username, isAdmin: !!user.is_admin } }, { headers: { "Set-Cookie": sessionCookie(token) } });
+    return json({ ok: true, user: { username: user.username, isAdmin: !!user.is_admin, agencyName: user.agency_name } }, { headers: { "Set-Cookie": sessionCookie(token) } });
   }
 
   if (path === "/api/logout" && method === "POST") {
@@ -107,16 +107,17 @@ async function handleApi(request, env, url) {
   const listMatch = path.match(/^\/api\/projects\/([a-z]+)$/);
   if (listMatch) {
     if (!user) return unauthorized();
+    if (!user.agency_id) return forbidden("No agency assigned yet — contact your admin.");
     const kind = listMatch[1];
     if (!PROJECT_KINDS.has(kind)) return badRequest("Unknown project kind.");
     if (method === "GET") {
-      return json({ projects: await listProjects(env, user.id, kind) });
+      return json({ projects: await listProjects(env, user.agency_id, kind) });
     }
     if (method === "POST") {
       if (!isSameOrigin(request)) return forbidden();
       const body = await request.json().catch(() => null);
       if (!body || !String(body.name || "").trim()) return badRequest("A name is required.");
-      const id = await createProject(env, user.id, kind, {
+      const id = await createProject(env, user.agency_id, kind, {
         name: String(body.name).trim(), startDate: body.startDate || null, endDate: body.endDate || null,
       });
       return json({ id });
@@ -124,17 +125,18 @@ async function handleApi(request, env, url) {
   }
 
   // One signup: load/save its payload, rename/redate it, or delete it. Every db.js call below
-  // binds user.id (from the session) and the URL's kind alongside the id, so a signup can never
-  // be read/written/renamed/deleted by anyone but its owner, and never through the wrong kind's
-  // URL even for that owner's own data.
+  // binds user.agency_id (from the session-resolved user) and the URL's kind alongside the id,
+  // so a signup can only ever be read/written/renamed/deleted by someone at the same agency —
+  // and never through the wrong kind's URL even for that agency's own data.
   const itemMatch = path.match(/^\/api\/projects\/([a-z]+)\/(\d+)$/);
   if (itemMatch) {
     if (!user) return unauthorized();
+    if (!user.agency_id) return forbidden("No agency assigned yet — contact your admin.");
     const kind = itemMatch[1];
     const id = Number(itemMatch[2]);
     if (!PROJECT_KINDS.has(kind)) return badRequest("Unknown project kind.");
     if (method === "GET") {
-      const row = await getProjectById(env, user.id, kind, id);
+      const row = await getProjectById(env, user.agency_id, kind, id);
       if (!row) return notFound();
       return json({
         id: row.id, name: row.name, startDate: row.start_date, endDate: row.end_date,
@@ -145,7 +147,7 @@ async function handleApi(request, env, url) {
       if (!isSameOrigin(request)) return forbidden();
       const body = await request.json().catch(() => null);
       if (body == null) return badRequest("Invalid payload.");
-      const ok = await updateProjectPayload(env, user.id, kind, id, JSON.stringify(body));
+      const ok = await updateProjectPayload(env, user.agency_id, kind, id, JSON.stringify(body));
       if (!ok) return notFound();
       return json({ ok: true });
     }
@@ -153,7 +155,7 @@ async function handleApi(request, env, url) {
       if (!isSameOrigin(request)) return forbidden();
       const body = await request.json().catch(() => null);
       if (!body || !String(body.name || "").trim()) return badRequest("A name is required.");
-      const ok = await renameProject(env, user.id, kind, id, {
+      const ok = await renameProject(env, user.agency_id, kind, id, {
         name: String(body.name).trim(), startDate: body.startDate || null, endDate: body.endDate || null,
       });
       if (!ok) return notFound();
@@ -161,7 +163,7 @@ async function handleApi(request, env, url) {
     }
     if (method === "DELETE") {
       if (!isSameOrigin(request)) return forbidden();
-      const ok = await deleteProject(env, user.id, kind, id);
+      const ok = await deleteProject(env, user.agency_id, kind, id);
       if (!ok) return notFound();
       return json({ ok: true });
     }
@@ -173,12 +175,65 @@ async function handleApi(request, env, url) {
     return json({ users: await listPendingUsers(env) });
   }
 
+  if (path === "/api/admin/users" && method === "GET") {
+    if (!user) return unauthorized();
+    if (!user.is_admin) return forbidden();
+    return json({ users: await listApprovedUsers(env) });
+  }
+
+  if (path === "/api/admin/agencies" && method === "GET") {
+    if (!user) return unauthorized();
+    if (!user.is_admin) return forbidden();
+    return json({ agencies: await listAgencies(env) });
+  }
+
+  if (path === "/api/admin/agencies" && method === "POST") {
+    if (!user) return unauthorized();
+    if (!user.is_admin) return forbidden();
+    if (!isSameOrigin(request)) return forbidden();
+    const body = await request.json().catch(() => null);
+    const name = String(body?.name || "").trim();
+    if (!name) return badRequest("An agency name is required.");
+    try {
+      const id = await createAgency(env, name);
+      return json({ id, name });
+    } catch (e) {
+      return badRequest(e.message || "Could not create that agency.");
+    }
+  }
+
+  const setAgencyMatch = path.match(/^\/api\/admin\/users\/(\d+)\/set-agency$/);
+  if (setAgencyMatch && method === "POST") {
+    if (!user) return unauthorized();
+    if (!user.is_admin) return forbidden();
+    if (!isSameOrigin(request)) return forbidden();
+    const body = await request.json().catch(() => null);
+    const agencyId = Number(body?.agencyId);
+    if (!agencyId) return badRequest("An agency is required.");
+    await setUserAgency(env, Number(setAgencyMatch[1]), agencyId);
+    return json({ ok: true });
+  }
+
+  // Approving now requires an agency in the same step — either an existing one (agencyId) or a
+  // brand-new one created inline (newAgencyName) — so no user is ever left approved-but-
+  // unassigned. See the plan doc: this was a deliberate product decision, not an oversight.
   const approveMatch = path.match(/^\/api\/admin\/users\/(\d+)\/approve$/);
   if (approveMatch && method === "POST") {
     if (!user) return unauthorized();
     if (!user.is_admin) return forbidden();
     if (!isSameOrigin(request)) return forbidden();
-    await approveUser(env, Number(approveMatch[1]), user.id);
+    const body = await request.json().catch(() => null);
+    let agencyId = Number(body?.agencyId) || null;
+    const newAgencyName = String(body?.newAgencyName || "").trim();
+    if (!agencyId && !newAgencyName) return badRequest("An agency is required to approve this request.");
+    if (!agencyId && newAgencyName) {
+      try {
+        agencyId = await createAgency(env, newAgencyName);
+      } catch (e) {
+        return badRequest(e.message || "Could not create that agency.");
+      }
+    }
+    await approveUser(env, Number(approveMatch[1]), user.id, agencyId);
     return json({ ok: true });
   }
 

@@ -106,12 +106,15 @@ export function SaveStatus({ status }) {
   return <span style={{ fontSize: 11, color: COLOR[status], fontWeight: 600 }}>{label}</span>;
 }
 
-// Small "Signed in as X · Log out" chip, same across all 5 modules.
+// Small "Signed in as X · agency · Log out" chip, same across all 5 modules. Showing the agency
+// name here matters now that saved data is shared agency-wide, not per-user — always worth
+// knowing whose data you're looking at.
 export function AccountChip({ user, logout }) {
   if (!user) return null;
   return (
     <span style={{ fontSize: 11, color: "var(--sample-gray)" }}>
       {user.username}
+      {user.agencyName ? ` · ${user.agencyName}` : ""}
       {" · "}
       <span style={{ cursor: "pointer", textDecoration: "underline" }} onClick={logout}>Log out</span>
     </span>
