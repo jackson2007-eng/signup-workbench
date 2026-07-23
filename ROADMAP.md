@@ -236,6 +236,25 @@ branch when pricing resumes.
   why total-trips-first was the right v1 scope. Fixed a real bug found in live verification:
   Recharts' bar entry animation could stall indefinitely (bars computed correct geometry but
   never painted) — `isAnimationActive={false}` set on every Bar in the module.
+- 2026-07-22 — Annual Service Plan: service-hours-from-headcount + real-board import + holiday
+  hours fix. Reviewed a real DATS "service hours" tab (weekly operator-headcount vs.
+  scheduled-hours-requirement deficit check) and a "signup hours" tab (calendar rollup of a
+  real board's per-weekday hours into monthly totals) from the same source workbook already
+  used for the module's v1. Neither tab's exact mechanics were worth replicating (both are
+  messier than what Capacity & Split already computes automatically day-by-day), but two real
+  gaps were: capacity providers had no way to *derive* hoursByDow from anything, only type it
+  by hand; and statutory holidays weren't reducing in-house capacity the way Projection
+  already reduces projected trips on those dates. Fixed both. Providers tab: each capacity
+  provider now has three ways to set scheduled hours — Enter directly (unchanged), Compute
+  from headcount (FT/PT counts × weekday/weekend × avg shift length × a single absence-rate %,
+  mirrors the existing weekday/weekend productivity split pattern), or Import from signup
+  board (uploads a real board via the operator workbench's own `parseSignupWorkbook` parser/
+  template and sums actual scheduled shift hours — report-to-off minus break — by day of
+  week). Capacity & Split: statutory holidays (from the same holiday list Projection already
+  loads) now use each capacity provider's Sunday-level hoursByDow for that date instead of the
+  normal same-weekday value, matching the operator workbench's own holiday convention (a
+  holiday's `runsAs` defaults to Sunday) — verified live, In-house hours dropped from 207,580
+  to 205,740/yr with the 11 holidays the sample data matches.
 - 2026-07-16/17 — Requirement-lines rework (water-fill under fleet cap + deployment-pattern line, then folded into Size-to-requirement after cleanup); demand-data integrity (persistent pasted-totals detection + ÷6 repair, cycle-time plausibility guard, pin-known-productivity calibration); occupancy target fixed to cycle-only window; Gap tooltip shows true shortfall; pull-out/pull-in staging drawn violet; prev/next step navigation; reclassification chips on flagged shifts; drag-in-place from full board; "Flagged first" + end-time sorts.
 - 2026-07-15 — Signup Builder "Size to requirement": package count from capped weekly vehicle-hours ÷ 40.
 - 2026-07-15 — Coverage "Requirement mode": demand-implied vehicle-hours water-filled under the fleet cap.

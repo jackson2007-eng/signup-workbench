@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 import { ResponsiveContainer, ComposedChart, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid } from "recharts";
-import { DAYS, NumField, Stat } from "./App.jsx";
+import { DAYS, NumField, Stat, parseSignupWorkbook } from "./App.jsx";
 import { PhaseStrip } from "./CallCentre.jsx";
 import { ANNUALPLAN_SAMPLE } from "./annualPlanSampleData.js";
 
@@ -94,13 +94,16 @@ function buildProjection(history, planYear, growthPct, holidaysHistory, holidays
    providers (non-dedicated/taxi), split by their configured share, last one absorbing the rest.
    If NO remainder provider is configured, leftover demand shows as unaccommodated — a real signal,
    not silently dropped. */
-function splitDay(trips, dow, providers) {
+function splitDay(trips, dow, providers, isHoliday) {
   let remaining = Math.max(0, trips);
   const rows = [];
+  // Statutory holidays run a Sunday-level schedule for capacity providers, matching the
+  // operator workbench's own holiday convention (a holiday's runsAs defaults to Sunday).
+  const effDow = isHoliday ? 0 : dow;
   for (const p of providers) {
     if (p.role !== "capacity") continue;
-    const hours = (p.hoursByDow && p.hoursByDow[dow]) || 0;
-    const productivity = (dow === 0 || dow === 6) ? (p.productivityWeekend || 0) : (p.productivityWeekday || 0);
+    const hours = (p.hoursByDow && p.hoursByDow[effDow]) || 0;
+    const productivity = (effDow === 0 || effDow === 6) ? (p.productivityWeekend || 0) : (p.productivityWeekday || 0);
     const capacity = hours * productivity;
     const served = Math.min(capacity, remaining);
     remaining -= served;
@@ -116,14 +119,15 @@ function splitDay(trips, dow, providers) {
   return { rows, unaccommodated: Math.max(0, remaining) };
 }
 
-function monthlyRollup(planYear, projected, providers) {
+function monthlyRollup(planYear, projected, providers, holidaysPlan) {
+  const holidaySet = new Set((holidaysPlan || []).map((h) => h.date));
   const months = MONTHS.map((label) => ({ label, trips: 0, unaccommodated: 0, byProvider: {} }));
   for (const iso of Object.keys(projected)) {
     const mi = monthOfIso(iso);
     const dow = dowOfIso(iso);
     const trips = projected[iso];
     months[mi].trips += trips;
-    const { rows, unaccommodated } = splitDay(trips, dow, providers);
+    const { rows, unaccommodated } = splitDay(trips, dow, providers, holidaySet.has(iso));
     months[mi].unaccommodated += unaccommodated;
     for (const r of rows) {
       if (!months[mi].byProvider[r.id]) months[mi].byProvider[r.id] = { name: r.name, trips: 0, hours: 0, cost: 0 };
@@ -138,6 +142,35 @@ function historyMonthlyTotals(history) {
   const months = MONTHS.map(() => 0);
   for (const iso of Object.keys(history)) months[monthOfIso(iso)] += history[iso];
   return months;
+}
+
+/* ---------- service hours from headcount ----------
+   Optional alternate way to populate a capacity provider's hoursByDow: instead of typing 7 day
+   totals directly, describe the workforce (full-time + part-time headcount, weekday vs weekend,
+   an average shift length, and a single absence rate covering vacation/sick/leave/etc. all paid
+   but not driving) and derive net scheduled hours per day-of-week from that. Mirrors the
+   weekday/weekend split already used for productivity elsewhere on the provider card. */
+const DEFAULT_HEADCOUNT = { ftWeekday: 20, ftWeekend: 12, ptWeekday: 5, ptWeekend: 3, shiftHours: 8, absenceRate: 12 };
+function hoursByDowFromHeadcount(hc) {
+  const eff = 1 - Math.max(0, Math.min(100, hc.absenceRate || 0)) / 100;
+  const weekday = Math.max(0, (hc.ftWeekday || 0) + (hc.ptWeekday || 0)) * Math.max(0, hc.shiftHours || 0) * eff;
+  const weekend = Math.max(0, (hc.ftWeekend || 0) + (hc.ptWeekend || 0)) * Math.max(0, hc.shiftHours || 0) * eff;
+  return [weekend, weekday, weekday, weekday, weekday, weekday, weekend]; // Sun..Sat
+}
+
+// Third way to populate hoursByDow: sum a real uploaded signup board's per-shift hours
+// (report-to-off minus break) by day of week — the actual scheduled pattern, absences and
+// all, rather than an estimate. Reuses the operator workbench's own parser/template.
+function hoursByDowFromBoard(segments) {
+  const hours = [0, 0, 0, 0, 0, 0, 0]; // Sun..Sat
+  for (const seg of segments) {
+    const dur = Math.max(0, (seg.e - seg.s - (seg.b ? seg.b[1] - seg.b[0] : 0)) / 60);
+    for (const day of seg.days || []) {
+      const i = DAYS.indexOf(day);
+      if (i >= 0) hours[i] += dur;
+    }
+  }
+  return hours;
 }
 
 const nextId = () => "p" + Math.random().toString(36).slice(2, 9);
@@ -193,7 +226,7 @@ export default function AnnualPlan({ onHome }) {
     () => buildProjection(history, planYear, growthPct, holidaysHistory, holidaysPlan),
     [history, planYear, growthPct, holidaysHistory, holidaysPlan]
   );
-  const rollup = useMemo(() => monthlyRollup(planYear, projected, providers), [planYear, projected, providers]);
+  const rollup = useMemo(() => monthlyRollup(planYear, projected, providers, holidaysPlan), [planYear, projected, providers, holidaysPlan]);
   const historyMonthly = useMemo(() => historyMonthlyTotals(history), [history]);
   const annualTotals = useMemo(() => {
     const totals = { trips: 0, unaccommodated: 0, byProvider: {} };
@@ -211,6 +244,36 @@ export default function AnnualPlan({ onHome }) {
   /* ---------- providers editing ---------- */
   const updateProvider = (id, patch) => setProviders((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   const updateProviderHour = (id, dow, v) => setProviders((ps) => ps.map((p) => (p.id === id ? { ...p, hoursByDow: p.hoursByDow.map((h, i) => (i === dow ? v : h)) } : p)));
+  const setHoursMode = (id, mode) => setProviders((ps) => ps.map((p) => {
+    if (p.id !== id) return p;
+    if (mode === "headcount") {
+      const headcount = p.headcount || DEFAULT_HEADCOUNT;
+      return { ...p, hoursMode: mode, headcount, hoursByDow: hoursByDowFromHeadcount(headcount) };
+    }
+    return { ...p, hoursMode: mode };
+  }));
+  const updateProviderHeadcount = (id, patch) => setProviders((ps) => ps.map((p) => {
+    if (p.id !== id) return p;
+    const headcount = { ...(p.headcount || DEFAULT_HEADCOUNT), ...patch };
+    return { ...p, headcount, hoursByDow: hoursByDowFromHeadcount(headcount) };
+  }));
+  const importProviderBoard = (id, file) => {
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        const wb = XLSX.read(rd.result, { type: "array" });
+        const res = parseSignupWorkbook(wb);
+        if (!res.ok) { alert(res.error || "Could not read that signup board."); return; }
+        const hoursByDow = hoursByDowFromBoard(res.segments);
+        setProviders((ps) => ps.map((p) => (p.id === id
+          ? { ...p, hoursMode: "imported", hoursByDow, importInfo: `${res.summary.shifts} shift(s) from ${file.name}` }
+          : p)));
+      } catch (e) {
+        alert("Could not read that file — check it matches the Signup Builder's export/template format.");
+      }
+    };
+    rd.readAsArrayBuffer(file);
+  };
   const addProvider = (role) => setProviders((ps) => [...ps, role === "capacity"
     ? { id: nextId(), name: "New capacity provider", role: "capacity", hoursByDow: [0, 0, 0, 0, 0, 0, 0], productivityWeekday: 2, productivityWeekend: 2, hourlyRate: 50 }
     : { id: nextId(), name: "New remainder provider", role: "remainder", share: 100, perTripRate: 24 }]);
@@ -345,7 +408,7 @@ export default function AnnualPlan({ onHome }) {
         ]} />
 
         {tab === "providers" && (
-          <ProvidersTab {...{ providers, updateProvider, updateProviderHour, addProvider, removeProvider }} />
+          <ProvidersTab {...{ providers, updateProvider, updateProviderHour, addProvider, removeProvider, setHoursMode, updateProviderHeadcount, importProviderBoard }} />
         )}
         {tab === "history" && (
           <HistoryTab {...{
@@ -367,7 +430,12 @@ export default function AnnualPlan({ onHome }) {
 }
 
 /* ================= PROVIDERS ================= */
-function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvider, removeProvider }) {
+const modeBtn = (active) => ({
+  fontFamily: "'Barlow Condensed', sans-serif", fontSize: 12, fontWeight: 600, padding: "4px 10px",
+  border: `1px solid ${active ? supplyTeal : "var(--border-input)"}`, borderRadius: 2, cursor: "pointer",
+  background: active ? supplyTeal : card, color: active ? "#fff" : text,
+});
+function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvider, removeProvider, setHoursMode, updateProviderHeadcount, importProviderBoard }) {
   return (
     <div>
       <div style={cardStyle}>
@@ -387,14 +455,60 @@ function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvid
             </div>
             {p.role === "capacity" ? (
               <>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 6, marginBottom: 8 }}>
-                  {DOW_SHORT.map((d, i) => (
-                    <label key={d} style={{ fontSize: 11, color: sampleGray, display: "flex", flexDirection: "column", gap: 3 }}>
-                      {d} hrs/day
-                      <NumField value={p.hoursByDow[i]} onCommit={(v) => updateProviderHour(p.id, i, Math.max(0, v))} />
-                    </label>
-                  ))}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 11, color: sampleGray }}>Scheduled hours:</span>
+                  <button style={modeBtn((p.hoursMode || "manual") === "manual")} onClick={() => setHoursMode(p.id, "manual")}>Enter directly</button>
+                  <button style={modeBtn(p.hoursMode === "headcount")} onClick={() => setHoursMode(p.id, "headcount")}>Compute from headcount</button>
+                  <button style={modeBtn(p.hoursMode === "imported")} onClick={() => document.getElementById("board-upload-" + p.id).click()}>Import from signup board</button>
+                  <input id={"board-upload-" + p.id} type="file" accept=".xlsx" style={{ display: "none" }}
+                    onChange={(e) => { if (e.target.files && e.target.files[0]) importProviderBoard(p.id, e.target.files[0]); e.target.value = ""; }} />
                 </div>
+                {p.hoursMode === "headcount" ? (
+                  <div style={{ background: "var(--tint-neutral-b)", border: "1px solid var(--border-light)", borderRadius: 2, padding: "10px 12px", marginBottom: 8 }}>
+                    <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13, marginBottom: 8 }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: 6 }}>Full-time — weekdays
+                        <NumField value={p.headcount.ftWeekday} onCommit={(v) => updateProviderHeadcount(p.id, { ftWeekday: Math.max(0, v) })} /></label>
+                      <label style={{ display: "flex", alignItems: "center", gap: 6 }}>Full-time — weekends
+                        <NumField value={p.headcount.ftWeekend} onCommit={(v) => updateProviderHeadcount(p.id, { ftWeekend: Math.max(0, v) })} /></label>
+                      <label style={{ display: "flex", alignItems: "center", gap: 6 }}>Part-time — weekdays
+                        <NumField value={p.headcount.ptWeekday} onCommit={(v) => updateProviderHeadcount(p.id, { ptWeekday: Math.max(0, v) })} /></label>
+                      <label style={{ display: "flex", alignItems: "center", gap: 6 }}>Part-time — weekends
+                        <NumField value={p.headcount.ptWeekend} onCommit={(v) => updateProviderHeadcount(p.id, { ptWeekend: Math.max(0, v) })} /></label>
+                    </div>
+                    <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13, alignItems: "center" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: 6 }}>Avg shift length (hrs)
+                        <NumField value={p.headcount.shiftHours} step={0.5} onCommit={(v) => updateProviderHeadcount(p.id, { shiftHours: Math.max(0, v) })} /></label>
+                      <label style={{ display: "flex", alignItems: "center", gap: 6 }}>Absence rate (%)
+                        <NumField value={p.headcount.absenceRate} step={0.5} onCommit={(v) => updateProviderHeadcount(p.id, { absenceRate: Math.max(0, Math.min(100, v)) })} /></label>
+                      <span style={{ fontSize: 11.5, color: sampleGray }}>Paid hours lost to vacation, sick, LTD, leave, etc. — reduces headcount × shift length down to net scheduled hours.</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: text, marginTop: 8, fontWeight: 600 }}>
+                      → Weekday {Math.round(p.hoursByDow[1]).toLocaleString()} hrs/day · Weekend {Math.round(p.hoursByDow[0]).toLocaleString()} hrs/day
+                    </div>
+                  </div>
+                ) : p.hoursMode === "imported" ? (
+                  <div style={{ background: "var(--tint-neutral-b)", border: "1px solid var(--border-light)", borderRadius: 2, padding: "10px 12px", marginBottom: 8 }}>
+                    <div style={{ fontSize: 12.5, color: sampleGray }}>
+                      {p.importInfo || "Imported from a signup board."} Weekday/weekend hours below are the sum of that board's scheduled shift hours (report-to-off minus break) by day of week — upload again to refresh from a newer board.
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 6, marginTop: 8 }}>
+                      {DOW_SHORT.map((d, i) => (
+                        <div key={d} style={{ fontSize: 11, color: sampleGray }}>
+                          {d} <div style={{ fontSize: 13, color: text, fontWeight: 600 }}>{Math.round(p.hoursByDow[i]).toLocaleString()}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 6, marginBottom: 8 }}>
+                    {DOW_SHORT.map((d, i) => (
+                      <label key={d} style={{ fontSize: 11, color: sampleGray, display: "flex", flexDirection: "column", gap: 3 }}>
+                        {d} hrs/day
+                        <NumField value={p.hoursByDow[i]} onCommit={(v) => updateProviderHour(p.id, i, Math.max(0, v))} />
+                      </label>
+                    ))}
+                  </div>
+                )}
                 <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13 }}>
                   <label style={{ display: "flex", alignItems: "center", gap: 6 }}>Weekday productivity (trips/hr)
                     <NumField value={p.productivityWeekday} step={0.05} onCommit={(v) => updateProvider(p.id, { productivityWeekday: Math.max(0, v) })} /></label>
