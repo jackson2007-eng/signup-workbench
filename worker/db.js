@@ -14,6 +14,11 @@ export async function getUserById(env, id) {
   return env.DB.prepare(`${USER_SELECT} WHERE users.id = ?`).bind(id).first();
 }
 
+// Only approved users are eligible for password reset — a pending user has no working login yet.
+export async function getUserByEmail(env, email) {
+  return env.DB.prepare(`${USER_SELECT} WHERE LOWER(users.contact_email) = LOWER(?) AND users.status = 'approved'`).bind(email).first();
+}
+
 export async function createPendingUser(env, { username, hash, salt, iterations, name, email, agency, message }) {
   const existing = await getUserByUsername(env, username);
   if (existing) throw new Error("That username is already taken.");

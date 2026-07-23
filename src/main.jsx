@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import Landing from "./Landing.jsx";
-import { SignIn, RequestAccess, Admin } from "./Auth.jsx";
+import { SignIn, RequestAccess, ForgotPassword, ResetPassword, Admin } from "./Auth.jsx";
 import Shell, { TOOLS } from "./Shell.jsx";
 
 // Minimal path router — no library. history.pushState + popstate keep the URL honest so deep
@@ -83,6 +83,8 @@ function Root() {
 
   if (path === "/signin") return <SignIn navigate={navigate} params={params} onSignedIn={onSignedIn} />;
   if (path === "/request-access") return <RequestAccess navigate={navigate} />;
+  if (path === "/forgot-password") return <ForgotPassword navigate={navigate} />;
+  if (path === "/reset-password") return <ResetPassword navigate={navigate} params={params} />;
   if (path === "/admin") {
     if (authState === "loading") return <AuthLoading />;
     if (authState !== "authed" || !user?.isAdmin) return <AuthLoading />; // redirect effect above

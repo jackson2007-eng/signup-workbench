@@ -50,7 +50,7 @@ export async function verifyPassword(password, storedHashB64, storedSaltB64, ite
   return timingSafeEqual(derived, fromBase64(storedHashB64));
 }
 
-function newToken() {
+export function newToken() {
   return toBase64(crypto.getRandomValues(new Uint8Array(32))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 

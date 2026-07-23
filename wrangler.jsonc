@@ -25,5 +25,10 @@
       "binding": "SESSIONS",
       "id": "60ea9b3c6c27444d969cdea3fb91ed81"
     }
-  ]
+  ],
+  "vars": {
+    // Resend sandbox address — swap for a verified-domain address once one exists (RESEND_API_KEY
+    // is set separately as a secret via `wrangler secret put`, not here).
+    "RESET_EMAIL_FROM": "Paratransit Companion <onboarding@resend.dev>"
+  }
 }

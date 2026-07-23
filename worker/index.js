@@ -1,10 +1,11 @@
-import { hashPassword, verifyPassword, createSession, destroySession, readSession, parseCookie, sessionCookie, isSameOrigin } from "./auth.js";
+import { hashPassword, verifyPassword, createSession, destroySession, readSession, parseCookie, sessionCookie, isSameOrigin, newToken } from "./auth.js";
 import {
-  getUserByUsername, getUserById, createPendingUser, listPendingUsers, approveUser, rejectUser,
+  getUserByUsername, getUserById, getUserByEmail, createPendingUser, listPendingUsers, approveUser, rejectUser,
   setUserPassword, listProjects, getProjectById, createProject, updateProjectPayload,
   renameProject, deleteProject, listAgencies, createAgency, listApprovedUsers, setUserAgency,
   setAgencyLogo, clearAgencyLogo, getAgencyLogo,
 } from "./db.js";
+import { sendPasswordResetEmail } from "./email.js";
 
 const PROJECT_KINDS = new Set(["resourcing", "callcentre", "dispatch", "annualplan", "vacationplan"]);
 const ALLOWED_LOGO_MIME = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"]);
@@ -13,6 +14,9 @@ const REQUEST_ACCESS_LIMIT_PER_DAY = 10;
 const LOGIN_FAILURE_LIMIT = 8;
 const LOGIN_IP_FAILURE_LIMIT = 25; // looser than the per-username cap — one IP can be a whole agency's office
 const LOGIN_FAILURE_WINDOW_SECONDS = 15 * 60;
+const FORGOT_PASSWORD_LIMIT_PER_DAY = 5;
+const RESET_PASSWORD_LIMIT_PER_DAY = 20; // defense-in-depth only — the 32-byte token is the real gate
+const RESET_TOKEN_TTL_SECONDS = 60 * 60; // 1 hour, single-use
 
 function json(data, init = {}) {
   return new Response(JSON.stringify(data), { ...init, headers: { "Content-Type": "application/json", ...(init.headers || {}) } });
@@ -99,6 +103,52 @@ async function handleApi(request, env, url) {
     const token = parseCookie(request, "session");
     await destroySession(env, token);
     return json({ ok: true }, { headers: { "Set-Cookie": sessionCookie(null, { clear: true }) } });
+  }
+
+  // Never reveals whether the submitted email matched an account — same response either way, so
+  // this can't be used to enumerate registered emails. Send failures are logged in email.js but
+  // don't change the response.
+  if (path === "/api/forgot-password" && method === "POST") {
+    const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+    const ok = await throttle(env, `throttle:forgot-password:${ip}`, FORGOT_PASSWORD_LIMIT_PER_DAY, 60 * 60 * 24);
+    if (!ok) return json({ error: "Too many requests. Please try again tomorrow." }, { status: 429 });
+
+    const body = await request.json().catch(() => null);
+    const email = String(body?.email || "").trim();
+    if (!email) return badRequest("An email is required.");
+
+    const user = await getUserByEmail(env, email);
+    if (user) {
+      const token = newToken();
+      await env.SESSIONS.put(`reset:${token}`, JSON.stringify({ userId: user.id }), { expirationTtl: RESET_TOKEN_TTL_SECONDS });
+      const resetUrl = `${new URL(request.url).origin}/reset-password?token=${token}`;
+      await sendPasswordResetEmail(env, { to: user.contact_email, resetUrl });
+    }
+    return json({ ok: true, message: "If an account exists for that email, we've sent a reset link." });
+  }
+
+  if (path === "/api/reset-password" && method === "POST") {
+    if (!isSameOrigin(request)) return forbidden();
+    const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+    const ok = await throttle(env, `throttle:reset-password:${ip}`, RESET_PASSWORD_LIMIT_PER_DAY, 60 * 60 * 24);
+    if (!ok) return json({ error: "Too many attempts. Please try again tomorrow." }, { status: 429 });
+
+    const body = await request.json().catch(() => null);
+    const token = String(body?.token || "");
+    const newPassword = String(body?.newPassword || "");
+    if (!token) return badRequest("Missing reset token.");
+    if (newPassword.length < 8) return badRequest("Password must be at least 8 characters.");
+
+    const raw = await env.SESSIONS.get(`reset:${token}`);
+    if (!raw) return badRequest("This reset link is invalid or has expired. Request a new one.");
+    const { userId } = JSON.parse(raw);
+
+    const { hash, salt, iterations } = await hashPassword(newPassword);
+    await setUserPassword(env, userId, { hash, salt, iterations });
+    await env.SESSIONS.delete(`reset:${token}`);
+    // Known v1 limitation: this doesn't invalidate the user's other active sessions elsewhere —
+    // there's no reverse index from userId to their session tokens.
+    return json({ ok: true });
   }
 
   // Everything below requires a signed-in, approved user.

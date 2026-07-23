@@ -103,9 +103,129 @@ export function SignIn({ navigate, params, onSignedIn }) {
         <button type="submit" disabled={busy} style={{ ...primaryBtn, opacity: busy ? 0.6 : 1 }}>{busy ? "Signing in…" : "Sign in"}</button>
       </form>
       <div style={{ fontSize: 12.5, color: sampleGray, marginTop: 16, textAlign: "center" }}>
+        <span style={{ color: supplyTeal, cursor: "pointer", fontWeight: 600 }} onClick={() => navigate("/forgot-password")}>Forgot password?</span>
+      </div>
+      <div style={{ fontSize: 12.5, color: sampleGray, marginTop: 8, textAlign: "center" }}>
         Don't have access yet?{" "}
         <span style={{ color: supplyTeal, cursor: "pointer", fontWeight: 600 }} onClick={() => navigate("/request-access")}>Request access</span>
       </div>
+    </AuthShell>
+  );
+}
+
+export function ForgotPassword({ navigate }) {
+  const [email, setEmail] = useState("");
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true); setError(null);
+    try {
+      await fetch("/api/forgot-password", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }),
+      });
+      // Deliberately not branching on the response body — the API always returns the same
+      // generic result whether or not the email matched an account, and so do we.
+      setDone(true);
+    } catch (e) {
+      setError("Could not reach the server. Check your connection and try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (done) {
+    return (
+      <AuthShell navigate={navigate} title="Check your email">
+        <div style={{ fontSize: 14, lineHeight: 1.6 }}>
+          If an account exists for that email, we've sent a link to reset your password. It's good
+          for one hour.
+        </div>
+        <button style={{ ...primaryBtn, marginTop: 18 }} onClick={() => navigate("/signin")}>Back to sign in</button>
+      </AuthShell>
+    );
+  }
+
+  return (
+    <AuthShell navigate={navigate} title="Forgot password" subtitle="Enter the email on file for your account and we'll send you a link to set a new password.">
+      <form onSubmit={submit}>
+        <label style={labelStyle}>Email</label>
+        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus style={fieldStyle} required />
+        {error && <div style={{ fontSize: 12.5, color: gapRed, marginBottom: 14 }}>{error}</div>}
+        <button type="submit" disabled={busy} style={{ ...primaryBtn, opacity: busy ? 0.6 : 1 }}>{busy ? "Sending…" : "Send reset link"}</button>
+      </form>
+      <div style={{ fontSize: 12.5, color: sampleGray, marginTop: 16, textAlign: "center" }}>
+        <span style={{ color: supplyTeal, cursor: "pointer", fontWeight: 600 }} onClick={() => navigate("/signin")}>Back to sign in</span>
+      </div>
+    </AuthShell>
+  );
+}
+
+export function ResetPassword({ navigate, params }) {
+  const token = params.get("token");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    if (password !== confirm) { setError("Passwords don't match."); return; }
+    setBusy(true);
+    try {
+      const res = await fetch("/api/reset-password", {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, newPassword: password }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || "Could not reset your password."); return; }
+      setDone(true);
+    } catch (e) {
+      setError("Could not reach the server. Check your connection and try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!token) {
+    return (
+      <AuthShell navigate={navigate} title="Reset password">
+        <div style={{ fontSize: 14, lineHeight: 1.6 }}>
+          This link is missing its reset token. Request a new one from the forgot password page.
+        </div>
+        <button style={{ ...primaryBtn, marginTop: 18 }} onClick={() => navigate("/forgot-password")}>Forgot password</button>
+      </AuthShell>
+    );
+  }
+
+  if (done) {
+    return (
+      <AuthShell navigate={navigate} title="Password changed">
+        <div style={{ fontSize: 14, lineHeight: 1.6 }}>Your password has been changed. You can now sign in with it.</div>
+        <button style={{ ...primaryBtn, marginTop: 18 }} onClick={() => navigate("/signin")}>Go to sign in</button>
+      </AuthShell>
+    );
+  }
+
+  return (
+    <AuthShell navigate={navigate} title="Set a new password">
+      <form onSubmit={submit}>
+        <label style={labelStyle}>New password (8+ characters)</label>
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} autoFocus style={fieldStyle} required />
+        <label style={labelStyle}>Confirm new password</label>
+        <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} minLength={8} style={fieldStyle} required />
+        {error && <div style={{ fontSize: 12.5, color: gapRed, marginBottom: 14 }}>{error}</div>}
+        {error && error.includes("invalid or has expired") && (
+          <div style={{ fontSize: 12.5, marginBottom: 14 }}>
+            <span style={{ color: supplyTeal, cursor: "pointer", fontWeight: 600 }} onClick={() => navigate("/forgot-password")}>Request a new link</span>
+          </div>
+        )}
+        <button type="submit" disabled={busy} style={{ ...primaryBtn, opacity: busy ? 0.6 : 1 }}>{busy ? "Saving…" : "Set new password"}</button>
+      </form>
     </AuthShell>
   );
 }
