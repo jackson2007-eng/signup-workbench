@@ -242,6 +242,30 @@ function hoursByDowFromBoard(segments) {
   return hours;
 }
 
+/* ---------- service hours from market share ----------
+   Fourth way to populate hoursByDow: instead of hours as the input, set a target % of total daily
+   demand this provider is meant to serve, and work backward through weekday/weekend productivity
+   to the hours that requires — a sizing exercise ("if this provider carries X% of volume, how many
+   vehicle-hours does that take") rather than a capacity check. Unlike the other three modes this
+   stays a *live* derivation (see effectiveProviders in the main component) instead of a snapshot,
+   since it depends on the demand curve — which changes for reasons unrelated to this provider's own
+   fields (history uploads, growth %, day overrides) — not just this provider's own inputs. */
+function avgTripsByDow(projected) {
+  const sums = [0, 0, 0, 0, 0, 0, 0], counts = [0, 0, 0, 0, 0, 0, 0]; // Sun..Sat
+  for (const iso of Object.keys(projected)) {
+    const d = dowOfIso(iso);
+    sums[d] += projected[iso];
+    counts[d]++;
+  }
+  return sums.map((s, i) => (counts[i] ? s / counts[i] : 0));
+}
+function hoursByDowFromMarketShare(avgDemandByDow, sharePct, productivityWeekday, productivityWeekend) {
+  return avgDemandByDow.map((avg, d) => {
+    const productivity = (d === 0 || d === 6) ? productivityWeekend : productivityWeekday;
+    return productivity > 0 ? (avg * (sharePct || 0) / 100) / productivity : 0;
+  });
+}
+
 const nextId = () => "p" + Math.random().toString(36).slice(2, 9);
 
 export default function AnnualPlan({ onHome, user, logout }) {
@@ -272,13 +296,16 @@ export default function AnnualPlan({ onHome, user, logout }) {
   const [hdLoading, setHdLoading] = useState(false);
   const hdImportStarted = useRef(false);
   useEffect(() => {
-    if (tab !== "history" && tab !== "projection" || hdImportStarted.current) return;
+    // Loaded unconditionally on mount rather than gated to the History/Projection tabs: holiday
+    // suppression now also feeds live Providers-tab numbers (market-share hours mode), and Split/
+    // Budget both consume holiday-aware `projected` too — so every tab needs this, not just two.
+    if (hdImportStarted.current) return;
     hdImportStarted.current = true;
     setHdLoading(true);
     import("date-holidays")
       .then((m) => { setHdCtor(() => m.default); setHdCountries(new m.default().getCountries()); setHdLoading(false); })
       .catch(() => setHdLoading(false));
-  }, [tab]);
+  }, []);
   useEffect(() => {
     if (!hdCtor) return;
     setHdRegions(new hdCtor(jurisdiction.country).getStates(jurisdiction.country) || {});
@@ -303,7 +330,17 @@ export default function AnnualPlan({ onHome, user, logout }) {
     () => buildProjection(history, planYear, growthPct, holidaysHistoryByYear, holidaysPlan, dayOverrides),
     [history, planYear, growthPct, holidaysHistoryByYear, holidaysPlan, dayOverrides]
   );
-  const rollup = useMemo(() => monthlyRollup(planYear, projected, providers, holidaysPlan), [planYear, projected, providers, holidaysPlan]);
+  // Market-share providers' hoursByDow is derived live from the demand curve (see
+  // hoursByDowFromMarketShare) rather than stored as authoritative state — effectiveProviders is
+  // what actually feeds the split/rollup engine below; raw `providers` (persisted, edited by the
+  // Providers tab) never carries computed hours for a share-mode provider.
+  const avgDemandByDow = useMemo(() => avgTripsByDow(projected), [projected]);
+  const effectiveProviders = useMemo(() => providers.map((p) => (
+    p.role === "capacity" && p.hoursMode === "share"
+      ? { ...p, hoursByDow: hoursByDowFromMarketShare(avgDemandByDow, p.marketSharePct, p.productivityWeekday, p.productivityWeekend) }
+      : p
+  )), [providers, avgDemandByDow]);
+  const rollup = useMemo(() => monthlyRollup(planYear, projected, effectiveProviders, holidaysPlan), [planYear, projected, effectiveProviders, holidaysPlan]);
   const historyMonthly = useMemo(() => historyMonthlyTotals(history, historyYear), [history, historyYear]);
   const annualTotals = useMemo(() => {
     const totals = { trips: 0, unaccommodated: 0, byProvider: {} };
@@ -327,8 +364,14 @@ export default function AnnualPlan({ onHome, user, logout }) {
       const headcount = p.headcount || DEFAULT_HEADCOUNT;
       return { ...p, hoursMode: mode, headcount, hoursByDow: hoursByDowFromHeadcount(headcount) };
     }
+    if (mode === "share") return { ...p, hoursMode: mode, marketSharePct: p.marketSharePct ?? 50 };
     return { ...p, hoursMode: mode };
   }));
+  // hoursByDow isn't written here for share mode — effectiveProviders (above) always recomputes it
+  // live from the current demand curve, so there's nothing to snapshot.
+  const setMarketShare = (id, pct) => setProviders((ps) => ps.map((p) => (
+    p.id === id ? { ...p, marketSharePct: Math.max(0, Math.min(100, pct)) } : p
+  )));
   const updateProviderHeadcount = (id, patch) => setProviders((ps) => ps.map((p) => {
     if (p.id !== id) return p;
     const headcount = { ...(p.headcount || DEFAULT_HEADCOUNT), ...patch };
@@ -567,7 +610,7 @@ export default function AnnualPlan({ onHome, user, logout }) {
         ]} />
 
         {tab === "providers" && (
-          <ProvidersTab {...{ providers, updateProvider, updateProviderHour, addProvider, removeProvider, reorderProviders, setHoursMode, updateProviderHeadcount, importProviderBoard, importProviderFromSignup, resourcingSignups }} />
+          <ProvidersTab {...{ providers, updateProvider, updateProviderHour, addProvider, removeProvider, reorderProviders, setHoursMode, updateProviderHeadcount, importProviderBoard, importProviderFromSignup, resourcingSignups, avgDemandByDow, setMarketShare }} />
         )}
         {tab === "history" && (
           <HistoryTab {...{
@@ -598,19 +641,29 @@ const modeBtn = (active) => ({
   border: `1px solid ${active ? supplyTeal : "var(--border-input)"}`, borderRadius: 2, cursor: "pointer",
   background: active ? supplyTeal : card, color: active ? "#fff" : text,
 });
-function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvider, removeProvider, reorderProviders, setHoursMode, updateProviderHeadcount, importProviderBoard, importProviderFromSignup, resourcingSignups }) {
+function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvider, removeProvider, reorderProviders, setHoursMode, updateProviderHeadcount, importProviderBoard, importProviderFromSignup, resourcingSignups, avgDemandByDow, setMarketShare }) {
   // Drag-and-drop reorder, native HTML5 DnD (no library — same "keep it simple" pattern this app
   // uses elsewhere). dragId is the provider being dragged; overId is whichever card the pointer is
   // currently over, used only for the drop-target highlight — the actual move happens in onDrop.
   const [dragId, setDragId] = useState(null);
   const [overId, setOverId] = useState(null);
+  // Informational only (this app flags, never blocks) — a total over 100% just means the share
+  // targets are more ambitious than the demand can literally cover once the waterfall runs;
+  // Split/Budget will show the real outcome.
+  const totalSharePct = providers.filter((p) => p.role === "capacity" && p.hoursMode === "share")
+    .reduce((sum, p) => sum + (p.marketSharePct || 0), 0);
   return (
     <div>
       <div style={cardStyle}>
         <div style={hTitle}>Providers</div>
         <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 12 }}>
-          <b>Capacity providers</b> (in-house / dedicated contractors) take trips up to scheduled hours × productivity for that day of week, in the order listed. <b>Remainder providers</b> (non-dedicated / taxi) absorb whatever's left, priced per trip — in list order, the last one takes whatever the others didn't claim. Drag the ⠿ handle to reorder; Split and Budget reflect the new order immediately. Add as many of each as you need.
+          <b>Capacity providers</b> (in-house / dedicated contractors) take trips up to scheduled hours × productivity for that day of week, in the order listed — hours can be set directly, computed from headcount or an uploaded signup board, or from a target <b>market share</b> of daily demand (worked backward through productivity into the hours that share requires). <b>Remainder providers</b> (non-dedicated / taxi) absorb whatever's left, priced per trip — in list order, the last one takes whatever the others didn't claim. Drag the ⠿ handle to reorder; Split and Budget reflect the new order immediately. Add as many of each as you need.
         </div>
+        {totalSharePct > 100 && (
+          <div style={{ fontSize: 12, color: gapRed, background: "var(--tint-red, #F6E4E1)", border: "1px solid var(--border-light)", padding: "6px 10px", marginBottom: 12 }}>
+            Market-share targets across your capacity providers add up to {Math.round(totalSharePct)}% — more than the demand can fully support. Actual trips served (Split/Budget) will fall short of these targets once the capacity waterfall runs.
+          </div>
+        )}
         {providers.map((p) => (
           <div key={p.id}
             onDragOver={(e) => { if (!dragId || dragId === p.id) return; e.preventDefault(); setOverId(p.id); }}
@@ -638,6 +691,7 @@ function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvid
                   <span style={{ fontSize: 11, color: sampleGray }}>Scheduled hours:</span>
                   <button style={modeBtn((p.hoursMode || "manual") === "manual")} onClick={() => setHoursMode(p.id, "manual")}>Enter directly</button>
                   <button style={modeBtn(p.hoursMode === "headcount")} onClick={() => setHoursMode(p.id, "headcount")}>Compute from headcount</button>
+                  <button style={modeBtn(p.hoursMode === "share")} onClick={() => setHoursMode(p.id, "share")}>Set market share</button>
                   <select value="" onChange={(e) => {
                       if (!e.target.value) return;
                       const s = (resourcingSignups || []).find((s) => s.id === Number(e.target.value));
@@ -675,6 +729,25 @@ function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvid
                     </div>
                     <div style={{ fontSize: 12, color: text, marginTop: 8, fontWeight: 600 }}>
                       → Weekday {Math.round(p.hoursByDow[1]).toLocaleString()} hrs/day · Weekend {Math.round(p.hoursByDow[0]).toLocaleString()} hrs/day
+                    </div>
+                  </div>
+                ) : p.hoursMode === "share" ? (
+                  <div style={{ background: "var(--tint-neutral-b)", border: "1px solid var(--border-light)", borderRadius: 2, padding: "10px 12px", marginBottom: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>Target share of daily demand (%)
+                        <NumField value={p.marketSharePct ?? 50} step={1} onCommit={(v) => setMarketShare(p.id, v)} /></label>
+                    </div>
+                    <div style={{ fontSize: 12.5, color: sampleGray }}>
+                      Hours below are worked backward from this share of the average day's projected demand, through weekday/weekend productivity — and update automatically whenever history, growth %, or productivity change, no re-entry needed. Actual trips served (Split/Budget) still depend on this provider's position in the capacity list above.
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 6, marginTop: 8 }}>
+                      {DOW_SHORT.map((d, i) => (
+                        <div key={d} style={{ fontSize: 11, color: sampleGray }}>
+                          {d} <div style={{ fontSize: 13, color: text, fontWeight: 600 }}>
+                            {Math.round(hoursByDowFromMarketShare(avgDemandByDow, p.marketSharePct, p.productivityWeekday, p.productivityWeekend)[i]).toLocaleString()}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ) : p.hoursMode === "imported" ? (
