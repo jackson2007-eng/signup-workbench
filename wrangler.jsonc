@@ -1,14 +1,29 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "transit-toolkit",
+  "main": "worker/index.js",
   "compatibility_date": "2026-07-12",
   "observability": {
     "enabled": true
   },
   "assets": {
+    "binding": "ASSETS",
     "not_found_handling": "single-page-application"
   },
   "compatibility_flags": [
     "nodejs_compat"
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "paratransit-companion-db",
+      "database_id": "e748a4c6-df60-4902-a1b9-5a0b416e397e"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "SESSIONS",
+      "id": "60ea9b3c6c27444d969cdea3fb91ed81"
+    }
   ]
 }
