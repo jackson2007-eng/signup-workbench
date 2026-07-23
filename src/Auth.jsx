@@ -41,7 +41,6 @@ const nudgeBtn = { fontFamily: "'Barlow Condensed', sans-serif", fontSize: 12, f
 const cardTitleStyle = { fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 700, marginBottom: 10 };
 const mutedStyle = { fontSize: 13, color: sampleGray };
 const rowCardStyle = { border: "1px solid var(--border-light)", borderRadius: 2, padding: "12px 14px" };
-const agencyChipStyle = { fontSize: 12, fontWeight: 600, padding: "4px 9px", background: "var(--paper)", border: "1px solid var(--border-light)", borderRadius: 2, color: text };
 const selectStyle = { padding: "5px 7px", fontSize: 12.5, border: "1px solid var(--border-input)", background: card, color: text, borderRadius: 2 };
 
 function AuthShell({ navigate, title, subtitle, children, wide }) {
@@ -237,6 +236,8 @@ export function Admin({ navigate }) {
   const [busyId, setBusyId] = useState(null);
   const [newAgencyName, setNewAgencyName] = useState("");
   const [agencyBusy, setAgencyBusy] = useState(false);
+  const [logoBusyId, setLogoBusyId] = useState(null);
+  const [logoVersion, setLogoVersion] = useState(0); // bumped on upload/remove to bust the <img> cache
 
   const refreshPending = () => fetch("/api/admin/pending", { credentials: "include" }).then((r) => r.json()).then((d) => setPending(d.users || []));
   const refreshMembers = () => fetch("/api/admin/users", { credentials: "include" }).then((r) => r.json()).then((d) => setMembers(d.users || []));
@@ -273,6 +274,41 @@ export function Admin({ navigate }) {
     }
   };
 
+  const uploadLogo = async (agencyId, file) => {
+    if (!file) return;
+    if (file.size > 300 * 1024) { alert("Logo is too large — please use an image under 300KB."); return; }
+    setLogoBusyId(agencyId);
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const rd = new FileReader();
+        rd.onload = () => resolve(rd.result);
+        rd.onerror = reject;
+        rd.readAsDataURL(file);
+      });
+      const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+      const res = await fetch(`/api/admin/agencies/${agencyId}/logo`, {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data: base64, mime: file.type }),
+      });
+      const data = await res.json();
+      if (res.ok) { await refreshAgencies(); setLogoVersion((v) => v + 1); }
+      else alert(data.error || "Could not upload that logo.");
+    } finally {
+      setLogoBusyId(null);
+    }
+  };
+
+  const removeLogo = async (agencyId) => {
+    setLogoBusyId(agencyId);
+    try {
+      await fetch(`/api/admin/agencies/${agencyId}/logo`, { method: "DELETE", credentials: "include" });
+      await refreshAgencies();
+      setLogoVersion((v) => v + 1);
+    } finally {
+      setLogoBusyId(null);
+    }
+  };
+
   const reject = async (id) => {
     setBusyId(id);
     try {
@@ -300,11 +336,32 @@ export function Admin({ navigate }) {
     <AuthShell navigate={navigate} title="Admin" subtitle="Manage agencies, approve access requests, and reassign team members." wide>
       <div style={{ marginBottom: 26 }}>
         <div style={cardTitleStyle}>Agencies</div>
+        <div style={{ fontSize: 12, color: sampleGray, marginBottom: 10 }}>
+          A logo shown here appears at the top of every view for everyone at that agency — a small square mark (PNG, JPEG, WebP, GIF, or SVG, under 300KB) works best.
+        </div>
         {agencies == null && <div style={mutedStyle}>Loading…</div>}
         {agencies && agencies.length === 0 && <div style={mutedStyle}>No agencies yet — create one below.</div>}
         {agencies && agencies.length > 0 && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-            {agencies.map((a) => <span key={a.id} style={agencyChipStyle}>{a.name}</span>)}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+            {agencies.map((a) => (
+              <div key={a.id} style={{ ...rowCardStyle, display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ width: 36, height: 36, flex: "none", border: "1px solid var(--border-light)", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", background: "var(--paper)" }}>
+                  {a.has_logo
+                    ? <img src={`/api/admin/agencies/${a.id}/logo?v=${logoVersion}`} alt="" style={{ maxWidth: "100%", maxHeight: "100%" }} />
+                    : <span style={{ fontSize: 9, color: sampleGray }}>none</span>}
+                </div>
+                <span style={{ fontSize: 13.5, fontWeight: 600, flex: 1 }}>{a.name}</span>
+                <label style={{ ...nudgeBtn, cursor: logoBusyId === a.id ? "default" : "pointer", opacity: logoBusyId === a.id ? 0.6 : 1 }}>
+                  {logoBusyId === a.id ? "Working…" : a.has_logo ? "Replace logo" : "Upload logo"}
+                  <input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" disabled={logoBusyId === a.id}
+                    style={{ display: "none" }}
+                    onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; uploadLogo(a.id, f); }} />
+                </label>
+                {!!a.has_logo && (
+                  <button disabled={logoBusyId === a.id} style={{ ...nudgeBtn, color: gapRed, borderColor: gapRed }} onClick={() => removeLogo(a.id)}>Remove</button>
+                )}
+              </div>
+            ))}
           </div>
         )}
         <form onSubmit={createAgency} style={{ display: "flex", gap: 8 }}>

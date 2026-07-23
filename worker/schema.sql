@@ -5,9 +5,14 @@
 -- An agency is the data-sharing unit: every user belongs to one (once approved), and saved
 -- signups belong to the agency, not the individual user, so teammates at the same agency see
 -- and edit each other's work.
+-- logo_data is a base64-encoded image (capped at ~300KB decoded, enforced by the Worker on
+-- upload), served back out through GET /api/agency-logo rather than embedded in JSON responses
+-- like /api/me — keeps the common per-request payload small and lets the browser cache the image.
 CREATE TABLE IF NOT EXISTS agencies (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  logo_data   TEXT,
+  logo_mime   TEXT,
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

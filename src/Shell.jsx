@@ -71,7 +71,26 @@ function Rail({ activeKind, onOpen, user, isAdmin, navigate, logout }) {
   );
 }
 
-function TabStrip({ openKinds, activeKind, onSelect, onClose }) {
+// Logo is fetched from /api/agency-logo (never embedded in the user object, which keeps /api/me
+// small) — attempts to load unconditionally whenever there's an agency name, and just hides
+// itself via onError if that agency has no logo set (a 404) rather than pre-checking.
+function AgencyBrand({ agencyName }) {
+  const [logoFailed, setLogoFailed] = useState(false);
+  if (!agencyName) return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto", padding: "0 14px", flex: "none" }}>
+      {!logoFailed && (
+        <img src="/api/agency-logo" alt="" onError={() => setLogoFailed(true)}
+          style={{ height: 24, maxWidth: 90, objectFit: "contain" }} />
+      )}
+      <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 13, fontWeight: 600, color: text, whiteSpace: "nowrap" }}>
+        {agencyName}
+      </span>
+    </div>
+  );
+}
+
+function TabStrip({ openKinds, activeKind, onSelect, onClose, agencyName }) {
   return (
     <div style={{ display: "flex", alignItems: "stretch", background: card, borderBottom: "1px solid var(--border)", height: 38, flex: "none", overflowX: "auto" }}>
       {openKinds.map((kind) => {
@@ -94,6 +113,7 @@ function TabStrip({ openKinds, activeKind, onSelect, onClose }) {
           </div>
         );
       })}
+      <AgencyBrand agencyName={agencyName} />
     </div>
   );
 }
@@ -191,7 +211,7 @@ export default function Shell({ path, navigate, user, logout }) {
       `}</style>
       <Rail activeKind={activeKind} onOpen={openTool} user={user} isAdmin={!!user?.isAdmin} navigate={navigate} logout={logout} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, height: "100vh" }}>
-        <TabStrip openKinds={openKinds} activeKind={activeKind} onSelect={openTool} onClose={closeTab} />
+        <TabStrip openKinds={openKinds} activeKind={activeKind} onSelect={openTool} onClose={closeTab} agencyName={user?.agencyName} />
         <div ref={paneRef} style={{ flex: 1, position: "relative", background: paper, overflowY: "auto" }}>
           <div style={{ display: activeKind === "home" ? "block" : "none" }}>
             <HomeDashboard onOpen={openTool} user={user} />

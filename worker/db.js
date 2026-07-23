@@ -63,7 +63,9 @@ export async function listApprovedUsers(env) {
 
 // agencies: the data-sharing unit every approved user belongs to (see projects below).
 export async function listAgencies(env) {
-  const { results } = await env.DB.prepare(`SELECT id, name FROM agencies ORDER BY name COLLATE NOCASE`).all();
+  const { results } = await env.DB.prepare(
+    `SELECT id, name, (logo_data IS NOT NULL) AS has_logo FROM agencies ORDER BY name COLLATE NOCASE`
+  ).all();
   return results;
 }
 
@@ -72,6 +74,18 @@ export async function createAgency(env, name) {
   if (existing) throw new Error("An agency with that name already exists.");
   const { meta } = await env.DB.prepare(`INSERT INTO agencies (name) VALUES (?)`).bind(name).run();
   return meta.last_row_id;
+}
+
+export async function setAgencyLogo(env, agencyId, data, mime) {
+  await env.DB.prepare(`UPDATE agencies SET logo_data = ?, logo_mime = ? WHERE id = ?`).bind(data, mime, agencyId).run();
+}
+
+export async function clearAgencyLogo(env, agencyId) {
+  await env.DB.prepare(`UPDATE agencies SET logo_data = NULL, logo_mime = NULL WHERE id = ?`).bind(agencyId).run();
+}
+
+export async function getAgencyLogo(env, agencyId) {
+  return env.DB.prepare(`SELECT logo_data, logo_mime FROM agencies WHERE id = ?`).bind(agencyId).first();
 }
 
 // projects: many named, datable signups per (agency, kind), shared by every user at that

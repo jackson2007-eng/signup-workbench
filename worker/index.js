@@ -3,9 +3,12 @@ import {
   getUserByUsername, getUserById, createPendingUser, listPendingUsers, approveUser, rejectUser,
   setUserPassword, listProjects, getProjectById, createProject, updateProjectPayload,
   renameProject, deleteProject, listAgencies, createAgency, listApprovedUsers, setUserAgency,
+  setAgencyLogo, clearAgencyLogo, getAgencyLogo,
 } from "./db.js";
 
 const PROJECT_KINDS = new Set(["resourcing", "callcentre", "dispatch", "annualplan", "vacationplan"]);
+const ALLOWED_LOGO_MIME = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"]);
+const MAX_LOGO_BYTES = 300 * 1024;
 const REQUEST_ACCESS_LIMIT_PER_DAY = 10;
 const LOGIN_FAILURE_LIMIT = 8;
 const LOGIN_IP_FAILURE_LIMIT = 25; // looser than the per-username cap — one IP can be a whole agency's office
@@ -200,6 +203,53 @@ async function handleApi(request, env, url) {
     } catch (e) {
       return badRequest(e.message || "Could not create that agency.");
     }
+  }
+
+  // Logo upload: admin-only (agency creation/management is already admin-gated), base64 image
+  // capped at ~300KB decoded so a full-size photo doesn't bloat D1 — plenty for a small
+  // wordmark/crest, which is what a header logo actually needs.
+  const agencyLogoMatch = path.match(/^\/api\/admin\/agencies\/(\d+)\/logo$/);
+  if (agencyLogoMatch && method === "POST") {
+    if (!user) return unauthorized();
+    if (!user.is_admin) return forbidden();
+    if (!isSameOrigin(request)) return forbidden();
+    const body = await request.json().catch(() => null);
+    const data = String(body?.data || "");
+    const mime = String(body?.mime || "");
+    if (!ALLOWED_LOGO_MIME.has(mime)) return badRequest("Logo must be a PNG, JPEG, WebP, GIF, or SVG image.");
+    if (!data) return badRequest("No image data received.");
+    if (data.length * 0.75 > MAX_LOGO_BYTES) return badRequest("Logo is too large — please use an image under 300KB.");
+    await setAgencyLogo(env, Number(agencyLogoMatch[1]), data, mime);
+    return json({ ok: true });
+  }
+  if (agencyLogoMatch && method === "DELETE") {
+    if (!user) return unauthorized();
+    if (!user.is_admin) return forbidden();
+    if (!isSameOrigin(request)) return forbidden();
+    await clearAgencyLogo(env, Number(agencyLogoMatch[1]));
+    return json({ ok: true });
+  }
+  // Admin preview by id (unlike /api/agency-logo below, which only ever serves the caller's own
+  // agency) — an admin managing agencies isn't necessarily a member of the one they're editing.
+  if (agencyLogoMatch && method === "GET") {
+    if (!user) return unauthorized();
+    if (!user.is_admin) return forbidden();
+    const logo = await getAgencyLogo(env, Number(agencyLogoMatch[1]));
+    if (!logo || !logo.logo_data) return notFound();
+    const bytes = Uint8Array.from(atob(logo.logo_data), (c) => c.charCodeAt(0));
+    return new Response(bytes, { headers: { "Content-Type": logo.logo_mime || "image/png", "Cache-Control": "private, max-age=300" } });
+  }
+
+  // Any signed-in, approved user can view their own agency's logo (not admin-gated — everyone at
+  // the agency sees the branding). Served as an image, not JSON, so it's cacheable and doesn't
+  // bloat /api/me or the login response on every page load.
+  if (path === "/api/agency-logo" && method === "GET") {
+    if (!user) return unauthorized();
+    if (!user.agency_id) return notFound();
+    const logo = await getAgencyLogo(env, user.agency_id);
+    if (!logo || !logo.logo_data) return notFound();
+    const bytes = Uint8Array.from(atob(logo.logo_data), (c) => c.charCodeAt(0));
+    return new Response(bytes, { headers: { "Content-Type": logo.logo_mime || "image/png", "Cache-Control": "private, max-age=3600" } });
   }
 
   const setAgencyMatch = path.match(/^\/api\/admin\/users\/(\d+)\/set-agency$/);
