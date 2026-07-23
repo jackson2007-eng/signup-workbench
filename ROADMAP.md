@@ -10,8 +10,23 @@ Design doctrine (flag-never-block, no PII, agency-generic language, no speculati
 |---|---|
 | `/resourcing` | Operator Signup Workbench — rules, demand, signup builder/optimizer, coverage, shift builder, packaging, suggestions, exception days, export |
 | `/callcentre` | Call Centre Staffing — ACD upload → concurrency curve, Erlang C required-agents overlay, arrival-rate curve, composition & queues |
+| `/dispatch` | Dispatch Desks — concurrent-incident load, dispatcher-ratio sizing, full parity with the operator workbench |
+| `/annualplan` | Annual Service Plan — v1: total daily trips projected from prior-year history (day-of-week + statutory-holiday matched) + growth %, split across capacity/remainder providers by scheduled hours × productivity |
 
 ## Next up
+
+### Daily Service Report (new module, `/dailyservice`) — added 2026-07-22, paused
+
+Reviewed against a real 2026 DATS Daily Service Report export (44 pages) — a before/after-
+service-day tracker per provider: budgeted (before-the-day) vs. actual (after-the-day)
+hours, trips, AMB/non-AMB (WAM) passenger splits, escorts, trips/hr, cost/trip, attrition %,
+wait-list carryover, same-day trips. Explicitly paused by the user in favor of building the
+Annual Service Plan tool first (`/annualplan`, shipped 2026-07-22) — the annual plan's
+per-day/per-provider projected-trips output is meant to hand off as the Daily Service
+Report's budgeted baseline calendar, so building it second avoids rework. Pick this up once
+that handoff (annual plan → daily budgeted baseline) is scoped. v1 of the annual plan is
+total-trips-only (no AMB/WAM split) — the Daily Service Report will need that granularity
+layered on, either in its own v1 or as a shared follow-up to the annual plan.
 
 ### Service Performance Tracker (new module, `/service`) — added 2026-07-15
 A tracker for the daily service report agencies already keep in Excel (modelled on the DATS Daily Service Report): daily date × provider records of booked/delivered trips, hours, passengers, and optionally cost.
@@ -27,8 +42,7 @@ A tracker for the daily service report agencies already keep in Excel (modelled 
 
 ## Idea stage — planning & administration modules (added 2026-07-15)
 
-- **Annual Trip Forecaster** — project ridership forward from historical trips (Service Tracker history is the natural input): trend + seasonality by day type, registrant growth, scenario sliders (growth %, service changes). Output feeds the signup tool's demand scaling and the annual plan below.
-- **Annual Service Plan & Budget tool** — turn a trip forecast into planned service hours and dollars for the year: forecast trips ÷ target productivity = vehicle-hours, × rates (city hourly cost, contractor rates, taxi per-trip) = budget, split by provider share. Works hand-in-hand with the Service Tracker: the plan sets the monthly/daily budget line, the tracker's actuals plot against it (plan-vs-actual variance is the report every manager asks for).
+- **Annual Trip Forecaster** — project ridership forward from historical trips (Service Tracker history is the natural input): trend + seasonality by day type, registrant growth, scenario sliders (growth %, service changes). Now folded into `/annualplan`'s Projection tab (day-of-week + statutory-holiday matching + a single annual growth %) rather than a separate module.
 - **Employee Performance Tracking** — per-operator/agent metrics (on-time, productivity, absences, incidents). ⚠ First module that would hold *personal* data — breaks the current "no PII anywhere" doctrine that the toolkit's procurement story leans on. Needs a deliberate decision: employee IDs only, local-only storage, or accept the posture change (likely pairs with the phase-2 accounts work, not before).
 - **Customer Complaints & Concerns** — log, categorize, and trend complaints/commendations (by type, provider, route/area, day), track resolution status and response times, feed a monthly summary. Same PII caution as above (customer names/contacts) — categorized aggregate trending can be built PII-light; case management cannot.
 
@@ -208,6 +222,20 @@ branch when pricing resumes.
 - Rename the GitHub repo (signup-workbench → toolkit-wide name).
 
 ## Recently shipped
+- 2026-07-22 — Annual Service Plan module (`/annualplan`, v1: total trips only). Reviewed
+  against real 2026 DATS Daily Service Report + Monthly Trip/Cost Budget exports. Providers
+  tab (editable capacity providers — scheduled hours/day × weekday/weekend productivity ×
+  hourly rate — and remainder providers — % share × per-trip rate, ordered waterfall, last
+  remainder always absorbs the rest, unaccommodated demand surfaced rather than dropped).
+  History tab (sample/template/upload a prior year of daily trips). Projection tab (each
+  plan-year day matched to the historical day sharing its day-of-week and closest relative
+  position in the year, holidays matched by name first, then grown by a single annual %).
+  Capacity & Split tab (stacked monthly chart + annual summary table: trips/hours/cost/
+  cost-per-trip by provider). Explicitly deferred: AMB/WAM passenger splits, escorts,
+  monthly-varying growth, multi-year blended history — see Daily Service Report above for
+  why total-trips-first was the right v1 scope. Fixed a real bug found in live verification:
+  Recharts' bar entry animation could stall indefinitely (bars computed correct geometry but
+  never painted) — `isAnimationActive={false}` set on every Bar in the module.
 - 2026-07-16/17 — Requirement-lines rework (water-fill under fleet cap + deployment-pattern line, then folded into Size-to-requirement after cleanup); demand-data integrity (persistent pasted-totals detection + ÷6 repair, cycle-time plausibility guard, pin-known-productivity calibration); occupancy target fixed to cycle-only window; Gap tooltip shows true shortfall; pull-out/pull-in staging drawn violet; prev/next step navigation; reclassification chips on flagged shifts; drag-in-place from full board; "Flagged first" + end-time sorts.
 - 2026-07-15 — Signup Builder "Size to requirement": package count from capped weekly vehicle-hours ÷ 40.
 - 2026-07-15 — Coverage "Requirement mode": demand-implied vehicle-hours water-filled under the fleet cap.

@@ -23,6 +23,12 @@ const MODULES = [
     tag: "Concurrent workload",
     body: "Size and time dispatcher desks against concurrent-incident load through the day, so the control room is staffed to the shape of real demand.",
   },
+  {
+    key: "annualplan", path: "/annualplan", status: "live", accent: bookoutViolet,
+    title: "Annual Service Plan",
+    tag: "Trip forecast · provider capacity split",
+    body: "Project next year's daily trips from prior-year history and a growth rate, then split projected demand across in-house, dedicated-contractor, and non-dedicated providers by scheduled hours and productivity.",
+  },
 ];
 
 export default function Landing({ navigate }) {
