@@ -2052,7 +2052,7 @@ function aggregateCoverageRows(rows, bucketMin) {
 function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity, avgCycleTime = 0, demandShare = 100, height = 320, selBand,
   supplyName = "Supply", targetName = "Demand-aligned target", unitLabel = "events", minName = "min", minUnitLabel = "vehicles", sugTooltip = true, extraSeries = null,
   eventsPerTrip = 1, // operator demand counts pickup+dropoff (2 events) per trip; siblings pass 1
-  onPointClick = null, onDutyCounts = null, slim = false, aggregateMin = 5, showTripBar = false, showTarget = true, showStaging = true }) {
+  onPointClick = null, onDutyCounts = null, slim = false, aggregateMin = 5, showTripBar = false, showTarget = true, showStaging = true, showCoverageFill = true }) {
   const data = useMemo(() => {
     const bk = RAW.bookout[day];
     const bkMap = {};
@@ -2181,8 +2181,12 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         {showTarget && (
           <Area type="stepAfter" dataKey="target" name={targetName} stroke={targetInk} strokeWidth={1.5} fill="#233746" fillOpacity={0.07} tooltipType={slim ? "none" : undefined} />
         )}
-        <Area type="stepAfter" dataKey="gap" name="Gap" stroke="none" fill={gapRed} fillOpacity={0.22} legendType="none" />
-        <Area type="stepAfter" dataKey="covered" name="Aligned" stroke="none" fill={supplyTeal} fillOpacity={0.16} legendType="none" />
+        {showCoverageFill && (
+          <>
+            <Area type="stepAfter" dataKey="gap" name="Gap" stroke="none" fill={gapRed} fillOpacity={0.22} legendType="none" />
+            <Area type="stepAfter" dataKey="covered" name="Aligned" stroke="none" fill={supplyTeal} fillOpacity={0.16} legendType="none" />
+          </>
+        )}
         {/* pull-out/pull-in staging: target at the day's edges with no demand nearby — drawn
             violet over the target/gap fills so it can't be misread as rider demand. Vehicle-
             deadhead concept only; siblings (no deadhead settings) turn it off. */}
@@ -3365,22 +3369,6 @@ export default function App({ onHome, user, logout }) {
         return span(rules[a]) - span(rules[b]);
       });
   }, [sel, selIssues.length, rules, glob]);
-  // Best available single-move candidates for the SELECTED run only (via findSuggestions'
-  // onlySegId scoping) — an in-context "what's the best I could do with this one run"
-  // decision aid, cheap enough (~1 segment's worth of candidates) to recompute on every
-  // board change, including live nudges from patchSel.
-  const selSuggestions = useMemo(() => {
-    if (!sel) return [];
-    return findSuggestions(board, eng, DEM, allRules, glob, spans, null, sel.id);
-  }, [sel, board, eng, DEM, allRules, glob, spans]);
-  // Supply this day would have if the top suggestion were applied, for the before/after
-  // preview — a hypothetical patch, not a real board change.
-  const bestMoveSup = useMemo(() => {
-    if (!sel || !selSuggestions.length) return null;
-    const top = selSuggestions[0];
-    const patched = board.map((s) => (s.id === top.id ? { ...s, ...top.payload } : s));
-    return buildSupply(patched);
-  }, [sel, selSuggestions, board]);
   // A run is "on duty" at minute t if its span covers t (start ≤ t ≤ end), so a run starting or
   // ending exactly at t is included. Per-slot counts feed the coverage-chart tooltip.
   const onDutyCounts = useMemo(() => {
@@ -4980,28 +4968,6 @@ export default function App({ onHome, user, logout }) {
                     )}
                   </div>
                 )}
-                {selSuggestions.length > 0 && (
-                  <div style={{ marginTop: 10, borderLeft: `3px solid ${supplyTeal}`, background: "var(--tint-teal-b)", padding: "8px 10px" }}>
-                    <div style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 6 }}>Best available moves for this run:</div>
-                    {selSuggestions.slice(0, 3).map((s, i) => (
-                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginTop: i ? 4 : 0 }}>
-                        <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 14, fontWeight: 700, color: supplyTeal, width: 52 }}>
-                          +{(s.delta * 100).toFixed(2)}
-                        </span>
-                        <span style={{ fontSize: 12, flex: 1 }}>{s.label}</span>
-                        <button style={{ ...nudgeBtn, padding: "2px 8px" }} onClick={() => patchSel(s.payload)}>Apply</button>
-                      </div>
-                    ))}
-                    {bestMoveSup && (
-                      <div style={{ marginTop: 8 }}>
-                        <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 2 }}>
-                          {day} coverage if you apply the top move — <span style={{ color: supplyTeal }}>teal</span> gains, <span style={{ color: gapRed }}>red</span> loses:
-                        </div>
-                        <DeltaAreaChart delta={bestMoveSup[day].map((v, i) => v - P.sup[i])} demandRef={P.target} height={110} />
-                      </div>
-                    )}
-                  </div>
-                )}
                 <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10 }}>This shift's week — tap a day to view it:</div>
                 <WeekStrip segs={selShiftSegs} day={day} onPick={setDay} />
               </div>
@@ -5219,6 +5185,7 @@ export default function App({ onHome, user, logout }) {
                 Live {day} coverage
               </div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={false} showProductivity={false} slim avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={280}
+                showCoverageFill={false}
                 selBand={sel ? [sel.s, sel.e] : null} onDutyCounts={onDutyCounts} onPointClick={(t) => { setSelId(null); setGanttTimeFilter(t); }} eventsPerTrip={2} unitLabel="trips" />
               <div style={{ fontSize: 11.5, color: "var(--muted)", padding: "2px 10px 10px" }}>
                 Dashed lines mark the selected shift. On desktop, the KPI strip and shift editor stay pinned while you scroll; on phones everything scrolls freely so the signup and this chart get the full screen.
