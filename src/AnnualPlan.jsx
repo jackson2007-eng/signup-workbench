@@ -43,51 +43,87 @@ const EXCEL_EPOCH = 25569;
 const serialToISO = (serial) => new Date(Math.round((Math.floor(serial) - EXCEL_EPOCH) * 86400000)).toISOString().slice(0, 10);
 
 /* ---------- projection engine ----------
-   Each target-year day is matched to the historical day sharing its day-of-week whose relative
-   position in the year (day-of-year ÷ year-length) is closest — so "day N of the year" doesn't
-   have to line up across years of different length, but the weekday shape (weekday vs Sat vs
-   Sun) always carries forward. Growth % is applied on top of whatever value gets matched. */
-function matchByDow(targetIso, history) {
-  const keys = Object.keys(history);
-  if (!keys.length) return null;
-  const dow = dowOfIso(targetIso);
+   Each target-year day is matched, independently in every loaded historical year (up to
+   MAX_HISTORY_YEARS), to the day in that year sharing its day-of-week whose relative position in
+   the year (day-of-year ÷ year-length) is closest — so "day N of the year" doesn't have to line
+   up across years of different length, but the weekday shape (weekday vs Sat vs Sun) always
+   carries forward. Those per-year matches are then blended (see weightedPredict) into one
+   predicted number, and growth % is applied on top of that blend. A day can be manually
+   overridden (dayOverrides), which wins over the model but doesn't stop the model from still
+   being computed — the table shows both so an override's effect is visible, not hidden. */
+const MAX_HISTORY_YEARS = 5;
+
+function yearsPresent(history) {
+  return [...new Set(Object.keys(history).map((iso) => +iso.slice(0, 4)))].sort((a, b) => a - b);
+}
+
+function matchInYear(targetIso, history, year) {
   const targetYear = +targetIso.slice(0, 4);
   const targetFrac = dayOfYearIndex(targetIso) / daysInYear(targetYear);
+  const dow = dowOfIso(targetIso);
   let best = null, bestDist = Infinity;
-  for (const iso of keys) {
-    if (dowOfIso(iso) !== dow) continue;
-    const y = +iso.slice(0, 4);
-    const frac = dayOfYearIndex(iso) / daysInYear(y);
+  for (const iso of Object.keys(history)) {
+    if (+iso.slice(0, 4) !== year || dowOfIso(iso) !== dow) continue;
+    const frac = dayOfYearIndex(iso) / daysInYear(year);
     const dist = Math.abs(frac - targetFrac);
     if (dist < bestDist) { bestDist = dist; best = iso; }
   }
   return best;
 }
 
-// holidaysHistory/holidaysPlan: [{date, name}], from date-holidays' getHolidays(year), public only.
-function buildProjection(history, planYear, growthPct, holidaysHistory, holidaysPlan) {
+// Up to maxYears most-recently-loaded years, most-recent-first, each contributing at most one
+// matched day (a year with no data for the matching weekday just contributes nothing).
+function matchAllYears(targetIso, history, maxYears = MAX_HISTORY_YEARS) {
+  const years = yearsPresent(history).slice(-maxYears).reverse();
+  const out = [];
+  for (const year of years) {
+    const iso = matchInYear(targetIso, history, year);
+    if (iso != null) out.push({ year, iso, value: history[iso] });
+  }
+  return out;
+}
+
+// Recency-weighted average — candidates are already most-recent-first, so the most recent gets
+// weight n (n = candidate count) down to 1 for the oldest. Smooths out one-off spikes/dips while
+// still leaning toward the latest trend; a single candidate just passes through unchanged.
+function weightedPredict(candidates) {
+  if (!candidates.length) return null;
+  const n = candidates.length;
+  let sum = 0, weightTotal = 0;
+  candidates.forEach((c, i) => { const w = n - i; sum += c.value * w; weightTotal += w; });
+  return sum / weightTotal;
+}
+
+// holidaysHistoryByYear: {year: [{date,name}]} for every loaded history year; holidaysPlan:
+// [{date,name}] for planYear — both from date-holidays' getHolidays(), public holidays only.
+function buildProjection(history, planYear, growthPct, holidaysHistoryByYear, holidaysPlan, dayOverrides) {
   const mult = 1 + (growthPct || 0) / 100;
-  const histByName = new Map(holidaysHistory.map((h) => [h.name, h.date]));
   const planHolidayByDate = new Map(holidaysPlan.map((h) => [h.date, h.name]));
+  const years = yearsPresent(history).slice(-MAX_HISTORY_YEARS).reverse();
   const len = daysInYear(planYear);
   const out = {};
-  const matchedFrom = {}; // for the tooltip: which historical date fed this projection
+  const detail = {};
   for (let doy = 0; doy < len; doy++) {
     const iso = isoForDoy(planYear, doy);
-    let srcIso = null, srcVal = null;
     const holidayName = planHolidayByDate.get(iso);
+    let candidates = null;
     if (holidayName) {
-      const histDate = histByName.get(holidayName);
-      if (histDate != null && history[histDate] != null) { srcIso = histDate; srcVal = history[histDate]; }
+      candidates = [];
+      for (const year of years) {
+        const hist = (holidaysHistoryByYear[year] || []).find((h) => h.name === holidayName);
+        if (hist && history[hist.date] != null) candidates.push({ year, iso: hist.date, value: history[hist.date] });
+      }
+      if (!candidates.length) candidates = null; // no year had this named holiday — fall back below
     }
-    if (srcVal == null) {
-      const m = matchByDow(iso, history);
-      if (m != null) { srcIso = m; srcVal = history[m]; }
-    }
-    out[iso] = srcVal != null ? Math.round(srcVal * mult) : 0;
-    matchedFrom[iso] = srcIso;
+    if (!candidates) candidates = matchAllYears(iso, history);
+    const predicted = weightedPredict(candidates);
+    const withGrowth = predicted != null ? Math.round(predicted * mult) : 0;
+    const override = dayOverrides ? dayOverrides[iso] : null;
+    const finalVal = override != null ? override : withGrowth;
+    out[iso] = finalVal;
+    detail[iso] = { candidates, holidayName: holidayName || null, predicted: withGrowth, overridden: override != null };
   }
-  return { projected: out, matchedFrom };
+  return { projected: out, detail };
 }
 
 /* ---------- capacity split ----------
@@ -140,10 +176,20 @@ function monthlyRollup(planYear, projected, providers, holidaysPlan) {
   }
   return months;
 }
-function historyMonthlyTotals(history) {
+// `year`: restrict to one loaded year's days — history can hold up to MAX_HISTORY_YEARS years at
+// once now, and summing all of them into 12 buckets would silently conflate separate years.
+function historyMonthlyTotals(history, year) {
   const months = MONTHS.map(() => 0);
-  for (const iso of Object.keys(history)) months[monthOfIso(iso)] += history[iso];
+  for (const iso of Object.keys(history)) {
+    if (year != null && +iso.slice(0, 4) !== year) continue;
+    months[monthOfIso(iso)] += history[iso];
+  }
   return months;
+}
+function historyYearTotal(history, year) {
+  let total = 0;
+  for (const iso of Object.keys(history)) if (+iso.slice(0, 4) === year) total += history[iso];
+  return total;
 }
 
 /* ---------- service hours from headcount ----------
@@ -195,6 +241,7 @@ export default function AnnualPlan({ onHome, user, logout }) {
   const [jurisdiction, setJurisdiction] = useState(() => clone(ANNUALPLAN_SAMPLE.jurisdiction));
   const [historySource, setHistorySource] = useState("sample"); // "sample" | "uploaded"
   const [uploadInfo, setUploadInfo] = useState(null);
+  const [dayOverrides, setDayOverrides] = useState(() => clone(ANNUALPLAN_SAMPLE.dayOverrides || {}));
   const upRef = useRef(null);
 
   /* ---------- statutory holidays (lazy-loaded, same pattern as the operator module) ---------- */
@@ -220,16 +267,23 @@ export default function AnnualPlan({ onHome, user, logout }) {
     const hd = new hdCtor(jurisdiction.country, jurisdiction.region || undefined);
     return hd.getHolidays(year).filter((h) => h.type === "public").map((h) => ({ date: h.date.slice(0, 10), name: h.name }));
   };
-  const holidaysHistory = useMemo(() => holidaysFor(historyYear), [hdCtor, jurisdiction.country, jurisdiction.region, historyYear]);
+  // One year's holidays for every loaded history year (not just historyYear) — buildProjection
+  // needs all of them to blend a holiday's value across every year it's available in.
+  const historyYears = useMemo(() => yearsPresent(history), [history]);
+  const holidaysHistoryByYear = useMemo(() => {
+    const out = {};
+    for (const y of historyYears) out[y] = holidaysFor(y);
+    return out;
+  }, [hdCtor, jurisdiction.country, jurisdiction.region, historyYears]);
   const holidaysPlan = useMemo(() => holidaysFor(planYear), [hdCtor, jurisdiction.country, jurisdiction.region, planYear]);
 
   /* ---------- derived: projection + split (pure functions of the state above) ---------- */
-  const { projected } = useMemo(
-    () => buildProjection(history, planYear, growthPct, holidaysHistory, holidaysPlan),
-    [history, planYear, growthPct, holidaysHistory, holidaysPlan]
+  const { projected, detail: projectionDetail } = useMemo(
+    () => buildProjection(history, planYear, growthPct, holidaysHistoryByYear, holidaysPlan, dayOverrides),
+    [history, planYear, growthPct, holidaysHistoryByYear, holidaysPlan, dayOverrides]
   );
   const rollup = useMemo(() => monthlyRollup(planYear, projected, providers, holidaysPlan), [planYear, projected, providers, holidaysPlan]);
-  const historyMonthly = useMemo(() => historyMonthlyTotals(history), [history]);
+  const historyMonthly = useMemo(() => historyMonthlyTotals(history, historyYear), [history, historyYear]);
   const annualTotals = useMemo(() => {
     const totals = { trips: 0, unaccommodated: 0, byProvider: {} };
     for (const m of rollup) {
@@ -241,7 +295,7 @@ export default function AnnualPlan({ onHome, user, logout }) {
     }
     return totals;
   }, [rollup]);
-  const historyAnnual = useMemo(() => Object.values(history).reduce((a, b) => a + b, 0), [history]);
+  const historyAnnual = useMemo(() => historyYearTotal(history, historyYear), [history, historyYear]);
 
   /* ---------- providers editing ---------- */
   const updateProvider = (id, patch) => setProviders((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)));
@@ -309,6 +363,9 @@ export default function AnnualPlan({ onHome, user, logout }) {
     XLSX.utils.book_append_sheet(wb, ws, "Daily Trips");
     XLSX.writeFile(wb, `annual-plan-history-${historyYear}-template.xlsx`);
   };
+  // Merges into existing history rather than replacing it, so a second (third, fourth…) file
+  // upload adds another year instead of wiping out what's already loaded — up to MAX_HISTORY_YEARS
+  // years are kept, oldest dropped first once a newer one pushes past the cap.
   const uploadHistory = (file) => {
     const rd = new FileReader();
     rd.onload = () => {
@@ -327,15 +384,33 @@ export default function AnnualPlan({ onHome, user, logout }) {
           out[iso] = trips; parsed++; years.add(+iso.slice(0, 4));
         }
         if (!parsed) { alert("Could not find any valid Date/Trips rows in that file."); return; }
-        setHistory(out);
+        setHistory((h) => {
+          const merged = { ...h, ...out };
+          const keepYears = new Set(yearsPresent(merged).slice(-MAX_HISTORY_YEARS));
+          const capped = {};
+          for (const [iso, v] of Object.entries(merged)) if (keepYears.has(+iso.slice(0, 4))) capped[iso] = v;
+          return capped;
+        });
         setHistoryYear(years.size === 1 ? [...years][0] : Math.max(...years));
         setHistorySource("uploaded");
-        setUploadInfo(`Loaded ${parsed} day(s)${skipped ? `, skipped ${skipped} unreadable row(s)` : ""}.`);
+        setUploadInfo(`Loaded ${parsed} day(s)${skipped ? `, skipped ${skipped} unreadable row(s)` : ""} — up to the ${MAX_HISTORY_YEARS} most recent years are kept.`);
       } catch (e) {
         alert("Could not read that file — check it matches the Date / Trips template.");
       }
     };
     if (file.name.endsWith(".csv")) rd.readAsText(file); else rd.readAsArrayBuffer(file);
+  };
+  // Drops one loaded year's worth of history entries — lets the user manage which years feed the
+  // model without re-uploading everything else. If the removed year was the one previewed in the
+  // chart/template download, fall back to whichever loaded year is now most recent.
+  const removeHistoryYear = (year) => {
+    const remainingYears = yearsPresent(history).filter((y) => y !== year);
+    setHistory((h) => {
+      const out = {};
+      for (const [iso, v] of Object.entries(h)) if (+iso.slice(0, 4) !== year) out[iso] = v;
+      return out;
+    });
+    if (historyYear === year) setHistoryYear(remainingYears.length ? remainingYears[remainingYears.length - 1] : new Date().getUTCFullYear());
   };
   const useSample = () => {
     setHistory(clone(ANNUALPLAN_SAMPLE.history));
@@ -344,7 +419,7 @@ export default function AnnualPlan({ onHome, user, logout }) {
     setUploadInfo(null);
   };
 
-  const buildPayload = () => ({ kind: "annualplan", providers, history, historyYear, planYear, growthPct, jurisdiction, historySource });
+  const buildPayload = () => ({ kind: "annualplan", providers, history, historyYear, planYear, growthPct, jurisdiction, historySource, dayOverrides });
   const applyPayload = (p) => {
         if (p.providers) setProviders(p.providers);
         if (p.history) setHistory(p.history);
@@ -353,9 +428,10 @@ export default function AnnualPlan({ onHome, user, logout }) {
         if (p.growthPct != null) setGrowthPct(p.growthPct);
         if (p.jurisdiction) setJurisdiction(p.jurisdiction);
         setHistorySource(p.historySource || "uploaded");
+        setDayOverrides(p.dayOverrides || {});
   };
   const payloadJson = useMemo(() => JSON.stringify(buildPayload()), [
-    providers, history, historyYear, planYear, growthPct, jurisdiction, historySource,
+    providers, history, historyYear, planYear, growthPct, jurisdiction, historySource, dayOverrides,
   ]);
   const { items: signups, create: createSignup, rename: renameSignup, remove: removeSignup } = useSignupList("annualplan");
   // Read-only: lets Providers offer "import from a saved Resourcing signup" alongside the
@@ -441,8 +517,9 @@ export default function AnnualPlan({ onHome, user, logout }) {
           <HistoryTab {...{
             historyYear, setHistoryYear, planYear, setPlanYear, growthPct, setGrowthPct,
             jurisdiction, setJurisdiction, hdCountries, hdRegions, hdCtor, hdLoading,
-            history, historyMonthly, historyAnnual, historySource, uploadInfo,
-            downloadTemplate, uploadHistory, useSample, upRef,
+            history, historyYears, historyMonthly, historyAnnual, historySource, uploadInfo,
+            downloadTemplate, uploadHistory, useSample, upRef, removeHistoryYear,
+            holidaysPlan, projected, projectionDetail, dayOverrides, setDayOverrides,
           }} />
         )}
         {tab === "projection" && (
@@ -582,19 +659,79 @@ function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvid
 
 /* ================= HISTORY ================= */
 const COUNTRY_PRESETS = ["CA", "US", "GB", "AU"];
+const thStyle = { textAlign: "left", padding: "5px 8px", fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 600, fontSize: 11.5, color: sampleGray, whiteSpace: "nowrap" };
+const tdStyle = { padding: "3px 8px", whiteSpace: "nowrap" };
+const yearChip = (active) => ({
+  display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, padding: "3px 5px 3px 10px",
+  border: `1px solid ${active ? supplyTeal : "var(--border-input)"}`, borderRadius: 999, cursor: "pointer",
+  background: active ? "var(--tint-teal-b)" : card, color: active ? supplyTeal : text,
+});
+
+// Small text input specifically for the override column: unlike NumField it has a real "empty"
+// state (no override set), not just a number — typing clears back to blank removes the override.
+function OverrideField({ value, onCommit }) {
+  const [txt, setTxt] = useState(value == null ? "" : String(value));
+  const focused = useRef(false);
+  useEffect(() => { if (!focused.current) setTxt(value == null ? "" : String(value)); }, [value]);
+  return (
+    <input type="text" inputMode="numeric" value={txt} placeholder="—"
+      onFocus={() => { focused.current = true; }}
+      onChange={(e) => {
+        const raw = e.target.value;
+        setTxt(raw);
+        if (raw.trim() === "") { onCommit(null); return; }
+        const v = parseFloat(raw);
+        if (!isNaN(v)) onCommit(v);
+      }}
+      onBlur={() => {
+        focused.current = false;
+        if (txt.trim() === "") return;
+        const v = parseFloat(txt);
+        setTxt(isNaN(v) ? "" : String(Math.round(v)));
+      }}
+      style={{ width: 64, padding: "3px 5px", border: "1px solid var(--border-input)", borderRadius: 2, background: card, color: text, fontSize: 12, textAlign: "right" }} />
+  );
+}
+
 function HistoryTab({
   historyYear, setHistoryYear, planYear, setPlanYear, growthPct, setGrowthPct,
   jurisdiction, setJurisdiction, hdCountries, hdRegions, hdCtor, hdLoading,
-  history, historyMonthly, historyAnnual, historySource, uploadInfo,
-  downloadTemplate, uploadHistory, useSample, upRef,
+  history, historyYears, historyMonthly, historyAnnual, historySource, uploadInfo,
+  downloadTemplate, uploadHistory, useSample, upRef, removeHistoryYear,
+  holidaysPlan, projected, projectionDetail, dayOverrides, setDayOverrides,
 }) {
   const chartData = MONTHS.map((label, i) => ({ month: label, trips: historyMonthly[i] }));
+  const displayYears = historyYears.slice(-MAX_HISTORY_YEARS).reverse(); // most recent first
+
+  const holidayByDate = useMemo(() => new Map(holidaysPlan.map((h) => [h.date, h.name])), [holidaysPlan]);
+  const forecastRows = useMemo(() => {
+    const len = daysInYear(planYear);
+    const rows = [];
+    for (let doy = 0; doy < len; doy++) {
+      const iso = isoForDoy(planYear, doy);
+      const d = projectionDetail[iso] || { candidates: [], predicted: 0, overridden: false };
+      rows.push({
+        iso, dow: dowOfIso(iso), month: monthOfIso(iso),
+        holidayName: holidayByDate.get(iso) || null,
+        candidates: d.candidates || [], predicted: d.predicted, overridden: d.overridden,
+        final: projected[iso] ?? d.predicted,
+      });
+    }
+    return rows;
+  }, [planYear, projectionDetail, projected, holidayByDate]);
+
+  const setOverride = (iso, v) => setDayOverrides((o) => {
+    if (v == null) { const rest = { ...o }; delete rest[iso]; return rest; }
+    return { ...o, [iso]: Math.max(0, Math.round(v)) };
+  });
+  const overrideCount = Object.keys(dayOverrides).length;
+
   return (
     <div>
       <div style={cardStyle}>
         <div style={hTitle}>Plan setup</div>
         <div style={{ display: "flex", gap: 20, flexWrap: "wrap", fontSize: 13 }}>
-          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>History year <NumField value={historyYear} onCommit={(v) => setHistoryYear(Math.round(v))} /></label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>Preview / template year <NumField value={historyYear} onCommit={(v) => setHistoryYear(Math.round(v))} /></label>
           <label style={{ display: "flex", alignItems: "center", gap: 6 }}>Plan year <NumField value={planYear} onCommit={(v) => setPlanYear(Math.round(v))} /></label>
           <label style={{ display: "flex", alignItems: "center", gap: 6 }}>Growth (%) <NumField value={growthPct} step={0.5} onCommit={(v) => setGrowthPct(v)} /></label>
           <label style={{ display: "flex", alignItems: "center", gap: 6 }}>Country
@@ -617,7 +754,7 @@ function HistoryTab({
           {hdLoading && <span style={{ fontSize: 12, color: sampleGray, alignSelf: "center" }}>Loading holiday calendars…</span>}
         </div>
         <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>
-          Growth is a single annual rate applied uniformly for now. Statutory holidays are matched by name between the two years where possible (e.g. this year's Labour Day feeds next year's Labour Day) — regular days match by closest same-weekday position instead.
+          Up to {MAX_HISTORY_YEARS} years of history can be loaded at once (see below) — each {planYear} day is blended from whichever of those years it matches, weighted toward the most recent, then grown by this Growth % on top. Statutory holidays are matched by name across years where possible; regular days match by closest same-weekday position instead.
         </div>
       </div>
 
@@ -636,9 +773,21 @@ function HistoryTab({
           </div>
         </div>
         {uploadInfo && <div style={{ background: "var(--tint-neutral-b)", border: "1px solid var(--border-light)", padding: "7px 11px", marginBottom: 8, fontSize: 12 }}>{uploadInfo}</div>}
+        {displayYears.length > 0 && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+            <span style={{ fontSize: 11, color: sampleGray, alignSelf: "center", marginRight: 2 }}>Loaded years:</span>
+            {displayYears.map((y) => (
+              <span key={y} style={yearChip(y === historyYear)} onClick={() => setHistoryYear(y)}>
+                {y}
+                <span title={`Remove ${y}`} style={{ color: gapRed, fontWeight: 700, lineHeight: 1 }}
+                  onClick={(e) => { e.stopPropagation(); removeHistoryYear(y); }}>×</span>
+              </span>
+            ))}
+          </div>
+        )}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-          <Stat label="Annual trips" value={historyAnnual.toLocaleString()} tone={supplyTeal} />
-          <Stat label="Days loaded" value={Object.keys(history).length.toLocaleString()} />
+          <Stat label={`${historyYear} annual trips`} value={historyAnnual.toLocaleString()} tone={supplyTeal} />
+          <Stat label="Days loaded (all years)" value={Object.keys(history).length.toLocaleString()} />
         </div>
         <ResponsiveContainer width="100%" height={220}>
           <BarChart data={chartData} margin={{ top: 4, right: 10, left: -14, bottom: 0 }}>
@@ -650,7 +799,66 @@ function HistoryTab({
           </BarChart>
         </ResponsiveContainer>
         <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 6 }}>
-          Template is one row per calendar date in {historyYear} — download it, fill in the Trips column from your own records, and upload it back.
+          Template is one row per calendar date in {historyYear} — download it, fill in the Trips column from your own records, and upload it back. Uploading another year's file adds to what's already loaded (up to {MAX_HISTORY_YEARS} years); it doesn't replace it.
+        </div>
+      </div>
+
+      <div style={cardStyle}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+          <div style={hTitle}>{planYear} day-by-day forecast</div>
+          {overrideCount > 0 && (
+            <>
+              <span style={{ fontSize: 11, padding: "2px 8px", background: "var(--tint-teal-b)", border: "1px solid var(--border-light)", color: supplyTeal, fontWeight: 600 }}>
+                {overrideCount} day{overrideCount === 1 ? "" : "s"} overridden
+              </span>
+              <button style={{ ...nudgeBtn, fontSize: 11.5, padding: "3px 8px" }} onClick={() => setDayOverrides({})}>Clear all overrides</button>
+            </>
+          )}
+        </div>
+        <div style={{ fontSize: 11.5, color: sampleGray, marginBottom: 10, lineHeight: 1.5 }}>
+          Every {planYear} day matched against each loaded history year (shown per-year below), blended into Predicted (recent years weighted more, then grown {growthPct}%). Statutory holidays get their own column. Type in Override to set a day's Final total by hand — clear the field to go back to the model.
+        </div>
+        <div style={{ overflowX: "auto", maxHeight: 560, overflowY: "auto", border: "1px solid var(--border-light)" }}>
+          <table style={{ borderCollapse: "collapse", fontSize: 12, width: "100%" }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid var(--border)", background: card, position: "sticky", top: 0, zIndex: 1 }}>
+                <th style={thStyle}>Date</th>
+                <th style={thStyle}>Day</th>
+                <th style={thStyle}>Holiday</th>
+                {displayYears.map((y) => <th key={y} style={{ ...thStyle, textAlign: "right" }}>{y}</th>)}
+                <th style={{ ...thStyle, textAlign: "right" }}>Predicted</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Override</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Final</th>
+              </tr>
+            </thead>
+            <tbody>
+              {MONTHS.map((label, mi) => (
+                <React.Fragment key={label}>
+                  <tr>
+                    <td colSpan={6 + displayYears.length} style={{ background: "var(--tint-neutral-b)", fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, fontSize: 12.5, padding: "5px 8px", position: "sticky", top: 27, zIndex: 1 }}>
+                      {label} {planYear}
+                    </td>
+                  </tr>
+                  {forecastRows.filter((r) => r.month === mi).map((r) => (
+                    <tr key={r.iso} style={{ borderBottom: "1px solid var(--border-light)" }}>
+                      <td style={tdStyle}>{r.iso}</td>
+                      <td style={tdStyle}>{DOW_SHORT[r.dow]}</td>
+                      <td style={{ ...tdStyle, color: r.holidayName ? gapRed : sampleGray }}>{r.holidayName || ""}</td>
+                      {displayYears.map((y) => {
+                        const c = r.candidates.find((cand) => cand.year === y);
+                        return <td key={y} style={{ ...tdStyle, textAlign: "right", color: sampleGray }}>{c ? Math.round(c.value).toLocaleString() : "—"}</td>;
+                      })}
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{r.predicted.toLocaleString()}</td>
+                      <td style={{ ...tdStyle, textAlign: "right", padding: "2px 8px" }}>
+                        <OverrideField value={dayOverrides[r.iso] ?? null} onCommit={(v) => setOverride(r.iso, v)} />
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: "right", fontWeight: 700, color: r.overridden ? supplyTeal : text }}>{r.final.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -682,7 +890,7 @@ function ProjectionTab({ planYear, growthPct, historyMonthly, rollup, annualTota
           </ComposedChart>
         </ResponsiveContainer>
         <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8, lineHeight: 1.6 }}>
-          Each {planYear} day is matched to whichever historical day shares its day of week and sits closest to the same relative point in the year, then grown by {growthPct}%. Statutory holidays are matched by name first (this year's Thanksgiving feeds next year's Thanksgiving) before falling back to the same day-of-week rule.
+          Each {planYear} day is matched, in every loaded history year, to whichever day shares its day of week and sits closest to the same relative point in that year — those matches are blended (recent years weighted more) then grown by {growthPct}%. Statutory holidays are matched by name across years first (this year's Thanksgiving feeds next year's Thanksgiving) before falling back to the same day-of-week rule. See the History tab's day-by-day table for the full breakdown per day, including any manual overrides.
         </div>
       </div>
     </div>
