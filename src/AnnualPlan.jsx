@@ -4,6 +4,7 @@ import { ResponsiveContainer, ComposedChart, BarChart, Bar, XAxis, YAxis, Toolti
 import { DAYS, NumField, Stat, parseSignupWorkbook } from "./App.jsx";
 import { PhaseStrip } from "./CallCentre.jsx";
 import { ANNUALPLAN_SAMPLE } from "./annualPlanSampleData.js";
+import { useAccountProject, SaveStatus, AccountChip } from "./useAccountProject.jsx";
 
 /* Annual Service Plan — projects next year's total daily trips from a prior year's history
    (matched by day-of-week position + growth %, with statutory holidays matched by name where
@@ -175,7 +176,7 @@ function hoursByDowFromBoard(segments) {
 
 const nextId = () => "p" + Math.random().toString(36).slice(2, 9);
 
-export default function AnnualPlan({ onHome }) {
+export default function AnnualPlan({ onHome, user, logout }) {
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem("theme");
     if (saved === "light" || saved === "dark") return saved;
@@ -324,19 +325,15 @@ export default function AnnualPlan({ onHome }) {
   };
 
   /* ---------- save / load project ---------- */
+  const buildPayload = () => ({ kind: "annualplan", providers, history, historyYear, planYear, growthPct, jurisdiction, historySource });
   const saveProject = () => {
-    const payload = { kind: "annualplan", providers, history, historyYear, planYear, growthPct, jurisdiction, historySource };
-    const blob = new Blob([JSON.stringify(payload, null, 0)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(buildPayload(), null, 0)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `annual-service-plan-${planYear}.json`;
     a.click();
   };
-  const loadProject = (file) => {
-    const rd = new FileReader();
-    rd.onload = () => {
-      try {
-        const p = JSON.parse(rd.result);
+  const applyPayload = (p) => {
         if (p.providers) setProviders(p.providers);
         if (p.history) setHistory(p.history);
         if (p.historyYear) setHistoryYear(p.historyYear);
@@ -344,12 +341,22 @@ export default function AnnualPlan({ onHome }) {
         if (p.growthPct != null) setGrowthPct(p.growthPct);
         if (p.jurisdiction) setJurisdiction(p.jurisdiction);
         setHistorySource(p.historySource || "uploaded");
+  };
+  const loadProject = (file) => {
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        applyPayload(JSON.parse(rd.result));
       } catch (e) {
         alert("Could not read that project file.");
       }
     };
     rd.readAsText(file);
   };
+  const payloadJson = useMemo(() => JSON.stringify(buildPayload()), [
+    providers, history, historyYear, planYear, growthPct, jurisdiction, historySource,
+  ]);
+  const saveStatus = useAccountProject("annualplan", payloadJson, applyPayload);
 
   const providerColor = (id) => PROVIDER_COLORS[providers.findIndex((p) => p.id === id) % PROVIDER_COLORS.length];
 
@@ -383,8 +390,10 @@ export default function AnnualPlan({ onHome }) {
           <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 22, fontWeight: 700 }}>ANNUAL SERVICE PLAN</div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <div style={{ fontSize: 12, color: sampleGray }}>Projected {planYear} trips <b style={{ color: text, fontSize: 15 }}>{annualTotals.trips.toLocaleString()}</b></div>
-            <button style={nudgeBtn} onClick={saveProject}>Save project</button>
-            <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Load project</button>
+            <SaveStatus status={saveStatus} />
+            <AccountChip user={user} logout={logout} />
+            <button style={nudgeBtn} onClick={saveProject}>Export backup JSON</button>
+            <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Import backup JSON</button>
             <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }}
               onChange={(e) => { if (e.target.files && e.target.files[0]) loadProject(e.target.files[0]); e.target.value = ""; }} />
             <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"

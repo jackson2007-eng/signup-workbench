@@ -10,6 +10,7 @@ import {
 } from "./App.jsx";
 import { ImportTab, CompareTab, SuggestTab, OptResultBanner, PhaseStrip, PackagingTab, useOptimizerMonitor, OptimizerMonitorCard } from "./CallCentre.jsx";
 import { DISPATCH_SAMPLE } from "./dispatchSampleData.js";
+import { useAccountProject, SaveStatus, AccountChip } from "./useAccountProject.jsx";
 
 /* Dispatch Desks — a third sibling of the operator workbench, reusing the shared coverage engine
    (imported above) exactly as Call Centre Staffing does. The one thing that's genuinely different
@@ -89,7 +90,7 @@ function requiredDispatchers(ops, ratio, minOnDuty) {
 }
 
 
-export default function Dispatch({ onHome }) {
+export default function Dispatch({ onHome, user, logout }) {
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem("theme");
     if (saved === "light" || saved === "dark") return saved;
@@ -456,15 +457,12 @@ export default function Dispatch({ onHome }) {
     XLSX.utils.book_append_sheet(wb, ws, "Dispatcher Schedule");
     XLSX.writeFile(wb, "dispatcher-schedule.xlsx");
   };
+  const buildPayload = () => ({ kind: "dispatch", board, baselineBoard, scheduleSource, rules, ptRules, ptEnabled, ptCount, glob, spans, sketch, sketchPeaks, sketchMode, operators, demSource, typeColors });
   const saveProject = () => {
-    const blob = new Blob([JSON.stringify({ kind: "dispatch", board, baselineBoard, scheduleSource, rules, ptRules, ptEnabled, ptCount, glob, spans, sketch, sketchPeaks, sketchMode, operators, demSource, typeColors }, null, 0)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(buildPayload(), null, 0)], { type: "application/json" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "dispatch-project.json"; a.click();
   };
-  const loadProject = (file) => {
-    const rd = new FileReader();
-    rd.onload = () => {
-      try {
-        const p = JSON.parse(rd.result);
+  const applyPayload = (p) => {
         if (!p || !Array.isArray(p.board)) throw new Error("bad");
         setBoard(p.board.map(cloneSeg));
         if (p.rules) setRules(p.rules);
@@ -483,10 +481,21 @@ export default function Dispatch({ onHome }) {
         setScheduleSource(p.scheduleSource === "uploaded" && Array.isArray(p.baselineBoard) ? "uploaded" : "sample");
         setScheduleUpload(null);
         setHist([]); setFuture([]); setSelId(null); setBuildResult(null);
+  };
+  const loadProject = (file) => {
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        applyPayload(JSON.parse(rd.result));
       } catch (e) { alert("Could not read that Dispatch project file."); }
     };
     rd.readAsText(file);
   };
+  const payloadJson = useMemo(() => JSON.stringify(buildPayload()), [
+    board, baselineBoard, scheduleSource, rules, ptRules, ptEnabled, ptCount, glob, spans,
+    sketch, sketchPeaks, sketchMode, operators, demSource, typeColors,
+  ]);
+  const saveStatus = useAccountProject("dispatch", payloadJson, applyPayload);
 
   /* ---------- shift editing ---------- */
   const selSeg = selId != null ? board.find((s) => s.id === selId) : null;
@@ -699,9 +708,11 @@ export default function Dispatch({ onHome }) {
           <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 22, fontWeight: 700 }}>DISPATCH DESKS</div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <div style={{ fontSize: 12, color: sampleGray }}>Weekly coverage <b style={{ color: text, fontSize: 15 }}>{weekPct}%</b></div>
+            <SaveStatus status={saveStatus} />
+            <AccountChip user={user} logout={logout} />
             <button style={primaryBtn} onClick={exportSchedule}>Export Schedule</button>
-            <button style={nudgeBtn} onClick={saveProject}>Save project</button>
-            <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Load project</button>
+            <button style={nudgeBtn} onClick={saveProject}>Export backup JSON</button>
+            <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Import backup JSON</button>
             <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }}
               onChange={(e) => { if (e.target.files && e.target.files[0]) loadProject(e.target.files[0]); e.target.value = ""; }} />
             <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"
