@@ -12,6 +12,7 @@ Design doctrine (flag-never-block, no PII, agency-generic language, no speculati
 | `/callcentre` | Call Centre Staffing — ACD upload → concurrency curve, Erlang C required-agents overlay, arrival-rate curve, composition & queues |
 | `/dispatch` | Dispatch Desks — concurrent-incident load, dispatcher-ratio sizing, full parity with the operator workbench |
 | `/annualplan` | Annual Service Plan — v1: total daily trips projected from prior-year history (day-of-week + statutory-holiday matched) + growth %, split across capacity/remainder providers by scheduled hours × productivity |
+| `/vacation` | Vacation Signup Planner — seniority-ordered roster with entitlement in weeks, editable per-week caps (with a headcount-derived suggestion), auto-balance allocation against those caps |
 
 ## Next up
 
@@ -222,6 +223,29 @@ branch when pricing resumes.
 - Rename the GitHub repo (signup-workbench → toolkit-wide name).
 
 ## Recently shipped
+- 2026-07-22 — Vacation Signup Planner module (`/vacation`, new, separate from Annual Plan).
+  Reviewed a real DATS operator vacation sign-up sheet — it contains real operator names and
+  badge numbers, never reproduced, stored, or used as sample data anywhere; only the
+  *mechanism* was replicated. That mechanism: each operator has a vacation entitlement in
+  whole weeks (their accrued hours ÷ 8 ÷ 5, rounded up — vacation is claimed in whole-week
+  blocks only), each week of the vacation year carries a maximum number of operators allowed
+  off at once, and operators claim weeks in strict seniority order until their entitlement is
+  used up. Scope decisions (user, 2026-07-22): auto-balance allocation for v1 (not a literal
+  turn-by-turn bidding simulation — each operator, in seniority order, claims their entitled
+  weeks from whichever eligible week currently has the most remaining room, spreading picks
+  across the year); weekly caps fully editable with a self-contained "suggest from headcount"
+  helper (headcount × base/reduced % pair typed in this module, not a live cross-module link
+  to Annual Plan's actual provider data — that link is a candidate follow-up once this stands
+  on its own); shipped as its own module/route rather than a tab inside Annual Plan. Roster
+  tab (seniority-ordered add/bulk-add/remove, xlsx template+upload, no names or badge numbers
+  — just an optional free-text label). Weekly Caps tab (year start/length, statutory-holiday
+  weeks auto-tagged via the same `date-holidays` lookup Annual Plan already uses, a manually
+  set summer prime-time window, suggested-caps button, every week individually editable).
+  Allocation tab (stacked filled-vs-open chart, per-operator assigned-weeks table, shortfall
+  flagged rather than silently dropped when capacity runs short — verified live by
+  intentionally overloading demand to 654 weeks against 366 weeks of capacity, which correctly
+  flagged exactly 288 unassigned weeks across 72 operators). Reuses the `isAnimationActive={false}`
+  fix from the same session's Annual Plan work on every chart.
 - 2026-07-22 — Annual Service Plan module (`/annualplan`, v1: total trips only). Reviewed
   against real 2026 DATS Daily Service Report + Monthly Trip/Cost Budget exports. Providers
   tab (editable capacity providers — scheduled hours/day × weekday/weekend productivity ×

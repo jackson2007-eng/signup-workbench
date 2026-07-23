@@ -29,6 +29,12 @@ const MODULES = [
     tag: "Trip forecast · provider capacity split",
     body: "Project next year's daily trips from prior-year history and a growth rate, then split projected demand across in-house, dedicated-contractor, and non-dedicated providers by scheduled hours and productivity.",
   },
+  {
+    key: "vacation", path: "/vacation", status: "live", accent: demandAmber,
+    title: "Vacation Signup Planner",
+    tag: "Seniority bidding · weekly caps",
+    body: "Plan a seniority-ordered vacation sign-up: roster each operator's entitlement in weeks, set a maximum-off cap per week of the year, and auto-balance who gets which weeks against those caps.",
+  },
 ];
 
 export default function Landing({ navigate }) {
