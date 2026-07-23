@@ -6,6 +6,7 @@ import {
 } from "recharts";
 
 import { RAW } from "./sampleData.js";
+import { useAccountProject, SaveStatus, AccountChip } from "./useAccountProject.jsx";
 
 /* ---------- constants ---------- */
 const DAYS = RAW.days;
@@ -2461,7 +2462,7 @@ function useDebouncedValue(value, delay) {
 }
 
 /* ---------- main ---------- */
-export default function App({ onHome }) {
+export default function App({ onHome, user, logout }) {
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem("theme");
     if (saved === "light" || saved === "dark") return saved;
@@ -2802,15 +2803,15 @@ export default function App({ onHome }) {
     setHolidays((hs) => mergeHolidayEdits(detected, hs));
   }, [hdCtor, signupPeriod.start, signupPeriod.end, signupPeriod.country, signupPeriod.region]);
 
+  const buildPayload = () => ({
+    kind: "resourcing", v: 1, savedAt: new Date().toISOString(),
+    demSource, sketch, trips, sketchMode, uploadedDem, demNormalized, board, rules, glob, spans,
+    totalSigned, includePT, signupPeriod, holidays,
+    baselineBoard, signupSource, typeColors,
+    ptRules, ptEnabled, ptCount,
+  });
   const saveProject = () => {
-    const payload = {
-      v: 1, savedAt: new Date().toISOString(),
-      demSource, sketch, trips, sketchMode, uploadedDem, demNormalized, board, rules, glob, spans,
-      totalSigned, includePT, signupPeriod, holidays,
-      baselineBoard, signupSource, typeColors,
-      ptRules, ptEnabled, ptCount,
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 1)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(buildPayload(), null, 1)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = "signup-project.json";
@@ -2969,11 +2970,7 @@ export default function App({ onHome }) {
     XLSX.writeFile(wb, "signup-template.xlsx");
   };
 
-  const loadProject = (file) => {
-    const rd = new FileReader();
-    rd.onload = () => {
-      try {
-        const p = JSON.parse(rd.result);
+  const applyPayload = (p) => {
         if (!p || !Array.isArray(p.board)) throw new Error("bad file");
         setBoard(p.board.map(cloneSeg));
         if (p.rules) setRules(p.rules);
@@ -3035,12 +3032,24 @@ export default function App({ onHome }) {
         // ones get ink until the user touches them again, so merging over the defaults is safe
         setTypeColors(p.typeColors ? { ...TYPE_COLOR, ...p.typeColors } : { ...TYPE_COLOR });
         setHist([]); setFuture([]); setSelId(null); setSugs(null); setSugsStale(false);
+  };
+  const loadProject = (file) => {
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        applyPayload(JSON.parse(rd.result));
       } catch (err) {
         alert("Could not read that project file.");
       }
     };
     rd.readAsText(file);
   };
+  const payloadJson = useMemo(() => JSON.stringify(buildPayload()), [
+    demSource, sketch, trips, sketchMode, uploadedDem, demNormalized, board, rules, glob, spans,
+    totalSigned, includePT, signupPeriod, holidays, baselineBoard, signupSource, typeColors,
+    ptRules, ptEnabled, ptCount,
+  ]);
+  const saveStatus = useAccountProject("resourcing", payloadJson, applyPayload);
 
   const parseDemandWorkbook = (wb) => {
     const missing = DAYS.filter((d) => !wb.Sheets[d]);
@@ -3857,10 +3866,12 @@ export default function App({ onHome }) {
         </div>
 
         {/* utility toolbar */}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, margin: "10px 0" }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, margin: "10px 0" }}>
+          <SaveStatus status={saveStatus} />
+          <AccountChip user={user} logout={logout} />
           <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={exportBoard}>Export Completed Signup</button>
-          <button style={nudgeBtn} onClick={saveProject}>Save project</button>
-          <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Load project</button>
+          <button style={nudgeBtn} onClick={saveProject}>Export backup JSON</button>
+          <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Import backup JSON</button>
           <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }}
             onChange={(e) => { if (e.target.files && e.target.files[0]) loadProject(e.target.files[0]); e.target.value = ""; }} />
         </div>
