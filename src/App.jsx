@@ -5642,7 +5642,7 @@ export default function App({ onHome, user, logout }) {
             {/* shift types */}
             <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 14, overflowX: "auto" }}>
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 8 }}>
-                Shift classification
+                Full-time shift classification
               </div>
               <table style={{ borderCollapse: "collapse", minWidth: 720 }}>
                 <thead>

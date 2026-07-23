@@ -1197,7 +1197,7 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, boar
         </div>
       )}
       <div style={cardStyle}>
-        <div style={hTitle}>Shift types</div>
+        <div style={hTitle}>Full-time agent shift types</div>
         <div style={{ overflowX: "auto" }}>
           <table className="rt" style={{ borderCollapse: "collapse", width: "100%" }}>
             <thead><tr>
@@ -1239,90 +1239,6 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, boar
           </table>
         </div>
         <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>Full Time = 8h, Part Time = 4h by default. Times are editable; the generator and coverage score follow these windows. Click a type code to rename it — every shift using it follows along.</div>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 14 }}>
-        <div style={cardStyle}>
-          <div style={hTitle}>Break rules</div>
-          <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "8px 10px", alignItems: "center", fontSize: 13 }}>
-            <span>Min break length (min)</span><NumField value={glob.brkLen[0]} step={5} onCommit={(v) => setGArr("brkLen", 0, Math.max(0, Math.round(v)))} />
-            <span>Max break length (min)</span><NumField value={glob.brkLen[1]} step={5} onCommit={(v) => setGArr("brkLen", 1, Math.max(0, Math.round(v)))} />
-            <span>Earliest break: after (min)</span><NumField value={glob.brkAfter[0]} step={15} onCommit={(v) => setGArr("brkAfter", 0, Math.max(0, Math.round(v)))} />
-            <span>Latest break: after (min)</span><NumField value={glob.brkAfter[1]} step={15} onCommit={(v) => setGArr("brkAfter", 1, Math.max(0, Math.round(v)))} />
-          </div>
-        </div>
-
-        <div style={cardStyle}>
-          <div style={hTitle}>Staffing limits</div>
-          <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "8px 10px", alignItems: "center", fontSize: 13 }}>
-            <span>Minimum agents on (floor)</span><NumField value={glob.minVeh} onCommit={(v) => setG("minVeh", Math.max(0, Math.round(v)))} />
-            <span>Max consecutive days</span><NumField value={glob.maxConsec} onCommit={(v) => setG("maxConsec", Math.max(1, Math.round(v)))} />
-            <span>Min rest between shifts (h)</span><NumField value={Math.round(glob.minRest / 60 * 10) / 10} onCommit={(v) => setG("minRest", Math.max(0, Math.round(v * 60)))} />
-            <span>Max start variance (min)</span><NumField value={glob.maxStartVarWeekday} step={15} onCommit={(v) => { const n = Math.max(0, Math.round(v)); setGlob((g) => ({ ...g, maxStartVarWeekday: n, maxStartVarWeekend: Math.max(n, g.maxStartVarWeekend), maxStartVarCross: Math.max(n, g.maxStartVarCross) })); }} />
-          </div>
-          <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>The floor is flagged when agents on shift drop below it while the line is open.</div>
-        </div>
-
-        <div style={cardStyle}>
-          <div style={hTitle}>Hours of operation</div>
-          <div style={{ display: "grid", gridTemplateColumns: "auto auto auto", gap: "6px 8px", alignItems: "center", fontSize: 13 }}>
-            {DAYS.map((d) => (
-              <React.Fragment key={d}>
-                <span style={{ width: 80 }}>{d}</span>
-                <TimeField value={spans[d][0]} onCommit={(v) => setSpans((s) => ({ ...s, [d]: [v, s[d][1]] }))} />
-                <TimeField value={spans[d][1]} onCommit={(v) => setSpans((s) => ({ ...s, [d]: [s[d][0], v] }))} />
-              </React.Fragment>
-            ))}
-          </div>
-          <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>Shifts never start before open or end after close; the minimum-agents floor applies inside these hours.</div>
-        </div>
-
-        <div style={cardStyle}>
-          <div style={hTitle}>Service level (Erlang sizing)</div>
-          <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "8px 10px", alignItems: "center", fontSize: 13 }}>
-            <span>Average handle time (min)</span><NumField value={glob.ahtMin ?? 1.8} step={0.1} onCommit={(v) => setG("ahtMin", Math.max(0.1, Math.round(v * 100) / 100))} />
-            <span>Answer target (%)</span><NumField value={glob.slTargetPct > 1 ? glob.slTargetPct : Math.round((glob.slTargetPct ?? 0.8) * 100)} step={5} onCommit={(v) => setG("slTargetPct", Math.min(0.999, Math.max(0.5, Math.round(v) / 100)))} />
-            <span>…within (seconds)</span><NumField value={glob.slTargetSec ?? 30} step={5} onCommit={(v) => setG("slTargetSec", Math.max(1, Math.round(v)))} />
-          </div>
-          <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>Drives the "agents required" line on Coverage — the Erlang C headcount to answer the target share of calls in time, given the active-calls load and handle time. Handle time auto-fills from uploaded call data.</div>
-        </div>
-
-        <div style={cardStyle}>
-          <div style={hTitle}>Scheduling algorithm</div>
-          <div style={{ fontSize: 12, color: sampleGray, marginBottom: 10 }}>
-            How the schedule generator and coverage score decide between candidate agent placements — not a hard limit, a tuning of the search itself.
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "10px 12px", alignItems: "center", fontSize: 13 }}>
-            <span>Coverage priority</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <input type="range" min={0} max={4} step={0.5} value={glob.coveragePriority ?? 2}
-                onChange={(e) => setG("coveragePriority", Number(e.target.value))}
-                style={{ flex: 1, accentColor: supplyTeal }} />
-              <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.coveragePriority ?? 2}</span>
-            </div>
-            <span>Off-peak weighting (%)</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <input type="range" min={0} max={60} step={5} value={glob.offPeakBias ?? 0}
-                onChange={(e) => setG("offPeakBias", Number(e.target.value))}
-                style={{ flex: 1, accentColor: supplyTeal }} />
-              <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.offPeakBias ?? 0}%</span>
-            </div>
-            <span>Schedule stability</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <input type="range" min={0} max={10} step={0.5} value={glob.scheduleStability ?? 3}
-                onChange={(e) => setG("scheduleStability", Number(e.target.value))}
-                style={{ flex: 1, accentColor: supplyTeal }} />
-              <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.scheduleStability ?? 3}</span>
-            </div>
-          </div>
-          <CoveragePriorityShapePreview P={P} day={day} setDay={setDay} coveragePriority={glob.coveragePriority ?? 2} offPeakBias={glob.offPeakBias ?? 0} />
-          <ScheduleStabilityPreview scheduleStability={glob.scheduleStability ?? 3} />
-          <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 10, lineHeight: 1.6 }}>
-            <b>Coverage priority</b> tilts the target the generator chases between the peaks and the quiet times: left of 2 gives the peaks extra claim on agents, 2 follows call volume as-is, and right of 2 shifts emphasis toward the edges and off-peak stretches.<br /><br />
-            <b>Off-peak weighting</b> gives quiet times of day a bit more staffing than raw call volume alone. 0 = follow call volume exactly; higher % = flatter, more even coverage.<br /><br />
-            <b>Schedule stability</b> affects how strongly the generator favors keeping shifts close to where they already sit: 0 chases every coverage point regardless of disruption; higher = a stronger pull to keep shifts in place, only moving one when the coverage gain is worth it. Only applies to full-time agent shifts — part-time placement isn't retimed by this preview.
-          </div>
-        </div>
       </div>
 
       <div style={cardStyle}>
@@ -1416,6 +1332,90 @@ function RulesTab({ rules, setRule, glob, setGlob, spans, setSpans, tColor, boar
             </div>
           </>
         )}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 14 }}>
+        <div style={cardStyle}>
+          <div style={hTitle}>Break rules</div>
+          <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "8px 10px", alignItems: "center", fontSize: 13 }}>
+            <span>Min break length (min)</span><NumField value={glob.brkLen[0]} step={5} onCommit={(v) => setGArr("brkLen", 0, Math.max(0, Math.round(v)))} />
+            <span>Max break length (min)</span><NumField value={glob.brkLen[1]} step={5} onCommit={(v) => setGArr("brkLen", 1, Math.max(0, Math.round(v)))} />
+            <span>Earliest break: after (min)</span><NumField value={glob.brkAfter[0]} step={15} onCommit={(v) => setGArr("brkAfter", 0, Math.max(0, Math.round(v)))} />
+            <span>Latest break: after (min)</span><NumField value={glob.brkAfter[1]} step={15} onCommit={(v) => setGArr("brkAfter", 1, Math.max(0, Math.round(v)))} />
+          </div>
+        </div>
+
+        <div style={cardStyle}>
+          <div style={hTitle}>Staffing limits</div>
+          <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "8px 10px", alignItems: "center", fontSize: 13 }}>
+            <span>Minimum agents on (floor)</span><NumField value={glob.minVeh} onCommit={(v) => setG("minVeh", Math.max(0, Math.round(v)))} />
+            <span>Max consecutive days</span><NumField value={glob.maxConsec} onCommit={(v) => setG("maxConsec", Math.max(1, Math.round(v)))} />
+            <span>Min rest between shifts (h)</span><NumField value={Math.round(glob.minRest / 60 * 10) / 10} onCommit={(v) => setG("minRest", Math.max(0, Math.round(v * 60)))} />
+            <span>Max start variance (min)</span><NumField value={glob.maxStartVarWeekday} step={15} onCommit={(v) => { const n = Math.max(0, Math.round(v)); setGlob((g) => ({ ...g, maxStartVarWeekday: n, maxStartVarWeekend: Math.max(n, g.maxStartVarWeekend), maxStartVarCross: Math.max(n, g.maxStartVarCross) })); }} />
+          </div>
+          <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>The floor is flagged when agents on shift drop below it while the line is open.</div>
+        </div>
+
+        <div style={cardStyle}>
+          <div style={hTitle}>Hours of operation</div>
+          <div style={{ display: "grid", gridTemplateColumns: "auto auto auto", gap: "6px 8px", alignItems: "center", fontSize: 13 }}>
+            {DAYS.map((d) => (
+              <React.Fragment key={d}>
+                <span style={{ width: 80 }}>{d}</span>
+                <TimeField value={spans[d][0]} onCommit={(v) => setSpans((s) => ({ ...s, [d]: [v, s[d][1]] }))} />
+                <TimeField value={spans[d][1]} onCommit={(v) => setSpans((s) => ({ ...s, [d]: [s[d][0], v] }))} />
+              </React.Fragment>
+            ))}
+          </div>
+          <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>Shifts never start before open or end after close; the minimum-agents floor applies inside these hours.</div>
+        </div>
+
+        <div style={cardStyle}>
+          <div style={hTitle}>Service level (Erlang sizing)</div>
+          <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "8px 10px", alignItems: "center", fontSize: 13 }}>
+            <span>Average handle time (min)</span><NumField value={glob.ahtMin ?? 1.8} step={0.1} onCommit={(v) => setG("ahtMin", Math.max(0.1, Math.round(v * 100) / 100))} />
+            <span>Answer target (%)</span><NumField value={glob.slTargetPct > 1 ? glob.slTargetPct : Math.round((glob.slTargetPct ?? 0.8) * 100)} step={5} onCommit={(v) => setG("slTargetPct", Math.min(0.999, Math.max(0.5, Math.round(v) / 100)))} />
+            <span>…within (seconds)</span><NumField value={glob.slTargetSec ?? 30} step={5} onCommit={(v) => setG("slTargetSec", Math.max(1, Math.round(v)))} />
+          </div>
+          <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>Drives the "agents required" line on Coverage — the Erlang C headcount to answer the target share of calls in time, given the active-calls load and handle time. Handle time auto-fills from uploaded call data.</div>
+        </div>
+
+        <div style={cardStyle}>
+          <div style={hTitle}>Scheduling algorithm</div>
+          <div style={{ fontSize: 12, color: sampleGray, marginBottom: 10 }}>
+            How the schedule generator and coverage score decide between candidate agent placements — not a hard limit, a tuning of the search itself.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "10px 12px", alignItems: "center", fontSize: 13 }}>
+            <span>Coverage priority</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input type="range" min={0} max={4} step={0.5} value={glob.coveragePriority ?? 2}
+                onChange={(e) => setG("coveragePriority", Number(e.target.value))}
+                style={{ flex: 1, accentColor: supplyTeal }} />
+              <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.coveragePriority ?? 2}</span>
+            </div>
+            <span>Off-peak weighting (%)</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input type="range" min={0} max={60} step={5} value={glob.offPeakBias ?? 0}
+                onChange={(e) => setG("offPeakBias", Number(e.target.value))}
+                style={{ flex: 1, accentColor: supplyTeal }} />
+              <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.offPeakBias ?? 0}%</span>
+            </div>
+            <span>Schedule stability</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input type="range" min={0} max={10} step={0.5} value={glob.scheduleStability ?? 3}
+                onChange={(e) => setG("scheduleStability", Number(e.target.value))}
+                style={{ flex: 1, accentColor: supplyTeal }} />
+              <span style={{ minWidth: 30, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{glob.scheduleStability ?? 3}</span>
+            </div>
+          </div>
+          <CoveragePriorityShapePreview P={P} day={day} setDay={setDay} coveragePriority={glob.coveragePriority ?? 2} offPeakBias={glob.offPeakBias ?? 0} />
+          <ScheduleStabilityPreview scheduleStability={glob.scheduleStability ?? 3} />
+          <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 10, lineHeight: 1.6 }}>
+            <b>Coverage priority</b> tilts the target the generator chases between the peaks and the quiet times: left of 2 gives the peaks extra claim on agents, 2 follows call volume as-is, and right of 2 shifts emphasis toward the edges and off-peak stretches.<br /><br />
+            <b>Off-peak weighting</b> gives quiet times of day a bit more staffing than raw call volume alone. 0 = follow call volume exactly; higher % = flatter, more even coverage.<br /><br />
+            <b>Schedule stability</b> affects how strongly the generator favors keeping shifts close to where they already sit: 0 chases every coverage point regardless of disruption; higher = a stronger pull to keep shifts in place, only moving one when the coverage gain is worth it. Only applies to full-time agent shifts — part-time placement isn't retimed by this preview.
+          </div>
+        </div>
       </div>
     </div>
   );

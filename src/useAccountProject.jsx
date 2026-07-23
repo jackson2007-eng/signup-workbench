@@ -36,7 +36,19 @@ export function useAccountProject(kind, projectId, payloadJson, applyPayload) {
     let cancelled = false;
     fetch(`/api/projects/${kind}/${projectId}`, { credentials: "include" })
       .then((r) => r.json())
-      .then((data) => { if (!cancelled) applyRef.current(data.payload || defaultPayloadRef.current); })
+      .then((data) => {
+        if (cancelled) return;
+        if (data.payload) { applyRef.current(data.payload); return; }
+        // Brand-new signup, nothing saved yet: seed the module's defaults with this signup's
+        // own start/end date (set in the New Signup dialog) into signupPeriod, for modules that
+        // have one (Resourcing) — so exception-day/holiday detection picks them up without the
+        // user re-typing dates they just entered. No-op for modules without a signupPeriod key.
+        const seeded = { ...defaultPayloadRef.current };
+        if ((data.startDate || data.endDate) && seeded.signupPeriod) {
+          seeded.signupPeriod = { ...seeded.signupPeriod, start: data.startDate || seeded.signupPeriod.start, end: data.endDate || seeded.signupPeriod.end };
+        }
+        applyRef.current(seeded);
+      })
       .catch(() => {})
       .finally(() => { if (!cancelled) { loadedRef.current = true; setStatus("idle"); } });
     return () => { cancelled = true; };
