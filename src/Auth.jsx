@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { DARK_MODE_ENABLED } from "./themeFlag.js";
 
 const text = "var(--text)", paper = "var(--paper)", card = "var(--card)",
   supplyTeal = "var(--supply-teal)", gapRed = "var(--gap-red, #C0392B)", sampleGray = "var(--sample-gray)";
@@ -8,6 +9,7 @@ const text = "var(--text)", paper = "var(--paper)", card = "var(--card)",
 // even when reached directly (e.g. a bookmarked /signin link) before any module has run.
 function useTheme() {
   const [theme, setTheme] = useState(() => {
+    if (!DARK_MODE_ENABLED) return "light";
     const saved = localStorage.getItem("theme");
     if (saved === "light" || saved === "dark") return saved;
     return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -45,9 +47,11 @@ function AuthShell({ navigate, title, subtitle, children, wide }) {
       <div style={{ maxWidth: wide ? 720 : 400, margin: "0 auto", padding: "18px 20px 60px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 30 }}>
           <button onClick={() => navigate("/")} style={{ ...nudgeBtn, fontSize: 12 }}>‹ Paratransit Companion</button>
-          <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ ...nudgeBtn, marginLeft: "auto" }}>
-            {theme === "dark" ? "☀ Light" : "☾ Dark"}
-          </button>
+          {DARK_MODE_ENABLED && (
+            <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ ...nudgeBtn, marginLeft: "auto" }}>
+              {theme === "dark" ? "☀ Light" : "☾ Dark"}
+            </button>
+          )}
         </div>
         <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 26, fontWeight: 700, marginBottom: 4 }}>{title}</div>
         {subtitle && <div style={{ fontSize: 13.5, color: sampleGray, marginBottom: 22, lineHeight: 1.5 }}>{subtitle}</div>}

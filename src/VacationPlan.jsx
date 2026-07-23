@@ -5,6 +5,7 @@ import { NumField, Stat } from "./App.jsx";
 import { PhaseStrip } from "./CallCentre.jsx";
 import { VACATIONPLAN_SAMPLE } from "./vacationSampleData.js";
 import { useAccountProject, SaveStatus, AccountChip } from "./useAccountProject.jsx";
+import { DARK_MODE_ENABLED } from "./themeFlag.js";
 
 /* Vacation Signup Planner — reviewed against a real DATS operator vacation sign-up sheet
    (seniority-ordered bidding: each operator has a vacation entitlement in whole weeks, each
@@ -93,6 +94,7 @@ function allocateVacation(operators, weeks, caps) {
 
 export default function VacationPlan({ onHome, user, logout }) {
   const [theme, setTheme] = useState(() => {
+    if (!DARK_MODE_ENABLED) return "light";
     const saved = localStorage.getItem("theme");
     if (saved === "light" || saved === "dark") return saved;
     return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -269,10 +271,12 @@ export default function VacationPlan({ onHome, user, logout }) {
             <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Import backup JSON</button>
             <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }}
               onChange={(e) => { if (e.target.files && e.target.files[0]) loadProject(e.target.files[0]); e.target.value = ""; }} />
-            <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"
-              style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".04em", padding: "5px 8px", background: "none", border: "1px solid var(--border-input)", borderRadius: 2, color: sampleGray, cursor: "pointer" }}>
-              {theme === "dark" ? "☀ Light" : "☾ Dark"}
-            </button>
+            {DARK_MODE_ENABLED && (
+              <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"
+                style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".04em", padding: "5px 8px", background: "none", border: "1px solid var(--border-input)", borderRadius: 2, color: sampleGray, cursor: "pointer" }}>
+                {theme === "dark" ? "☀ Light" : "☾ Dark"}
+              </button>
+            )}
           </div>
         </div>
 

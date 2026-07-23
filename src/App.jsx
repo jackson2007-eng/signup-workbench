@@ -7,6 +7,7 @@ import {
 
 import { RAW } from "./sampleData.js";
 import { useAccountProject, SaveStatus, AccountChip } from "./useAccountProject.jsx";
+import { DARK_MODE_ENABLED } from "./themeFlag.js";
 
 /* ---------- constants ---------- */
 const DAYS = RAW.days;
@@ -2464,6 +2465,7 @@ function useDebouncedValue(value, delay) {
 /* ---------- main ---------- */
 export default function App({ onHome, user, logout }) {
   const [theme, setTheme] = useState(() => {
+    if (!DARK_MODE_ENABLED) return "light";
     const saved = localStorage.getItem("theme");
     if (saved === "light" || saved === "dark") return saved;
     return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -3844,10 +3846,12 @@ export default function App({ onHome, user, logout }) {
             </div>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-            <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"
-              style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".04em", padding: "2px 8px", background: "none", border: "1px solid var(--border-input)", borderRadius: 2, color: "var(--muted)", cursor: "pointer" }}>
-              {theme === "dark" ? "☀ Light" : "☾ Dark"}
-            </button>
+            {DARK_MODE_ENABLED && (
+              <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"
+                style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".04em", padding: "2px 8px", background: "none", border: "1px solid var(--border-input)", borderRadius: 2, color: "var(--muted)", cursor: "pointer" }}>
+                {theme === "dark" ? "☀ Light" : "☾ Dark"}
+              </button>
+            )}
             <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 22, fontWeight: 600 }}>
               <span style={{ fontSize: 11, verticalAlign: "middle", padding: "2px 7px", marginRight: 8, borderRadius: 2, background: demSource === "sketched" ? demandAmber : demSource === "uploaded" ? supplyTeal : sampleGray, color: "#fff", letterSpacing: ".06em" }}>
                 {demSource === "sketched" ? "SKETCHED DEMAND" : demSource === "uploaded" ? "UPLOADED DEMAND" : "SAMPLE DATA"}

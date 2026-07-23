@@ -12,6 +12,7 @@ import {
 } from "./App.jsx";
 import { CALL_SAMPLE } from "./callSampleData.js";
 import { useAccountProject, SaveStatus, AccountChip } from "./useAccountProject.jsx";
+import { DARK_MODE_ENABLED } from "./themeFlag.js";
 
 /* Call Centre Staffing — a lean sibling of the operator workbench. It reuses the shared coverage
    engine (imported above), scoring agents-on-shift against an Active-calls curve. Vehicle-specific
@@ -161,6 +162,7 @@ function requiredAgents(A, ahtMin, targetSec, targetPct) {
 
 export default function CallCentre({ onHome, user, logout }) {
   const [theme, setTheme] = useState(() => {
+    if (!DARK_MODE_ENABLED) return "light";
     const saved = localStorage.getItem("theme");
     if (saved === "light" || saved === "dark") return saved;
     return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -777,10 +779,12 @@ export default function CallCentre({ onHome, user, logout }) {
             <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Import backup JSON</button>
             <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }}
               onChange={(e) => { if (e.target.files && e.target.files[0]) loadProject(e.target.files[0]); e.target.value = ""; }} />
-            <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"
-              style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".04em", padding: "5px 8px", background: "none", border: "1px solid var(--border-input)", borderRadius: 2, color: sampleGray, cursor: "pointer" }}>
-              {theme === "dark" ? "☀ Light" : "☾ Dark"}
-            </button>
+            {DARK_MODE_ENABLED && (
+              <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"
+                style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".04em", padding: "5px 8px", background: "none", border: "1px solid var(--border-input)", borderRadius: 2, color: sampleGray, cursor: "pointer" }}>
+                {theme === "dark" ? "☀ Light" : "☾ Dark"}
+              </button>
+            )}
           </div>
         </div>
 
