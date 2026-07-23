@@ -3,7 +3,12 @@
 // are deliberately NOT self-contained JWTs: an opaque token means a session can be killed
 // server-side (logout, admin-disable) by deleting one KV key, with no signing-key management.
 
-const PBKDF2_ITERATIONS = 210000; // OWASP current recommendation for PBKDF2-HMAC-SHA256
+// Cloudflare Workers' production runtime hard-caps PBKDF2 at 100,000 iterations (throws
+// "iteration counts above 100000 are not supported" past that) — wrangler dev's local
+// workerd doesn't enforce this, which is why 210,000 (OWASP's current recommendation)
+// only failed after deploying. iterations is stored per-user, so raising this later
+// doesn't require a forced reset.
+const PBKDF2_ITERATIONS = 100000;
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 const SESSION_REFRESH_THRESHOLD_SECONDS = 60 * 60 * 24 * 7; // re-issue TTL once under 7 days left
 
