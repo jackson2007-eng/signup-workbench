@@ -707,11 +707,24 @@ function autofixSeg(seg, rules, glob) {
 }
 
 /* ---------- engine ---------- */
-// concave demand weighting: w = ev^gamma, gamma = 1 − offPeakBias/100. Light slots gain
-// relative claim, peaks lose — off-peak trips ride mostly alone while peak trips share,
-// so a trip at the edges of service genuinely needs more of a vehicle. bias 0 → identity
-// (proportional, the original objective). 0^gamma = 0: no-demand slots never attract target.
-const demandGamma = (glob) => 1 - Math.min(60, Math.max(0, glob.offPeakBias || 0)) / 100;
+// concave demand weighting: w = ev^gamma. Light slots gain relative claim, peaks lose —
+// off-peak trips ride mostly alone while peak trips share, so a trip at the edges of service
+// genuinely needs more of a vehicle. bias 0 → identity (proportional, the original
+// objective). 0^gamma = 0: no-demand slots never attract target.
+// The bias→gamma mapping is EASED (quadratic in slider position), not linear, because a
+// power-law reshape's visible effect is front-loaded: on a typical peaked demand curve,
+// peak/trough contrast already collapses to roughly a quarter of its original spread by the
+// slider's halfway point under a linear map, leaving the back half looking like it does
+// almost nothing (reported as "basically flat" partway up the slider, no visible room left
+// to push further). Squaring the slider fraction spends less effect early and holds more in
+// reserve for the back half, so the flattening reads as roughly linear across the full 0–60
+// range instead of mostly finishing in the first third. Same endpoints as before (0% →
+// gamma 1, identity; 60% → gamma 0.4, the same maximum flattening) — only the pacing between
+// them changed, so existing project files still land at the same gamma at 0 and 60.
+const demandGamma = (glob) => {
+  const u = Math.min(60, Math.max(0, glob.offPeakBias || 0)) / 60; // 0..1 slider fraction
+  return 1 - 0.6 * u * u;
+};
 const weightEv = (v, gamma) => (gamma === 1 ? v : Math.pow(v, gamma));
 
 // coverage priority as a second gamma on the demand shape, sweeping THROUGH neutral: 0 → 1.5
