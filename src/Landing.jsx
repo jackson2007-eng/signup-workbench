@@ -37,7 +37,7 @@ const MODULES = [
   },
 ];
 
-export default function Landing({ navigate }) {
+export default function Landing({ navigate, authState }) {
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem("theme");
     if (saved === "light" || saved === "dark") return saved;
@@ -73,19 +73,38 @@ export default function Landing({ navigate }) {
         <div style={{ borderBottom: `3px solid ${ink}`, padding: "40px 0 18px", marginBottom: 32, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 20 }}>
           <div>
             <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 12.5, fontWeight: 600, letterSpacing: ".14em", textTransform: "uppercase", color: sampleGray }}>
-              Transit Operations Toolkit
+              Paratransit Companion
             </div>
             <div style={{ fontFamily: "'Barlow Condensed', 'Arial Narrow', sans-serif", fontWeight: 700, fontSize: 46, lineHeight: 1.02, marginTop: 4, maxWidth: 780 }}>
               Shape your workforce to the shape of demand.
             </div>
             <div style={{ fontSize: 15.5, color: "var(--text-mid)", marginTop: 12, maxWidth: 680, lineHeight: 1.55 }}>
-              A shared coverage engine that matches staffing to demand — one methodology, purpose-built modules for the different fronts of transit operations. Choose the tool you're here for.
+              Planning tools for paratransit agencies — resourcing, budget, and day-to-day operations, all built on one shared coverage engine. Sign in to your agency's workspace, or request access to get started.
             </div>
           </div>
-          <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"
-            style={{ flex: "none", fontSize: 11, fontWeight: 600, letterSpacing: ".04em", padding: "2px 8px", background: "none", border: "1px solid var(--border)", borderRadius: 2, color: sampleGray, cursor: "pointer" }}>
-            {theme === "dark" ? "☀ Light" : "☾ Dark"}
-          </button>
+          <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 8 }}>
+            <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"
+              style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".04em", padding: "6px 8px", background: "none", border: "1px solid var(--border)", borderRadius: 2, color: sampleGray, cursor: "pointer" }}>
+              {theme === "dark" ? "☀ Light" : "☾ Dark"}
+            </button>
+            {authState === "authed" ? (
+              <button onClick={() => navigate("/")}
+                style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 13, fontWeight: 600, padding: "7px 14px", background: supplyTeal, border: `1px solid ${supplyTeal}`, borderRadius: 2, color: "#fff", cursor: "pointer" }}>
+                Open your tools
+              </button>
+            ) : (
+              <>
+                <button onClick={() => navigate("/signin")}
+                  style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 13, fontWeight: 600, padding: "7px 14px", background: "none", border: "1px solid var(--border)", borderRadius: 2, color: text, cursor: "pointer" }}>
+                  Sign in
+                </button>
+                <button onClick={() => navigate("/request-access")}
+                  style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 13, fontWeight: 600, padding: "7px 14px", background: supplyTeal, border: `1px solid ${supplyTeal}`, borderRadius: 2, color: "#fff", cursor: "pointer" }}>
+                  Request access
+                </button>
+              </>
+            )}
+          </div>
         </div>
 
         {/* module grid */}
@@ -94,7 +113,7 @@ export default function Landing({ navigate }) {
             const live = m.status === "live";
             return (
               <div key={m.key} className={"modcard" + (live ? " live" : "")}
-                onClick={live ? () => navigate(m.path) : undefined}
+                onClick={live ? () => navigate(authState === "authed" ? m.path : `/signin?next=${encodeURIComponent(m.path)}`) : undefined}
                 style={{
                   background: card, border: `1px solid ${live ? "var(--border)" : "var(--border-light)"}`,
                   borderTop: `4px solid ${m.accent}`, padding: "18px 20px 20px",
@@ -115,7 +134,7 @@ export default function Landing({ navigate }) {
                   {m.body}
                 </div>
                 <div style={{ marginTop: 16, fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 600, fontSize: 15, color: live ? m.accent : sampleGray }}>
-                  {live ? "Open tool ›" : "In development"}
+                  {live ? (authState === "authed" ? "Open tool ›" : "Sign in to open ›") : "In development"}
                 </div>
               </div>
             );
@@ -123,7 +142,11 @@ export default function Landing({ navigate }) {
         </div>
 
         <div style={{ borderTop: "1px solid var(--border)", padding: "16px 0 40px", fontSize: 12, color: sampleGray, lineHeight: 1.55 }}>
-          Each module keeps its own data templates and uploads while sharing one coverage-scoring and optimization engine underneath.
+          Each module keeps its own data templates and uploads while sharing one coverage-scoring and optimization engine underneath. Built for paratransit and microtransit agencies —{" "}
+          {authState !== "authed" && (
+            <span style={{ color: supplyTeal, cursor: "pointer", fontWeight: 600 }} onClick={() => navigate("/request-access")}>request access</span>
+          )}
+          {authState !== "authed" && " "}if your agency would like to start using these tools.
         </div>
       </div>
     </div>
