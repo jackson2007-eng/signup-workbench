@@ -43,27 +43,37 @@ const EXCEL_EPOCH = 25569;
 const serialToISO = (serial) => new Date(Math.round((Math.floor(serial) - EXCEL_EPOCH) * 86400000)).toISOString().slice(0, 10);
 
 /* ---------- projection engine ----------
-   Each target-year day is matched, independently in every loaded historical year (up to
+   A target-year day that's a statutory holiday is matched by holiday NAME against every loaded
+   historical year's same-named holiday (this year's Thanksgiving feeds next year's Thanksgiving).
+   Every other (regular) day is matched, independently in every loaded historical year (up to
    MAX_HISTORY_YEARS), to the day in that year sharing its day-of-week whose relative position in
    the year (day-of-year ÷ year-length) is closest — so "day N of the year" doesn't have to line
    up across years of different length, but the weekday shape (weekday vs Sat vs Sun) always
-   carries forward. Those per-year matches are then blended (see weightedPredict) into one
-   predicted number, and growth % is applied on top of that blend. A day can be manually
-   overridden (dayOverrides), which wins over the model but doesn't stop the model from still
-   being computed — the table shows both so an override's effect is visible, not hidden. */
+   carries forward. That regular-day matcher explicitly skips any historical date that was itself
+   a statutory holiday, so an ordinary day never gets predicted off a holiday's anomalous ridership.
+   Both paths' per-year matches are then blended (see weightedPredict) into one predicted number,
+   and growth % is applied on top of that blend. A day can be manually overridden (dayOverrides),
+   which wins over the model but doesn't stop the model from still being computed — the table shows
+   both so an override's effect is visible, not hidden. */
 const MAX_HISTORY_YEARS = 5;
 
 function yearsPresent(history) {
   return [...new Set(Object.keys(history).map((iso) => +iso.slice(0, 4)))].sort((a, b) => a - b);
 }
 
-function matchInYear(targetIso, history, year) {
+// `excludeDates`: historical dates to skip as candidates — used to keep a *regular* target day
+// from being matched against a historical date that was itself a statutory holiday (anomalously
+// low/high ridership that has nothing to do with an ordinary day's pattern). Holiday-to-holiday
+// matching happens separately, by name, in buildProjection — this exclusion only protects the
+// non-holiday fallback matcher.
+function matchInYear(targetIso, history, year, excludeDates) {
   const targetYear = +targetIso.slice(0, 4);
   const targetFrac = dayOfYearIndex(targetIso) / daysInYear(targetYear);
   const dow = dowOfIso(targetIso);
   let best = null, bestDist = Infinity;
   for (const iso of Object.keys(history)) {
     if (+iso.slice(0, 4) !== year || dowOfIso(iso) !== dow) continue;
+    if (excludeDates && excludeDates.has(iso)) continue;
     const frac = dayOfYearIndex(iso) / daysInYear(year);
     const dist = Math.abs(frac - targetFrac);
     if (dist < bestDist) { bestDist = dist; best = iso; }
@@ -73,11 +83,11 @@ function matchInYear(targetIso, history, year) {
 
 // Up to maxYears most-recently-loaded years, most-recent-first, each contributing at most one
 // matched day (a year with no data for the matching weekday just contributes nothing).
-function matchAllYears(targetIso, history, maxYears = MAX_HISTORY_YEARS) {
+function matchAllYears(targetIso, history, excludeDates, maxYears = MAX_HISTORY_YEARS) {
   const years = yearsPresent(history).slice(-maxYears).reverse();
   const out = [];
   for (const year of years) {
-    const iso = matchInYear(targetIso, history, year);
+    const iso = matchInYear(targetIso, history, year, excludeDates);
     if (iso != null) out.push({ year, iso, value: history[iso] });
   }
   return out;
@@ -100,6 +110,12 @@ function buildProjection(history, planYear, growthPct, holidaysHistoryByYear, ho
   const mult = 1 + (growthPct || 0) / 100;
   const planHolidayByDate = new Map(holidaysPlan.map((h) => [h.date, h.name]));
   const years = yearsPresent(history).slice(-MAX_HISTORY_YEARS).reverse();
+  // Every historical date that was itself a statutory holiday in its own year — excluded from the
+  // regular (non-holiday-target) matcher below so an ordinary day never gets predicted off a
+  // holiday's anomalous ridership. Holidays still feed predictions, just only into other holidays
+  // (matched by name, right below), never into a regular day's fallback match.
+  const historyHolidayDates = new Set();
+  for (const year of years) for (const h of (holidaysHistoryByYear[year] || [])) historyHolidayDates.add(h.date);
   const len = daysInYear(planYear);
   const out = {};
   const detail = {};
@@ -115,7 +131,7 @@ function buildProjection(history, planYear, growthPct, holidaysHistoryByYear, ho
       }
       if (!candidates.length) candidates = null; // no year had this named holiday — fall back below
     }
-    if (!candidates) candidates = matchAllYears(iso, history);
+    if (!candidates) candidates = matchAllYears(iso, history, historyHolidayDates);
     const predicted = weightedPredict(candidates);
     const withGrowth = predicted != null ? Math.round(predicted * mult) : 0;
     const override = dayOverrides ? dayOverrides[iso] : null;
