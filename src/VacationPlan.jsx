@@ -4,7 +4,7 @@ import { ResponsiveContainer, ComposedChart, Bar, XAxis, YAxis, Tooltip, Legend,
 import { NumField, Stat } from "./App.jsx";
 import { PhaseStrip } from "./CallCentre.jsx";
 import { VACATIONPLAN_SAMPLE } from "./vacationSampleData.js";
-import { useAccountProject, SaveStatus, AccountChip } from "./useAccountProject.jsx";
+import { useAccountProject, useSignupList, SaveStatus, AccountChip, SignupSwitcher } from "./useAccountProject.jsx";
 import { DARK_MODE_ENABLED } from "./themeFlag.js";
 
 /* Vacation Signup Planner — reviewed against a real DATS operator vacation sign-up sheet
@@ -230,7 +230,15 @@ export default function VacationPlan({ onHome, user, logout }) {
   const payloadJson = useMemo(() => JSON.stringify(buildPayload()), [
     operators, yearStart, weekCount, caps, suggestParams, summerStart, summerEnd, jurisdiction,
   ]);
-  const saveStatus = useAccountProject("vacationplan", payloadJson, applyPayload);
+  const { items: signups, create: createSignup, rename: renameSignup, remove: removeSignup } = useSignupList("vacationplan");
+  const [projectId, setProjectId] = useState(null);
+  useEffect(() => {
+    if (!signups || projectId) return;
+    if (signups.length) setProjectId(signups[0].id);
+    else createSignup({ name: "My Vacation Plan" }).then(setProjectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signups]);
+  const saveStatus = useAccountProject("vacationplan", projectId, payloadJson, applyPayload);
 
   return (
     <div data-theme={theme} style={{ minHeight: "100vh", background: paper, color: text, fontFamily: "'Inter', system-ui, sans-serif" }}>
@@ -265,6 +273,10 @@ export default function VacationPlan({ onHome, user, logout }) {
           <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 22, fontWeight: 700 }}>VACATION SIGNUP PLANNER</div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <div style={{ fontSize: 12, color: sampleGray }}>Demand <b style={{ color: text, fontSize: 15 }}>{allocation.totalDemand.toLocaleString()}</b> wks vs. capacity <b style={{ color: text, fontSize: 15 }}>{allocation.totalCapacity.toLocaleString()}</b> wks</div>
+            <SignupSwitcher label="Signup" projectId={projectId} items={signups} onSwitch={setProjectId}
+              onCreate={async (vals) => setProjectId(await createSignup(vals))}
+              onRename={renameSignup}
+              onDelete={(id) => { removeSignup(id); if (id === projectId) setProjectId(null); }} />
             <SaveStatus status={saveStatus} />
             <AccountChip user={user} logout={logout} />
             <button style={nudgeBtn} onClick={saveProject}>Export backup JSON</button>

@@ -10,7 +10,7 @@ import {
 } from "./App.jsx";
 import { ImportTab, CompareTab, SuggestTab, OptResultBanner, PhaseStrip, PackagingTab, useOptimizerMonitor, OptimizerMonitorCard } from "./CallCentre.jsx";
 import { DISPATCH_SAMPLE } from "./dispatchSampleData.js";
-import { useAccountProject, SaveStatus, AccountChip } from "./useAccountProject.jsx";
+import { useAccountProject, useSignupList, SaveStatus, AccountChip, SignupSwitcher } from "./useAccountProject.jsx";
 import { DARK_MODE_ENABLED } from "./themeFlag.js";
 
 /* Dispatch Desks — a third sibling of the operator workbench, reusing the shared coverage engine
@@ -497,7 +497,15 @@ export default function Dispatch({ onHome, user, logout }) {
     board, baselineBoard, scheduleSource, rules, ptRules, ptEnabled, ptCount, glob, spans,
     sketch, sketchPeaks, sketchMode, operators, demSource, typeColors,
   ]);
-  const saveStatus = useAccountProject("dispatch", payloadJson, applyPayload);
+  const { items: signups, create: createSignup, rename: renameSignup, remove: removeSignup } = useSignupList("dispatch");
+  const [projectId, setProjectId] = useState(null);
+  useEffect(() => {
+    if (!signups || projectId) return;
+    if (signups.length) setProjectId(signups[0].id);
+    else createSignup({ name: "My Schedule" }).then(setProjectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signups]);
+  const saveStatus = useAccountProject("dispatch", projectId, payloadJson, applyPayload);
 
   /* ---------- shift editing ---------- */
   const selSeg = selId != null ? board.find((s) => s.id === selId) : null;
@@ -710,6 +718,10 @@ export default function Dispatch({ onHome, user, logout }) {
           <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 22, fontWeight: 700 }}>DISPATCH DESKS</div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <div style={{ fontSize: 12, color: sampleGray }}>Weekly coverage <b style={{ color: text, fontSize: 15 }}>{weekPct}%</b></div>
+            <SignupSwitcher label="Schedule" projectId={projectId} items={signups} onSwitch={setProjectId}
+              onCreate={async (vals) => setProjectId(await createSignup(vals))}
+              onRename={renameSignup}
+              onDelete={(id) => { removeSignup(id); if (id === projectId) setProjectId(null); }} />
             <SaveStatus status={saveStatus} />
             <AccountChip user={user} logout={logout} />
             <button style={primaryBtn} onClick={exportSchedule}>Export Schedule</button>

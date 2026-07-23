@@ -6,7 +6,7 @@ import {
 } from "recharts";
 
 import { RAW } from "./sampleData.js";
-import { useAccountProject, SaveStatus, AccountChip } from "./useAccountProject.jsx";
+import { useAccountProject, useSignupList, SaveStatus, AccountChip, SignupSwitcher } from "./useAccountProject.jsx";
 import { DARK_MODE_ENABLED } from "./themeFlag.js";
 
 /* ---------- constants ---------- */
@@ -3051,7 +3051,15 @@ export default function App({ onHome, user, logout }) {
     totalSigned, includePT, signupPeriod, holidays, baselineBoard, signupSource, typeColors,
     ptRules, ptEnabled, ptCount,
   ]);
-  const saveStatus = useAccountProject("resourcing", payloadJson, applyPayload);
+  const { items: signups, create: createSignup, rename: renameSignup, remove: removeSignup } = useSignupList("resourcing");
+  const [projectId, setProjectId] = useState(null);
+  useEffect(() => {
+    if (!signups || projectId) return;
+    if (signups.length) setProjectId(signups[0].id);
+    else createSignup({ name: "My Signup" }).then(setProjectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signups]);
+  const saveStatus = useAccountProject("resourcing", projectId, payloadJson, applyPayload);
 
   const parseDemandWorkbook = (wb) => {
     const missing = DAYS.filter((d) => !wb.Sheets[d]);
@@ -3870,7 +3878,11 @@ export default function App({ onHome, user, logout }) {
         </div>
 
         {/* utility toolbar */}
-        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, margin: "10px 0" }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, margin: "10px 0", flexWrap: "wrap" }}>
+          <SignupSwitcher label="Signup" projectId={projectId} items={signups} onSwitch={setProjectId}
+            onCreate={async (vals) => setProjectId(await createSignup(vals))}
+            onRename={renameSignup}
+            onDelete={(id) => { removeSignup(id); if (id === projectId) setProjectId(null); }} />
           <SaveStatus status={saveStatus} />
           <AccountChip user={user} logout={logout} />
           <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={exportBoard}>Export Completed Signup</button>

@@ -11,7 +11,7 @@ import {
   optimizeToConvergence, stabilityFraction, SLIDE_MAX_MIN,
 } from "./App.jsx";
 import { CALL_SAMPLE } from "./callSampleData.js";
-import { useAccountProject, SaveStatus, AccountChip } from "./useAccountProject.jsx";
+import { useAccountProject, useSignupList, SaveStatus, AccountChip, SignupSwitcher } from "./useAccountProject.jsx";
 import { DARK_MODE_ENABLED } from "./themeFlag.js";
 
 /* Call Centre Staffing — a lean sibling of the operator workbench. It reuses the shared coverage
@@ -559,7 +559,15 @@ export default function CallCentre({ onHome, user, logout }) {
     board, baselineBoard, scheduleSource, rules, ptRules, ptEnabled, ptCount, glob, spans,
     sketch, sketchPeaks, sketchMode, calls, arrivals, demSource, typeColors, callSummary,
   ]);
-  const saveStatus = useAccountProject("callcentre", payloadJson, applyPayload);
+  const { items: signups, create: createSignup, rename: renameSignup, remove: removeSignup } = useSignupList("callcentre");
+  const [projectId, setProjectId] = useState(null);
+  useEffect(() => {
+    if (!signups || projectId) return;
+    if (signups.length) setProjectId(signups[0].id);
+    else createSignup({ name: "My Schedule" }).then(setProjectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signups]);
+  const saveStatus = useAccountProject("callcentre", projectId, payloadJson, applyPayload);
 
   /* ---------- shift editing ---------- */
   const selSeg = selId != null ? board.find((s) => s.id === selId) : null;
@@ -772,6 +780,10 @@ export default function CallCentre({ onHome, user, logout }) {
           <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 22, fontWeight: 700 }}>CALL CENTRE STAFFING</div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <div style={{ fontSize: 12, color: sampleGray }}>Weekly coverage <b style={{ color: text, fontSize: 15 }}>{weekPct}%</b></div>
+            <SignupSwitcher label="Schedule" projectId={projectId} items={signups} onSwitch={setProjectId}
+              onCreate={async (vals) => setProjectId(await createSignup(vals))}
+              onRename={renameSignup}
+              onDelete={(id) => { removeSignup(id); if (id === projectId) setProjectId(null); }} />
             <SaveStatus status={saveStatus} />
             <AccountChip user={user} logout={logout} />
             <button style={primaryBtn} onClick={exportSchedule}>Export Schedule</button>

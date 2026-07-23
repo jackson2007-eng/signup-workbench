@@ -20,11 +20,20 @@ CREATE TABLE IF NOT EXISTS users (
   approved_by          INTEGER REFERENCES users(id)
 );
 
--- One saved slot per (user, kind) — matches the app's current one-project-per-module model.
+-- Many named, datable signups per (user, kind) — a user can save and reopen multiple signups
+-- per module (e.g. "Fall 2026" vs "Spring 2027" in Resourcing). start_date/end_date are just
+-- identifying metadata for the list/switcher UI, independent of any date-range concept a
+-- module's own payload might carry internally (e.g. Resourcing's signupPeriod). payload is
+-- nullable: a freshly-created signup has no payload until its first autosave.
 CREATE TABLE IF NOT EXISTS projects (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id     INTEGER NOT NULL REFERENCES users(id),
   kind        TEXT NOT NULL CHECK (kind IN ('resourcing','callcentre','dispatch','annualplan','vacationplan')),
-  payload     TEXT NOT NULL,          -- opaque JSON string, exactly what buildPayload() produces
-  updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-  PRIMARY KEY (user_id, kind)
+  name        TEXT NOT NULL,
+  start_date  TEXT,
+  end_date    TEXT,
+  payload     TEXT,                  -- opaque JSON string, exactly what buildPayload() produces
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE INDEX IF NOT EXISTS idx_projects_user_kind ON projects(user_id, kind);

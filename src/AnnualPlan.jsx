@@ -4,7 +4,7 @@ import { ResponsiveContainer, ComposedChart, BarChart, Bar, XAxis, YAxis, Toolti
 import { DAYS, NumField, Stat, parseSignupWorkbook } from "./App.jsx";
 import { PhaseStrip } from "./CallCentre.jsx";
 import { ANNUALPLAN_SAMPLE } from "./annualPlanSampleData.js";
-import { useAccountProject, SaveStatus, AccountChip } from "./useAccountProject.jsx";
+import { useAccountProject, useSignupList, SaveStatus, AccountChip, SignupSwitcher } from "./useAccountProject.jsx";
 import { DARK_MODE_ENABLED } from "./themeFlag.js";
 
 /* Annual Service Plan — projects next year's total daily trips from a prior year's history
@@ -358,7 +358,15 @@ export default function AnnualPlan({ onHome, user, logout }) {
   const payloadJson = useMemo(() => JSON.stringify(buildPayload()), [
     providers, history, historyYear, planYear, growthPct, jurisdiction, historySource,
   ]);
-  const saveStatus = useAccountProject("annualplan", payloadJson, applyPayload);
+  const { items: signups, create: createSignup, rename: renameSignup, remove: removeSignup } = useSignupList("annualplan");
+  const [projectId, setProjectId] = useState(null);
+  useEffect(() => {
+    if (!signups || projectId) return;
+    if (signups.length) setProjectId(signups[0].id);
+    else createSignup({ name: "My Plan" }).then(setProjectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signups]);
+  const saveStatus = useAccountProject("annualplan", projectId, payloadJson, applyPayload);
 
   const providerColor = (id) => PROVIDER_COLORS[providers.findIndex((p) => p.id === id) % PROVIDER_COLORS.length];
 
@@ -392,6 +400,10 @@ export default function AnnualPlan({ onHome, user, logout }) {
           <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 22, fontWeight: 700 }}>ANNUAL SERVICE PLAN</div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <div style={{ fontSize: 12, color: sampleGray }}>Projected {planYear} trips <b style={{ color: text, fontSize: 15 }}>{annualTotals.trips.toLocaleString()}</b></div>
+            <SignupSwitcher label="Plan" projectId={projectId} items={signups} onSwitch={setProjectId}
+              onCreate={async (vals) => setProjectId(await createSignup(vals))}
+              onRename={renameSignup}
+              onDelete={(id) => { removeSignup(id); if (id === projectId) setProjectId(null); }} />
             <SaveStatus status={saveStatus} />
             <AccountChip user={user} logout={logout} />
             <button style={nudgeBtn} onClick={saveProject}>Export backup JSON</button>
