@@ -406,6 +406,9 @@ export default function AnnualPlan({ onHome, user, logout }) {
           { phase: "PHASE 3 · REVIEW", tabs: [
             { key: "split", label: "CAPACITY & SPLIT" },
           ]},
+          { phase: "PHASE 4 · BUDGET", tabs: [
+            { key: "budget", label: "BUDGET" },
+          ]},
         ]} />
 
         {tab === "providers" && (
@@ -424,6 +427,9 @@ export default function AnnualPlan({ onHome, user, logout }) {
         )}
         {tab === "split" && (
           <SplitTab {...{ planYear, providers, rollup, annualTotals, providerColor }} />
+        )}
+        {tab === "budget" && (
+          <BudgetTab {...{ planYear, providers, rollup, annualTotals, providerColor }} />
         )}
       </div>
     </div>
@@ -724,6 +730,119 @@ function SplitTab({ planYear, providers, rollup, annualTotals, providerColor }) 
         </div>
         <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>
           Capacity providers cost = scheduled hours × hourly rate (what you actually pay for scheduled service, whether or not every hour is fully utilized). Remainder providers cost = trips served × per-trip rate.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================= BUDGET ================= */
+// Same underlying data as SplitTab (rollup/annualTotals), transposed into the shape an operating
+// budget actually gets reviewed in: providers down the side, Jan-Dec + Total across the top. v1
+// keeps one blended rate per provider (no Ambulatory/WAM/escort sub-split) — see ROADMAP.md.
+function BudgetTab({ planYear, providers, rollup, annualTotals, providerColor }) {
+  const capacityProviders = providers.filter((p) => p.role === "capacity");
+  const remainderProviders = providers.filter((p) => p.role === "remainder");
+  const monthCost = (i) => providers.reduce((a, p) => a + (rollup[i].byProvider[p.id]?.cost || 0), 0);
+  const roleMonthCost = (i, role) => providers.filter((p) => p.role === role).reduce((a, p) => a + (rollup[i].byProvider[p.id]?.cost || 0), 0);
+  const annualRoleCost = (role) => providers.filter((p) => p.role === role).reduce((a, p) => a + (annualTotals.byProvider[p.id]?.cost || 0), 0);
+  const grandCost = Object.values(annualTotals.byProvider).reduce((a, v) => a + v.cost, 0);
+
+  const chartData = MONTHS.map((label, i) => {
+    const row = { month: label };
+    for (const p of providers) row[p.id] = Math.round(rollup[i].byProvider[p.id]?.cost || 0);
+    return row;
+  });
+
+  const money = (v) => `$${Math.round(v).toLocaleString()}`;
+  const thStyle = { padding: "5px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums" };
+  const tdStyle = { padding: "5px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums" };
+
+  return (
+    <div>
+      <div style={cardStyle}>
+        <div style={hTitle}>{planYear} operating cost by provider, by month</div>
+        <ResponsiveContainer width="100%" height={280}>
+          <ComposedChart data={chartData} margin={{ top: 4, right: 10, left: -14, bottom: 0 }}>
+            <CartesianGrid stroke="var(--border-light)" vertical={false} />
+            <XAxis dataKey="month" tick={{ fontSize: 11 }} tickLine={false} />
+            <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+            <Tooltip contentStyle={{ fontSize: 12, border: "1px solid var(--border-light)" }} formatter={(v) => `$${v.toLocaleString()}`} />
+            <Legend wrapperStyle={{ fontSize: 12 }} />
+            {providers.map((p) => (
+              <Bar key={p.id} dataKey={p.id} name={p.name} stackId="s" fill={providerColor(p.id)} isAnimationActive={false} />
+            ))}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div style={cardStyle}>
+        <div style={hTitle}>{planYear} budget</div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 980 }}>
+            <thead>
+              <tr style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", color: sampleGray }}>
+                <th style={{ padding: "5px 8px", textAlign: "left" }}>&nbsp;</th>
+                {MONTHS.map((m) => <th key={m} style={thStyle}>{m}</th>)}
+                <th style={thStyle}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style={{ borderTop: "1px solid var(--border-light)", color: sampleGray }}>
+                <td style={{ padding: "5px 8px" }}>Total trips</td>
+                {rollup.map((r, i) => <td key={i} style={tdStyle}>{Math.round(r.trips).toLocaleString()}</td>)}
+                <td style={tdStyle}>{Math.round(annualTotals.trips).toLocaleString()}</td>
+              </tr>
+
+              {providers.map((p) => (
+                <tr key={p.id} style={{ borderTop: "1px solid var(--border-light)" }}>
+                  <td style={{ padding: "5px 8px" }}>
+                    <span style={{ display: "inline-block", width: 9, height: 9, background: providerColor(p.id), marginRight: 6, borderRadius: 2 }} />
+                    {p.name}
+                  </td>
+                  {rollup.map((r, i) => <td key={i} style={tdStyle}>{money(r.byProvider[p.id]?.cost || 0)}</td>)}
+                  <td style={tdStyle}>{money(annualTotals.byProvider[p.id]?.cost || 0)}</td>
+                </tr>
+              ))}
+
+              {annualTotals.unaccommodated > 0.5 && (
+                <tr style={{ borderTop: "1px solid var(--border-light)", color: gapRed }}>
+                  <td style={{ padding: "5px 8px" }}>Unaccommodated (no provider cost)</td>
+                  {rollup.map((r, i) => <td key={i} style={tdStyle}>{Math.round(r.unaccommodated).toLocaleString()}</td>)}
+                  <td style={tdStyle}>{Math.round(annualTotals.unaccommodated).toLocaleString()}</td>
+                </tr>
+              )}
+
+              {capacityProviders.length > 0 && (
+                <tr style={{ borderTop: "1px solid var(--border-light)", color: sampleGray }}>
+                  <td style={{ padding: "5px 8px" }}>Capacity providers</td>
+                  {MONTHS.map((_, i) => <td key={i} style={tdStyle}>{money(roleMonthCost(i, "capacity"))}</td>)}
+                  <td style={tdStyle}>{money(annualRoleCost("capacity"))}</td>
+                </tr>
+              )}
+              {remainderProviders.length > 0 && (
+                <tr style={{ color: sampleGray }}>
+                  <td style={{ padding: "5px 8px" }}>Contractor cost</td>
+                  {MONTHS.map((_, i) => <td key={i} style={tdStyle}>{money(roleMonthCost(i, "remainder"))}</td>)}
+                  <td style={tdStyle}>{money(annualRoleCost("remainder"))}</td>
+                </tr>
+              )}
+
+              <tr style={{ borderTop: "2px solid var(--border)", fontWeight: 700 }}>
+                <td style={{ padding: "5px 8px" }}>Total DATS Operational Cost</td>
+                {MONTHS.map((_, i) => <td key={i} style={tdStyle}>{money(monthCost(i))}</td>)}
+                <td style={tdStyle}>{money(grandCost)}</td>
+              </tr>
+              <tr>
+                <td style={{ padding: "5px 8px" }}>Cost / trip</td>
+                {rollup.map((r, i) => <td key={i} style={tdStyle}>{r.trips > 0 ? `$${(monthCost(i) / r.trips).toFixed(2)}` : "—"}</td>)}
+                <td style={tdStyle}>{annualTotals.trips > 0 ? `$${(grandCost / annualTotals.trips).toFixed(2)}` : "—"}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>
+          Each provider's monthly cost follows its rate from the Providers tab — hourly × scheduled hours for capacity providers, per-trip × trips served for remainder providers — rolled up by month. One blended rate per provider; no passenger-type (ambulatory/WAM) sub-split in this pass.
         </div>
       </div>
     </div>
