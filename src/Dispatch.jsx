@@ -127,7 +127,6 @@ export default function Dispatch({ onHome, user, logout }) {
   const [hist, setHist] = useState([]);
   const [future, setFuture] = useState([]);
   const [coverageResolution, setCoverageResolution] = useState(5); // minutes per chart bucket
-  const fileRef = useRef(null);
   const scheduleFileRef = useRef(null);
   // Baseline dispatcher schedule the working board is compared against — sample until a real
   // schedule is uploaded, then that upload. Same baseline/rebase model as the operator tool.
@@ -460,10 +459,6 @@ export default function Dispatch({ onHome, user, logout }) {
     XLSX.writeFile(wb, "dispatcher-schedule.xlsx");
   };
   const buildPayload = () => ({ kind: "dispatch", board, baselineBoard, scheduleSource, rules, ptRules, ptEnabled, ptCount, glob, spans, sketch, sketchPeaks, sketchMode, operators, demSource, typeColors });
-  const saveProject = () => {
-    const blob = new Blob([JSON.stringify(buildPayload(), null, 0)], { type: "application/json" });
-    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "dispatch-project.json"; a.click();
-  };
   const applyPayload = (p) => {
         if (!p || !Array.isArray(p.board)) throw new Error("bad");
         setBoard(p.board.map(cloneSeg));
@@ -483,15 +478,6 @@ export default function Dispatch({ onHome, user, logout }) {
         setScheduleSource(p.scheduleSource === "uploaded" && Array.isArray(p.baselineBoard) ? "uploaded" : "sample");
         setScheduleUpload(null);
         setHist([]); setFuture([]); setSelId(null); setBuildResult(null);
-  };
-  const loadProject = (file) => {
-    const rd = new FileReader();
-    rd.onload = () => {
-      try {
-        applyPayload(JSON.parse(rd.result));
-      } catch (e) { alert("Could not read that Dispatch project file."); }
-    };
-    rd.readAsText(file);
   };
   const payloadJson = useMemo(() => JSON.stringify(buildPayload()), [
     board, baselineBoard, scheduleSource, rules, ptRules, ptEnabled, ptCount, glob, spans,
@@ -725,10 +711,6 @@ export default function Dispatch({ onHome, user, logout }) {
             <SaveStatus status={saveStatus} />
             <AccountChip user={user} logout={logout} />
             <button style={primaryBtn} onClick={exportSchedule}>Export Schedule</button>
-            <button style={nudgeBtn} onClick={saveProject}>Export backup JSON</button>
-            <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Import backup JSON</button>
-            <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }}
-              onChange={(e) => { if (e.target.files && e.target.files[0]) loadProject(e.target.files[0]); e.target.value = ""; }} />
             {DARK_MODE_ENABLED && (
               <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"
                 style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".04em", padding: "5px 8px", background: "none", border: "1px solid var(--border-input)", borderRadius: 2, color: sampleGray, cursor: "pointer" }}>

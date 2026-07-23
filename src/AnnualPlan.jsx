@@ -195,7 +195,6 @@ export default function AnnualPlan({ onHome, user, logout }) {
   const [jurisdiction, setJurisdiction] = useState(() => clone(ANNUALPLAN_SAMPLE.jurisdiction));
   const [historySource, setHistorySource] = useState("sample"); // "sample" | "uploaded"
   const [uploadInfo, setUploadInfo] = useState(null);
-  const fileRef = useRef(null);
   const upRef = useRef(null);
 
   /* ---------- statutory holidays (lazy-loaded, same pattern as the operator module) ---------- */
@@ -326,15 +325,7 @@ export default function AnnualPlan({ onHome, user, logout }) {
     setUploadInfo(null);
   };
 
-  /* ---------- save / load project ---------- */
   const buildPayload = () => ({ kind: "annualplan", providers, history, historyYear, planYear, growthPct, jurisdiction, historySource });
-  const saveProject = () => {
-    const blob = new Blob([JSON.stringify(buildPayload(), null, 0)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `annual-service-plan-${planYear}.json`;
-    a.click();
-  };
   const applyPayload = (p) => {
         if (p.providers) setProviders(p.providers);
         if (p.history) setHistory(p.history);
@@ -343,17 +334,6 @@ export default function AnnualPlan({ onHome, user, logout }) {
         if (p.growthPct != null) setGrowthPct(p.growthPct);
         if (p.jurisdiction) setJurisdiction(p.jurisdiction);
         setHistorySource(p.historySource || "uploaded");
-  };
-  const loadProject = (file) => {
-    const rd = new FileReader();
-    rd.onload = () => {
-      try {
-        applyPayload(JSON.parse(rd.result));
-      } catch (e) {
-        alert("Could not read that project file.");
-      }
-    };
-    rd.readAsText(file);
   };
   const payloadJson = useMemo(() => JSON.stringify(buildPayload()), [
     providers, history, historyYear, planYear, growthPct, jurisdiction, historySource,
@@ -406,10 +386,6 @@ export default function AnnualPlan({ onHome, user, logout }) {
               onDelete={(id) => { removeSignup(id); if (id === projectId) setProjectId(null); }} />
             <SaveStatus status={saveStatus} />
             <AccountChip user={user} logout={logout} />
-            <button style={nudgeBtn} onClick={saveProject}>Export backup JSON</button>
-            <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Import backup JSON</button>
-            <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }}
-              onChange={(e) => { if (e.target.files && e.target.files[0]) loadProject(e.target.files[0]); e.target.value = ""; }} />
             {DARK_MODE_ENABLED && (
               <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"
                 style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".04em", padding: "5px 8px", background: "none", border: "1px solid var(--border-input)", borderRadius: 2, color: sampleGray, cursor: "pointer" }}>

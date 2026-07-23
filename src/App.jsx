@@ -2697,7 +2697,6 @@ export default function App({ onHome, user, logout }) {
   const [optBusy, setOptBusy] = useState(false);
   const [optResult, setOptResult] = useState(null);
   const [sugsStale, setSugsStale] = useState(false);
-  const fileRef = useRef(null);
   const [hist, setHist] = useState([]);
   const [future, setFuture] = useState([]); // redo stack — cleared by any new edit
   const [selId, setSelId] = useState(null);
@@ -2812,14 +2811,6 @@ export default function App({ onHome, user, logout }) {
     baselineBoard, signupSource, typeColors,
     ptRules, ptEnabled, ptCount,
   });
-  const saveProject = () => {
-    const blob = new Blob([JSON.stringify(buildPayload(), null, 1)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "signup-project.json";
-    a.click();
-    URL.revokeObjectURL(a.href);
-  };
   const exportBoard = () => {
     const DOW = { Sunday: "SU", Monday: "MO", Tuesday: "TU", Wednesday: "WE", Thursday: "TH", Friday: "FR", Saturday: "SA" };
     const hm = (m) => `${Math.floor(m / 60) % 24}:${String(m % 60).padStart(2, "0")}`;
@@ -3034,17 +3025,6 @@ export default function App({ onHome, user, logout }) {
         // ones get ink until the user touches them again, so merging over the defaults is safe
         setTypeColors(p.typeColors ? { ...TYPE_COLOR, ...p.typeColors } : { ...TYPE_COLOR });
         setHist([]); setFuture([]); setSelId(null); setSugs(null); setSugsStale(false);
-  };
-  const loadProject = (file) => {
-    const rd = new FileReader();
-    rd.onload = () => {
-      try {
-        applyPayload(JSON.parse(rd.result));
-      } catch (err) {
-        alert("Could not read that project file.");
-      }
-    };
-    rd.readAsText(file);
   };
   const payloadJson = useMemo(() => JSON.stringify(buildPayload()), [
     demSource, sketch, trips, sketchMode, uploadedDem, demNormalized, board, rules, glob, spans,
@@ -3886,10 +3866,6 @@ export default function App({ onHome, user, logout }) {
           <SaveStatus status={saveStatus} />
           <AccountChip user={user} logout={logout} />
           <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={exportBoard}>Export Completed Signup</button>
-          <button style={nudgeBtn} onClick={saveProject}>Export backup JSON</button>
-          <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Import backup JSON</button>
-          <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }}
-            onChange={(e) => { if (e.target.files && e.target.files[0]) loadProject(e.target.files[0]); e.target.value = ""; }} />
         </div>
 
         {/* phased step navigation */}

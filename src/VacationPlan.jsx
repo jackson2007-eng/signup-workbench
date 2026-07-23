@@ -110,7 +110,6 @@ export default function VacationPlan({ onHome, user, logout }) {
   const [summerStart, setSummerStart] = useState(VACATIONPLAN_SAMPLE.summerStart);
   const [summerEnd, setSummerEnd] = useState(VACATIONPLAN_SAMPLE.summerEnd);
   const [jurisdiction, setJurisdiction] = useState(() => clone(VACATIONPLAN_SAMPLE.jurisdiction));
-  const fileRef = useRef(null);
   const rosterUpRef = useRef(null);
 
   /* ---------- statutory holidays (lazy-loaded, same pattern as Annual Plan) ---------- */
@@ -197,15 +196,7 @@ export default function VacationPlan({ onHome, user, logout }) {
   };
   const applySuggestedCaps = () => setCaps(suggestCaps(weeks, suggestParams, reducedWeekIdx));
 
-  /* ---------- save / load project ---------- */
   const buildPayload = () => ({ kind: "vacationplan", operators, yearStart, weekCount, caps, suggestParams, summerStart, summerEnd, jurisdiction });
-  const saveProject = () => {
-    const blob = new Blob([JSON.stringify(buildPayload(), null, 0)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "vacation-signup-plan.json";
-    a.click();
-  };
   const applyPayload = (p) => {
         if (p.operators) setOperators(p.operators);
         if (p.yearStart) setYearStart(p.yearStart);
@@ -215,17 +206,6 @@ export default function VacationPlan({ onHome, user, logout }) {
         if (p.summerStart) setSummerStart(p.summerStart);
         if (p.summerEnd) setSummerEnd(p.summerEnd);
         if (p.jurisdiction) setJurisdiction(p.jurisdiction);
-  };
-  const loadProject = (file) => {
-    const rd = new FileReader();
-    rd.onload = () => {
-      try {
-        applyPayload(JSON.parse(rd.result));
-      } catch (e) {
-        alert("Could not read that project file.");
-      }
-    };
-    rd.readAsText(file);
   };
   const payloadJson = useMemo(() => JSON.stringify(buildPayload()), [
     operators, yearStart, weekCount, caps, suggestParams, summerStart, summerEnd, jurisdiction,
@@ -279,10 +259,6 @@ export default function VacationPlan({ onHome, user, logout }) {
               onDelete={(id) => { removeSignup(id); if (id === projectId) setProjectId(null); }} />
             <SaveStatus status={saveStatus} />
             <AccountChip user={user} logout={logout} />
-            <button style={nudgeBtn} onClick={saveProject}>Export backup JSON</button>
-            <button style={nudgeBtn} onClick={() => fileRef.current && fileRef.current.click()}>Import backup JSON</button>
-            <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }}
-              onChange={(e) => { if (e.target.files && e.target.files[0]) loadProject(e.target.files[0]); e.target.value = ""; }} />
             {DARK_MODE_ENABLED && (
               <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle light/dark mode"
                 style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".04em", padding: "5px 8px", background: "none", border: "1px solid var(--border-input)", borderRadius: 2, color: sampleGray, cursor: "pointer" }}>
