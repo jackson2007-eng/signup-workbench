@@ -794,7 +794,7 @@ export default function Dispatch({ onHome }) {
                 </div>
               </div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={0} showBookout={false} showProductivity={false} demandShare={100}
-                supplyName="Dispatchers on shift" targetName="Demand-aligned staffing" unitLabel="operators working" minName="floor" minUnitLabel="dispatchers" sugTooltip={false} showTarget={false}
+                supplyName="Dispatchers on shift" targetName="Demand-aligned staffing" unitLabel="operators working" minName="floor" minUnitLabel="dispatchers" sugTooltip={false} showTarget={false} showStaging={false}
                 extraSeries={peakReq > 0 ? [{ key: "req", name: "Dispatchers required (ratio)", color: "var(--required-pink)", values: reqCurve, dash: "5 3" }] : null}
                 aggregateMin={coverageResolution} showTripBar />
               <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 6 }}>

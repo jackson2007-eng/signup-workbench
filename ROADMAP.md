@@ -171,6 +171,11 @@ exception days for now; phase strip yes but NO guided tour. (2026-07-21: the ope
   retime/generate modes, ruin-and-recreate search, stability-discounted accept gate,
   stop-polish with fit-each-day, live sparkline, load-best). STILL DEFERRED: the
   operator-style week-strip/3-state package editor in the siblings.
+- **Follow-up (2026-07-21, SHIPPED)**: removed the "Pull-out/pull-in staging" area/legend
+  from Call Centre + Dispatch Coverage charts (new `showStaging` prop on the shared
+  CoverageChart, defaults true so the operator module is unchanged) — it's a vehicle-
+  deadhead concept (physical staging before/after service) that doesn't map to agents or
+  dispatchers, neither of which have deadhead settings at all.
 - **Follow-up (2026-07-20, SHIPPED, then REMOVED 2026-07-21)**: Guided setup wizard in
   both siblings — a shared 4-step SetupWizard (demand pattern, service hours, headcount,
   shift kinds) pre-filling Rules/hours/counts/part-time/demand and landing on BUILD. Pulled
