@@ -223,6 +223,27 @@ branch when pricing resumes.
 - Rename the GitHub repo (signup-workbench → toolkit-wide name).
 
 ## Recently shipped
+- 2026-07-23 — **Agencies: multi-tenant data sharing.** Saved signups now belong to an **agency**,
+  not an individual user — every user at the same agency sees and edits the same set of saved
+  signups, so a team stops passing project state around by hand. Admins create agencies from a
+  new Agencies card on `/admin` and assign each user to one, required at approval time (either
+  pick an existing agency or type a new one in the same step); a "Team members" card lets an
+  admin reassign a user to a different agency at any time, and the change takes effect on that
+  user's very next request (no re-login needed — agency is resolved fresh from the session each
+  time, not cached in the cookie). `projects.agency_id` replaces `projects.user_id` as the
+  scoping column everywhere; the existing free-text `users.agency` field (what a requester typed
+  at signup) is kept as-is and is a separate, informational thing from the new `agency_id` FK.
+  Migrated the one production agency at the time ("Testing", matching that free-text field) with
+  zero data loss — verified byte-identical payload lengths on all 5 pre-existing saved signups
+  before/after. Known v1 limitation, accepted not solved: no conflict resolution if two
+  teammates edit the exact same signup at once — last debounced autosave wins, same as any
+  shared-document tool without real-time collaboration.
+- 2026-07-23 — **Multiple named, datable signups per module.** Each tool module went from "one
+  saved project per user" to a header switcher (dropdown + New/Rename/Delete) holding many named
+  signups per module — e.g. "Fall 2026" and "Spring 2027" side by side in Resourcing, each with
+  its own start/end date metadata for the switcher UI (independent of any date-range concept a
+  module's own payload carries internally). Migrated existing per-user single-project data into
+  this shape with zero loss before deploying.
 - 2026-07-23 — **Paratransit Companion pivot: accounts, server-side persistence, app-shell.**
   Product owner decided to stop offering anonymous/local-only usage — every tool module now
   requires a signed-in, approved account, replacing browser Save/Load-as-file with Cloudflare
