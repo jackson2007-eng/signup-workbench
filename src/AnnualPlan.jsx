@@ -611,8 +611,8 @@ export default function AnnualPlan({ onHome, user, logout }) {
 
         <PhaseStrip tab={tab} setTab={setTab} navClass="apnav" groups={[
           { phase: "PHASE 1 · SETUP", tabs: [
-            { key: "providers", label: "PROVIDERS" },
             { key: "history", label: "HISTORY", done: historySource === "uploaded", reason: "Still using the sample history — upload your real prior-year trips" },
+            { key: "providers", label: "PROVIDERS" },
           ]},
           { phase: "PHASE 2 · PROJECT", tabs: [
             { key: "projection", label: "PROJECTION" },
