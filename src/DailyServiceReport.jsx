@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from "react";
-import { Stat } from "./App.jsx";
+import { NumField, Stat } from "./App.jsx";
 import { PhaseStrip } from "./CallCentre.jsx";
 import {
   buildProjection, splitDay, avgTripsByDow, hoursByDowFromMarketShare,
@@ -35,6 +35,18 @@ function effectiveProviders(providers, avgDemandByDow) {
       ? { ...p, hoursByDow: hoursByDowFromMarketShare(avgDemandByDow, p.marketSharePct, p.productivityWeekday, p.productivityWeekend) }
       : p
   ));
+}
+
+// What needs to be scheduled the night before, to land on `delivered` trips after day-of
+// attrition (no-shows/cancellations). Reviewed against the real 2026 DATS Monthly Trip/Cost
+// Budget, which tracks this exact relationship as parallel "Start of Day" (night-before
+// scheduled) vs "End of Day" (actual delivered) blocks — checked across COE and both Prestige
+// vehicle types, on weekdays/weekends/a holiday, and every one came out to the same flat ~9%
+// increase, applied to each provider's own delivered figure directly (not by re-running the
+// capacity split on a bigger demand number). Computed live, not stored, so tuning the % doesn't
+// require re-importing the budget — same reasoning as effectiveProviders above.
+function scheduledTrips(delivered, attritionPct) {
+  return delivered * (1 + (attritionPct || 0) / 100);
 }
 
 // Recomputes a full day-by-day-by-provider budget from a saved Annual Plan payload — the exact
@@ -75,6 +87,9 @@ export default function DailyServiceReport({ onHome, user, logout }) {
   const [days, setDays] = useState(() => clone(DAILYSERVICE_SAMPLE.days));
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState(null);
+  // Default 9% matches the real DATS budget's own "Percentage Increase on scheduling night
+  // before" figure — a starting point, not a hardcoded assumption; editable per agency.
+  const [attritionPct, setAttritionPct] = useState(9);
 
   const { items: annualPlanSignups } = useSignupList("annualplan");
   const [selectedPlanId, setSelectedPlanId] = useState("");
@@ -135,12 +150,13 @@ export default function DailyServiceReport({ onHome, user, logout }) {
     return meta;
   }, [days]);
 
-  const buildPayload = () => ({ kind: "dailyservice", source, days });
+  const buildPayload = () => ({ kind: "dailyservice", source, days, attritionPct });
   const applyPayload = (p) => {
         if (p.source !== undefined) setSource(p.source);
         if (p.days) setDays(p.days);
+        if (p.attritionPct != null) setAttritionPct(p.attritionPct);
   };
-  const payloadJson = useMemo(() => JSON.stringify(buildPayload()), [source, days]);
+  const payloadJson = useMemo(() => JSON.stringify(buildPayload()), [source, days, attritionPct]);
   const { items: signups, create: createSignup, rename: renameSignup, remove: removeSignup } = useSignupList("dailyservice");
   const [projectId, setProjectId] = useState(null);
   useEffect(() => {
@@ -203,11 +219,11 @@ export default function DailyServiceReport({ onHome, user, logout }) {
         {tab === "setup" && (
           <SetupTab {...{
             source, annualPlanSignups, selectedPlanId, setSelectedPlanId, importBudget,
-            importing, importError, providerIds, providerMeta,
+            importing, importError, providerIds, providerMeta, attritionPct, setAttritionPct,
           }} />
         )}
         {tab === "calendar" && (
-          <CalendarTab {...{ source, days, providerIds, providerMeta }} />
+          <CalendarTab {...{ source, days, providerIds, providerMeta, attritionPct }} />
         )}
       </div>
     </div>
@@ -215,9 +231,23 @@ export default function DailyServiceReport({ onHome, user, logout }) {
 }
 
 /* ================= SETUP ================= */
-function SetupTab({ source, annualPlanSignups, selectedPlanId, setSelectedPlanId, importBudget, importing, importError, providerIds, providerMeta }) {
+function SetupTab({ source, annualPlanSignups, selectedPlanId, setSelectedPlanId, importBudget, importing, importError, providerIds, providerMeta, attritionPct, setAttritionPct }) {
   return (
     <div>
+      <div style={cardStyle}>
+        <div style={hTitle}>Night-before scheduling buffer</div>
+        <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 12 }}>
+          Mirrors a real DATS practice: schedule more trips the night before than are actually
+          expected to happen, to offset day-of attrition (cancellations, no-shows). The Daily
+          Calendar's "Scheduled" figures are each day's delivered trips scaled up by this %,
+          computed live — change it any time without re-importing the budget.
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+          Scheduling buffer (%)
+          <NumField value={attritionPct} step={0.5} onCommit={(v) => setAttritionPct(Math.max(0, v))} />
+        </label>
+      </div>
+
       <div style={cardStyle}>
         <div style={hTitle}>Import from Annual Plan</div>
         <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 12 }}>
@@ -271,8 +301,9 @@ function SetupTab({ source, annualPlanSignups, selectedPlanId, setSelectedPlanId
 }
 
 /* ================= DAILY CALENDAR ================= */
-function CalendarTab({ source, days, providerIds, providerMeta }) {
+function CalendarTab({ source, days, providerIds, providerMeta, attritionPct }) {
   const dayRows = useMemo(() => Object.keys(days).sort().map((iso) => ({ iso, month: monthOfIso(iso), ...days[iso] })), [days]);
+  const colCount = 6 + providerIds.length * 4;
   return (
     <div>
       <div style={cardStyle}>
@@ -281,7 +312,9 @@ function CalendarTab({ source, days, providerIds, providerMeta }) {
           Every day of the imported plan, split across providers exactly as Annual Plan's own
           Split/Budget tabs compute it — capacity providers take trips up to scheduled hours ×
           productivity in list order, remainder providers absorb what's left. Unaccommodated
-          demand is flagged, never hidden.
+          demand is flagged, never hidden. "Scheduled" columns are each delivered figure scaled
+          up by the {attritionPct}% night-before buffer set on the Setup tab — what actually
+          needs to go out the night before to land on the delivered total after attrition.
         </div>
         <div style={{ overflowX: "auto", maxHeight: 620, overflowY: "auto", border: "1px solid var(--border-light)" }}>
           <table style={{ borderCollapse: "collapse", fontSize: 12, width: "100%" }}>
@@ -290,10 +323,12 @@ function CalendarTab({ source, days, providerIds, providerMeta }) {
                 <th style={thStyle}>Date</th>
                 <th style={thStyle}>Day</th>
                 <th style={thStyle}>Holiday</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Total scheduled</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Total trips</th>
                 <th style={{ ...thStyle, textAlign: "right", color: gapRed }}>Unaccommodated</th>
                 {providerIds.map((id) => (
                   <React.Fragment key={id}>
+                    <th style={{ ...thStyle, textAlign: "right" }}>{providerMeta[id]?.name} scheduled</th>
                     <th style={{ ...thStyle, textAlign: "right" }}>{providerMeta[id]?.name} trips</th>
                     <th style={{ ...thStyle, textAlign: "right" }}>{providerMeta[id]?.name} hrs</th>
                     <th style={{ ...thStyle, textAlign: "right" }}>{providerMeta[id]?.name} cost</th>
@@ -305,7 +340,7 @@ function CalendarTab({ source, days, providerIds, providerMeta }) {
               {MONTHS.map((label, mi) => (
                 <React.Fragment key={label}>
                   <tr>
-                    <td colSpan={5 + providerIds.length * 3} style={{ background: "var(--tint-neutral-b)", fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, fontSize: 12.5, padding: "5px 8px", position: "sticky", top: 27, zIndex: 1 }}>
+                    <td colSpan={colCount} style={{ background: "var(--tint-neutral-b)", fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, fontSize: 12.5, padding: "5px 8px", position: "sticky", top: 27, zIndex: 1 }}>
                       {label} {source.planYear}
                     </td>
                   </tr>
@@ -314,12 +349,14 @@ function CalendarTab({ source, days, providerIds, providerMeta }) {
                       <td style={tdStyle}>{r.iso}</td>
                       <td style={tdStyle}>{DOW_SHORT[r.dow]}</td>
                       <td style={{ ...tdStyle, color: r.holidayName ? gapRed : sampleGray }}>{r.holidayName || ""}</td>
+                      <td style={{ ...tdStyle, textAlign: "right", color: supplyTeal }}>{Math.round(scheduledTrips(r.trips, attritionPct)).toLocaleString()}</td>
                       <td style={{ ...tdStyle, textAlign: "right" }}>{Math.round(r.trips).toLocaleString()}</td>
                       <td style={{ ...tdStyle, textAlign: "right", color: r.unaccommodated > 0 ? gapRed : sampleGray }}>{r.unaccommodated > 0 ? Math.round(r.unaccommodated).toLocaleString() : "—"}</td>
                       {providerIds.map((id) => {
                         const p = r.byProvider[id];
                         return (
                           <React.Fragment key={id}>
+                            <td style={{ ...tdStyle, textAlign: "right", color: supplyTeal }}>{p ? Math.round(scheduledTrips(p.trips, attritionPct)).toLocaleString() : "—"}</td>
                             <td style={{ ...tdStyle, textAlign: "right" }}>{p ? Math.round(p.trips).toLocaleString() : "—"}</td>
                             <td style={{ ...tdStyle, textAlign: "right", color: sampleGray }}>{p && p.hours != null ? Math.round(p.hours).toLocaleString() : "—"}</td>
                             <td style={{ ...tdStyle, textAlign: "right", color: sampleGray }}>{p ? `$${Math.round(p.cost).toLocaleString()}` : "—"}</td>
