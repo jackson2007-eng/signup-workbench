@@ -1840,7 +1840,7 @@ function CallDataSummary({ summary, day, calls }) {
    informational — clicking any tab always works (flag, never block). */
 export function PhaseStrip({ tab, setTab, groups, navClass = "ccnav" }) {
   return (
-    <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
+    <div className="phasestrip-sticky" style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap", alignItems: "flex-end", position: "sticky", top: 0, zIndex: 6, background: "var(--paper)", paddingTop: 4, paddingBottom: 2 }}>
       {groups.map((g) => (
         <div key={g.phase}>
           <div style={{ fontSize: 9.5, textTransform: "uppercase", letterSpacing: ".1em", color: sampleGray, margin: "0 2px 3px", fontWeight: 600 }}>{g.phase}</div>

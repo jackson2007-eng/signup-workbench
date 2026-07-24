@@ -38,8 +38,10 @@ const ink = "var(--chrome)", text = "var(--text)", paper = "var(--paper)", card 
   demandAmber = "var(--demand-amber)", targetInk = "var(--target-ink)", supplyTeal = "var(--supply-teal)",
   gapRed = "var(--gap-red)", bookoutViolet = "var(--bookout-violet)", sampleGray = "var(--sample-gray)";
 const DEM_SOURCE_LABEL = { imported: "Sample data", sketched: "Sketched demand", uploaded: "Uploaded real data" };
-// pinned-header stacking: fixed heights (with a small buffer) for the sticky Signup Package
-// banner + day paddles and the .kpistrip, so each locked layer sits directly under the last.
+// pinned-header stacking: fixed heights (with a small buffer) for the sticky phase-step nav,
+// the Signup Package banner + day paddles, and the .kpistrip, so each locked layer sits
+// directly under the last.
+const PHASE_H = 82;
 const ENVELOPE_H = 132;
 const KPI_H = 52;
 const TYPE_ORDER = ["AM", "NN", "AX", "NN10", "AX10", "BST", "BX", "BS"];
@@ -3810,7 +3812,7 @@ export default function App({ onHome, user, logout }) {
           /* phones: nothing stays pinned — the sticky stack (package banner + paddles +
              KPI strip + shift editor) would consume nearly the whole viewport, hiding the
              gantt and coverage chart the user is actually working on */
-          .envlock, .kpistrip, .seleditor { position: static !important; }
+          .phase-row, .envlock, .kpistrip, .seleditor { position: static !important; }
         }
       `}</style>
 
@@ -3882,7 +3884,7 @@ export default function App({ onHome, user, logout }) {
             ] },
           ];
           return (
-            <div className="phase-row" style={{ display: "flex", gap: 18, alignItems: "flex-start", flexWrap: "wrap", margin: "12px 0" }}>
+            <div className="phase-row" style={{ display: "flex", gap: 18, alignItems: "flex-start", flexWrap: "wrap", margin: "12px 0", position: "sticky", top: 0, zIndex: 11, background: paper }}>
               {PHASES.map((phase, pi) => (
                 <React.Fragment key={phase.label}>
                   <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
@@ -4010,7 +4012,7 @@ export default function App({ onHome, user, logout }) {
         {/* envelope + day paddles, locked together while scrolling (desktop only — on
             phones the pinned stack would swallow most of the viewport, so .envlock/.seleditor/
             .kpistrip all fall back to normal scrolling under the 640px breakpoint) */}
-        <div className="envlock" style={{ position: "sticky", top: 0, zIndex: 10, background: paper, marginBottom: 12 }}>
+        <div className="envlock" style={{ position: "sticky", top: PHASE_H, zIndex: 10, background: paper, marginBottom: 12 }}>
           <div style={{ border: "1px solid var(--border)" }}>
             <div style={{ background: ink, color: "#fff", padding: "10px 14px" }}>
               <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
@@ -4732,7 +4734,7 @@ export default function App({ onHome, user, logout }) {
 
                   {selHoliday && (
                     <>
-                      <div className="kpistrip" style={{ top: ENVELOPE_H }}>
+                      <div className="kpistrip" style={{ top: PHASE_H + ENVELOPE_H }}>
                         <div className="kpi"><span className="l">editing</span><span className="v">{selHoliday.name}</span></div>
                         <div className="kpi"><span className="l">date</span><span className="v">{selHoliday.date} ({weekday})</span></div>
                         <div className="kpi"><span className="l">shifts</span><span className="v">{segs.length}</span></div>
@@ -4857,7 +4859,7 @@ export default function App({ onHome, user, logout }) {
         {tab === "board" && (
           <>
             {/* KPI strip */}
-            <div className="kpistrip" style={{ top: ENVELOPE_H }}>
+            <div className="kpistrip" style={{ top: PHASE_H + ENVELOPE_H }}>
               <div className="kpi"><span className="l">{day} coverage</span><span className="v" style={{ color: P.dayScore >= 0.9 ? "#7FD1C0" : "#F5C16C" }}>{(P.dayScore * 100).toFixed(1)}%</span></div>
               <div className="kpi"><span className="l">vs signed</span><span className="v" style={{ color: dayDelta >= 0 ? "#7FD1C0" : "#F09E93" }}>{dayDelta >= 0 ? "+" : ""}{dayDelta.toFixed(2)}</span></div>
               <div className="kpi"><span className="l">week</span><span className="v">{(eng.weekScore * 100).toFixed(1)}%</span></div>
@@ -4883,7 +4885,7 @@ export default function App({ onHome, user, logout }) {
 
             {/* selected shift editor */}
             {sel ? (
-              <div className="seleditor" style={{ background: card, border: `1px solid ${selIssues.length ? gapRed : "var(--border)"}`, padding: "12px 14px", marginBottom: 12, position: "sticky", top: ENVELOPE_H + KPI_H, zIndex: 4 }}>
+              <div className="seleditor" style={{ background: card, border: `1px solid ${selIssues.length ? gapRed : "var(--border)"}`, padding: "12px 14px", marginBottom: 12, position: "sticky", top: PHASE_H + ENVELOPE_H + KPI_H, zIndex: 4 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <button style={nudgeBtn} title="Previous run this day" onClick={() => navSel(-1)}>◀</button>
                   <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700 }}>
@@ -4977,7 +4979,7 @@ export default function App({ onHome, user, logout }) {
                 <WeekStrip segs={selShiftSegs} day={day} onPick={setDay} />
               </div>
             ) : selShift != null ? (
-              <div className="seleditor" style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 12, position: "sticky", top: ENVELOPE_H + KPI_H, zIndex: 4 }}>
+              <div className="seleditor" style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px", marginBottom: 12, position: "sticky", top: PHASE_H + ENVELOPE_H + KPI_H, zIndex: 4 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <button style={nudgeBtn} title="Last run this day" onClick={() => navSel(-1)}>◀</button>
                   <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700 }}>
@@ -5233,7 +5235,7 @@ export default function App({ onHome, user, logout }) {
           const changedWeek = boardDiff.modified.length;
           return (
             <>
-              <div className="kpistrip" style={{ top: ENVELOPE_H }}>
+              <div className="kpistrip" style={{ top: PHASE_H + ENVELOPE_H }}>
                 <div className="kpi"><span className="l">loaded signup · week</span><span className="v">{(base.weekScore * 100).toFixed(1)}%</span></div>
                 <div className="kpi"><span className="l">working signup · week</span><span className="v" style={{ color: eng.weekScore >= base.weekScore ? "#7FD1C0" : "#F09E93" }}>{(eng.weekScore * 100).toFixed(1)}%</span></div>
                 <div className="kpi"><span className="l">{day} cov · was → now</span><span className="v">{(base.perDay[day].dayScore * 100).toFixed(1)}% → {(P.dayScore * 100).toFixed(1)}%</span></div>
@@ -5332,7 +5334,7 @@ export default function App({ onHome, user, logout }) {
           const singleDay = infos.filter((x) => x.info.daysWorked.size === 1).length;
           return (
             <>
-              <div className="kpistrip" style={{ top: ENVELOPE_H }}>
+              <div className="kpistrip" style={{ top: PHASE_H + ENVELOPE_H }}>
                 <div className="kpi"><span className="l">packages</span><span className="v">{shifts.length}</span></div>
                 <div className="kpi"><span className="l">single-day runs</span><span className="v" style={{ color: singleDay ? "#F5C16C" : "#fff" }}>{singleDay}</span></div>
                 <div className="kpi"><span className="l">package flags</span><span className="v" style={{ color: flagged.length ? "#F09E93" : "#7FD1C0" }}>{flagged.length}</span></div>
