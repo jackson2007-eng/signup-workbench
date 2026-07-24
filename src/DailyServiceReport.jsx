@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from "react";
 import * as XLSX from "xlsx";
+import { ResponsiveContainer, ComposedChart, LineChart, AreaChart, Bar, Line, Area, XAxis, YAxis, Tooltip, Legend, CartesianGrid, ReferenceLine } from "recharts";
 import { NumField, Stat } from "./App.jsx";
 import { PhaseStrip } from "./CallCentre.jsx";
 import {
@@ -21,6 +22,7 @@ import { DARK_MODE_ENABLED } from "./themeFlag.js";
 const text = "var(--text)", paper = "var(--paper)", card = "var(--card)",
   supplyTeal = "var(--supply-teal)", gapRed = "var(--gap-red)", sampleGray = "var(--sample-gray)",
   demandAmber = "var(--demand-amber)";
+const PROVIDER_COLORS = [supplyTeal, demandAmber, "var(--bookout-violet)", "#B0455E", "#4C6EF5", "#2F9E44"];
 
 const nudgeBtn = { fontFamily: "'Barlow Condensed', sans-serif", fontSize: 13, fontWeight: 600, padding: "5px 10px", background: card, border: "1px solid var(--border-input)", color: text, cursor: "pointer", borderRadius: 2 };
 const primaryBtn = { ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal };
@@ -74,6 +76,51 @@ function computeDays(planPayload, holidaysHistoryByYear, holidaysPlan) {
   }
   return days;
 }
+
+// Feeds the Analytics tab: one row per calendar month spanning whatever dates either data set
+// covers. Budget figures are full-month sums (every imported day); actual figures only sum days
+// actuals has actually been reported for — `daysWithActualTrips` exposes that coverage so a
+// budget/actual comparison can be scoped to the same days on both sides (`budgetTripsMatched`)
+// rather than comparing a full month of budget against a handful of reported actual days.
+function monthlyRollup(days, actuals, providerIds) {
+  const allIsos = [...new Set([...Object.keys(days), ...Object.keys(actuals)])].sort();
+  const byMonth = new Map();
+  const monthRow = (key) => {
+    if (!byMonth.has(key)) byMonth.set(key, {
+      key, budgetTrips: 0, budgetUnaccom: 0, daysWithBudget: 0,
+      actualTrips: 0, actualUnaccom: 0, daysWithActualTrips: 0, budgetTripsMatched: 0,
+      schedSum: 0, deliveredSum: 0, daysWithAttrition: 0, byProvider: {},
+    });
+    return byMonth.get(key);
+  };
+  const providerRow = (m, id) => m.byProvider[id] || (m.byProvider[id] = { budgetTrips: 0, budgetCost: 0, actualTrips: 0, actualCost: 0 });
+  for (const iso of allIsos) {
+    const m = monthRow(iso.slice(0, 7));
+    const d = days[iso], a = actuals[iso];
+    if (d) {
+      m.budgetTrips += d.trips; m.budgetUnaccom += d.unaccommodated; m.daysWithBudget++;
+      for (const id of providerIds) {
+        const p = d.byProvider[id];
+        if (p) { const bp = providerRow(m, id); bp.budgetTrips += p.trips; bp.budgetCost += p.cost; }
+      }
+    }
+    if (a) {
+      if (a.trips != null) {
+        m.actualTrips += a.trips; m.daysWithActualTrips++;
+        if (d) m.budgetTripsMatched += d.trips;
+      }
+      if (a.unaccommodated != null) m.actualUnaccom += a.unaccommodated;
+      if (a.scheduled != null && a.trips != null) { m.schedSum += a.scheduled; m.deliveredSum += a.trips; m.daysWithAttrition++; }
+      if (a.byProvider) for (const [id, p] of Object.entries(a.byProvider)) {
+        const bp = providerRow(m, id);
+        if (p.trips != null) bp.actualTrips += p.trips;
+        if (p.cost != null) bp.actualCost += p.cost;
+      }
+    }
+  }
+  return [...byMonth.values()].sort((x, y) => x.key.localeCompare(y.key));
+}
+const monthLabel = (key) => { const [y, mo] = key.split("-"); return `${MONTHS[Number(mo) - 1]} ${y}`; };
 
 // Anchored on the real calendar year (not any loaded data), so the template's offered years keep
 // advancing on their own every year with no manual upkeep — same reasoning as AnnualPlan's own
@@ -348,6 +395,7 @@ export default function DailyServiceReport({ onHome, user, logout }) {
         <PhaseStrip tab={tab} setTab={setTab} navClass="dsrnav" groups={[
           { phase: "PHASE 1 · SETUP", tabs: [{ key: "setup", label: "SETUP" }] },
           { phase: "PHASE 2 · REVIEW", tabs: [{ key: "calendar", label: "DAILY CALENDAR" }] },
+          { phase: "PHASE 3 · ANALYZE", tabs: [{ key: "analytics", label: "ANALYTICS" }] },
         ]} />
 
         {tab === "setup" && (
@@ -360,6 +408,9 @@ export default function DailyServiceReport({ onHome, user, logout }) {
         )}
         {tab === "calendar" && (
           <CalendarTab {...{ days, actuals, setActuals, providerIds, providerMeta, attritionPct }} />
+        )}
+        {tab === "analytics" && (
+          <AnalyticsTab {...{ days, actuals, providerIds, providerMeta, attritionPct }} />
         )}
       </div>
     </div>
@@ -873,6 +924,180 @@ function CalendarTab({ days, actuals, setActuals, providerIds, providerMeta, att
             </tfoot>
           </table>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================= ANALYTICS ================= */
+function EmptyChartNote({ children }) {
+  return (
+    <div style={{ padding: "24px 10px", textAlign: "center", fontSize: 12, color: sampleGray, background: "var(--tint-neutral-b)", border: "1px dashed var(--border-light)" }}>
+      {children}
+    </div>
+  );
+}
+
+// Custom tooltip content so the reported-days coverage (how many of the month's days actually
+// have an actual figure behind them) rides along with the number — a bare variance % with no
+// coverage context is easy to over-read from a single stray day.
+function CoverageTooltip({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null;
+  return (
+    <div style={{ fontSize: 12, background: card, border: "1px solid var(--border-light)", padding: "8px 10px" }}>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+      {payload.map((p) => (
+        p.value != null && <div key={p.dataKey} style={{ color: p.color }}>{p.name}: {typeof p.value === "number" ? p.value.toLocaleString() : p.value}</div>
+      ))}
+      {payload[0]?.payload?.coverage != null && (
+        <div style={{ color: sampleGray, marginTop: 4, borderTop: "1px solid var(--border-light)", paddingTop: 4 }}>
+          {payload[0].payload.coverage} day{payload[0].payload.coverage === 1 ? "" : "s"} reported
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AnalyticsTab({ days, actuals, providerIds, providerMeta, attritionPct }) {
+  const rollup = useMemo(() => monthlyRollup(days, actuals, providerIds), [days, actuals, providerIds]);
+  const providerColor = (id) => PROVIDER_COLORS[providerIds.indexOf(id) % PROVIDER_COLORS.length];
+
+  const totalActualsDays = rollup.reduce((s, m) => s + m.daysWithActualTrips, 0);
+  const totalAttritionDays = rollup.reduce((s, m) => s + m.daysWithAttrition, 0);
+
+  const bvaData = rollup.map((m) => ({
+    month: monthLabel(m.key),
+    "Budget trips": Math.round(m.budgetTrips),
+    "Actual trips": m.daysWithActualTrips > 0 ? Math.round(m.actualTrips) : null,
+    variancePct: m.daysWithActualTrips > 0 && m.budgetTripsMatched > 0
+      ? Number((((m.actualTrips - m.budgetTripsMatched) / m.budgetTripsMatched) * 100).toFixed(1)) : null,
+    coverage: m.daysWithActualTrips,
+  }));
+
+  const mixData = rollup.map((m) => {
+    const row = { month: monthLabel(m.key) };
+    let remainderTrips = 0, totalTrips = 0;
+    for (const id of providerIds) {
+      const bp = m.byProvider[id];
+      const trips = bp?.budgetTrips || 0, cost = bp?.budgetCost || 0;
+      row[id] = trips > 0 ? Number((cost / trips).toFixed(2)) : null;
+      totalTrips += trips;
+      if (providerMeta[id]?.role === "remainder") remainderTrips += trips;
+    }
+    row.remainderShare = totalTrips > 0 ? Number(((remainderTrips / totalTrips) * 100).toFixed(1)) : null;
+    return row;
+  });
+  const hasRemainderProvider = providerIds.some((id) => providerMeta[id]?.role === "remainder");
+
+  const attritionData = rollup.filter((m) => m.daysWithAttrition > 0).map((m) => ({
+    month: monthLabel(m.key),
+    "Observed attrition %": Number((((m.schedSum - m.deliveredSum) / m.schedSum) * 100).toFixed(1)),
+    coverage: m.daysWithAttrition,
+  }));
+
+  return (
+    <div>
+      <div style={cardStyle}>
+        <div style={hTitle}>Budget vs. actual trips</div>
+        <div style={{ fontSize: 11.5, color: sampleGray, marginBottom: 10, lineHeight: 1.5 }}>
+          Actual trips only plot for months with at least one day of reported actuals (typed or
+          uploaded on the Daily Calendar). The variance line compares actual trips against budget
+          for that exact same set of reported days — not the whole month — so a month with only a
+          few days entered doesn't look artificially under-delivered.
+        </div>
+        {totalActualsDays === 0 ? (
+          <EmptyChartNote>No actuals reported yet — upload a file or click a cell on the Daily Calendar's Actuals columns to start comparing against budget.</EmptyChartNote>
+        ) : (
+          <>
+            <ResponsiveContainer width="100%" height={260}>
+              <ComposedChart data={bvaData} margin={{ top: 4, right: 10, left: -14, bottom: 0 }}>
+                <CartesianGrid stroke="var(--border-light)" vertical={false} />
+                <XAxis dataKey="month" tick={{ fontSize: 11 }} tickLine={false} />
+                <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+                <Tooltip content={<CoverageTooltip />} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Bar dataKey="Budget trips" fill={supplyTeal} isAnimationActive={false} />
+                <Line dataKey="Actual trips" stroke={demandAmber} strokeWidth={2} dot={{ r: 3 }} connectNulls={false} isAnimationActive={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+            <div style={{ fontSize: 11.5, color: sampleGray, margin: "12px 0 4px" }}>Variance — actual vs. budget, reported days only</div>
+            <ResponsiveContainer width="100%" height={160}>
+              <LineChart data={bvaData} margin={{ top: 4, right: 10, left: -14, bottom: 0 }}>
+                <CartesianGrid stroke="var(--border-light)" vertical={false} />
+                <XAxis dataKey="month" tick={{ fontSize: 11 }} tickLine={false} />
+                <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} unit="%" />
+                <Tooltip content={<CoverageTooltip />} />
+                <ReferenceLine y={0} stroke="var(--border-input)" />
+                <Line dataKey="variancePct" name="Variance %" stroke={gapRed} strokeWidth={2} dot={{ r: 3 }} connectNulls={false} isAnimationActive={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </>
+        )}
+      </div>
+
+      <div style={cardStyle}>
+        <div style={hTitle}>Cost per trip by provider</div>
+        <div style={{ fontSize: 11.5, color: sampleGray, marginBottom: 10, lineHeight: 1.5 }}>
+          Budgeted cost ÷ budgeted trips, by month — a rising line means that provider is getting
+          more expensive per trip, whether from lower productivity, added hours, or a rate change.
+        </div>
+        <ResponsiveContainer width="100%" height={240}>
+          <LineChart data={mixData} margin={{ top: 4, right: 10, left: -14, bottom: 0 }}>
+            <CartesianGrid stroke="var(--border-light)" vertical={false} />
+            <XAxis dataKey="month" tick={{ fontSize: 11 }} tickLine={false} />
+            <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} />
+            <Tooltip contentStyle={{ fontSize: 12, border: "1px solid var(--border-light)" }} formatter={(v) => v == null ? "—" : `$${v.toFixed(2)}`} />
+            <Legend wrapperStyle={{ fontSize: 12 }} />
+            {providerIds.map((id) => (
+              <Line key={id} dataKey={id} name={providerMeta[id]?.name || id} stroke={providerColor(id)} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      {hasRemainderProvider && (
+        <div style={cardStyle}>
+          <div style={hTitle}>Remainder-provider share of trips</div>
+          <div style={{ fontSize: 11.5, color: sampleGray, marginBottom: 10, lineHeight: 1.5 }}>
+            Share of budgeted trips absorbed by remainder (contracted/taxi) providers rather than
+            capacity providers — a rising trend flags growing reliance on the more expensive
+            per-trip overflow, worth a look at capacity providers' scheduled hours.
+          </div>
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={mixData} margin={{ top: 4, right: 10, left: -14, bottom: 0 }}>
+              <CartesianGrid stroke="var(--border-light)" vertical={false} />
+              <XAxis dataKey="month" tick={{ fontSize: 11 }} tickLine={false} />
+              <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} unit="%" />
+              <Tooltip contentStyle={{ fontSize: 12, border: "1px solid var(--border-light)" }} formatter={(v) => v == null ? "—" : `${v}%`} />
+              <Area dataKey="remainderShare" name="Remainder share" stroke={demandAmber} fill={demandAmber} fillOpacity={0.25} isAnimationActive={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      <div style={cardStyle}>
+        <div style={hTitle}>Attrition accuracy</div>
+        <div style={{ fontSize: 11.5, color: sampleGray, marginBottom: 10, lineHeight: 1.5 }}>
+          The night-before attrition rate (currently {attritionPct}%, set on Setup) is an
+          assumption used to compute budgeted "Scheduled" figures. This compares it against what
+          actually happened — the observed gap between actual scheduled and actual delivered
+          trips, on days where both were reported — so you can tell if the assumption still holds
+          or needs adjusting.
+        </div>
+        {totalAttritionDays === 0 ? (
+          <EmptyChartNote>No days have both an actual scheduled and actual trips figure reported yet — enter both on the Daily Calendar's Actuals columns to see observed attrition here.</EmptyChartNote>
+        ) : (
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={attritionData} margin={{ top: 4, right: 10, left: -14, bottom: 0 }}>
+              <CartesianGrid stroke="var(--border-light)" vertical={false} />
+              <XAxis dataKey="month" tick={{ fontSize: 11 }} tickLine={false} />
+              <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} unit="%" />
+              <Tooltip content={<CoverageTooltip />} />
+              <ReferenceLine y={attritionPct} stroke={sampleGray} strokeDasharray="4 4" label={{ value: `Configured ${attritionPct}%`, fontSize: 11, fill: sampleGray, position: "insideTopRight" }} />
+              <Line dataKey="Observed attrition %" stroke={supplyTeal} strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
       </div>
     </div>
   );

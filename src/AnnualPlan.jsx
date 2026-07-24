@@ -1087,6 +1087,22 @@ function ProjectionTab({ planYear, growthPct, historyMonthly, rollup, annualTota
   );
 }
 
+// Recharts' default Tooltip has no built-in sum across a stacked bar's series, so this replaces
+// it with one that adds a "Total" row below the same per-series list.
+function StackTotalTooltip({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null;
+  const total = payload.reduce((s, p) => s + (p.value || 0), 0);
+  return (
+    <div style={{ fontSize: 12, background: card, border: "1px solid var(--border-light)", padding: "8px 10px" }}>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+      {payload.map((p) => (
+        <div key={p.dataKey} style={{ color: p.color }}>{p.name}: {p.value.toLocaleString()}</div>
+      ))}
+      <div style={{ borderTop: "1px solid var(--border-light)", marginTop: 4, paddingTop: 4, fontWeight: 600, color: text }}>Total: {total.toLocaleString()}</div>
+    </div>
+  );
+}
+
 /* ================= CAPACITY & SPLIT ================= */
 function SplitTab({ planYear, providers, rollup, annualTotals, providerColor }) {
   const chartData = MONTHS.map((label, i) => {
@@ -1110,7 +1126,7 @@ function SplitTab({ planYear, providers, rollup, annualTotals, providerColor }) 
             <CartesianGrid stroke="var(--border-light)" vertical={false} />
             <XAxis dataKey="month" tick={{ fontSize: 11 }} tickLine={false} />
             <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-            <Tooltip contentStyle={{ fontSize: 12, border: "1px solid var(--border-light)" }} formatter={(v) => v.toLocaleString()} />
+            <Tooltip content={<StackTotalTooltip />} />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             {providers.map((p) => (
               <Bar key={p.id} dataKey={p.id} name={p.name} stackId="s" fill={providerColor(p.id)} isAnimationActive={false} />
