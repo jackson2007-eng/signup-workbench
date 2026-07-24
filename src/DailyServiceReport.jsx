@@ -19,7 +19,8 @@ import { DARK_MODE_ENABLED } from "./themeFlag.js";
    holds a deliberate, re-importable copy rather than always-current coupling. */
 
 const text = "var(--text)", paper = "var(--paper)", card = "var(--card)",
-  supplyTeal = "var(--supply-teal)", gapRed = "var(--gap-red)", sampleGray = "var(--sample-gray)";
+  supplyTeal = "var(--supply-teal)", gapRed = "var(--gap-red)", sampleGray = "var(--sample-gray)",
+  demandAmber = "var(--demand-amber)";
 
 const nudgeBtn = { fontFamily: "'Barlow Condensed', sans-serif", fontSize: 13, fontWeight: 600, padding: "5px 10px", background: card, border: "1px solid var(--border-input)", color: text, cursor: "pointer", borderRadius: 2 };
 const primaryBtn = { ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal };
@@ -49,13 +50,6 @@ function effectiveProviders(providers, avgDemandByDow) {
 function scheduledTrips(delivered, attritionPct) {
   return delivered * (1 + (attritionPct || 0) / 100);
 }
-
-// A day (or a provider within a day) can carry an explicit uploaded `scheduledActual` figure —
-// real observed night-before scheduling counts, which needn't match the flat attrition-rate
-// estimate. When present it wins; otherwise the live computation above is the fallback, exactly
-// as before uploads existed.
-const dayScheduled = (row, attritionPct) => row.scheduledActual ?? scheduledTrips(row.trips, attritionPct);
-const providerScheduled = (p, attritionPct) => p.scheduledActual ?? scheduledTrips(p.trips, attritionPct);
 
 // Recomputes a full day-by-day-by-provider budget from a saved Annual Plan payload — the exact
 // same computation Annual Plan's own Split/Budget tabs run (buildProjection -> splitDay per day),
@@ -88,32 +82,32 @@ const CURRENT_YEAR = new Date().getFullYear();
 const EXCEL_EPOCH = 25569;
 const serialToISO = (serial) => new Date(Math.round((Math.floor(serial) - EXCEL_EPOCH) * 86400000)).toISOString().slice(0, 10);
 
-// Column layout for the actuals template/upload — mirrors the Daily Calendar table's own columns
-// exactly (Holiday excluded: it's derived from date-holidays, not user data), so a downloaded
-// template always round-trips through uploadActuals with no translation step.
+// Column layout for the actuals template/upload — a separate parallel data set from the budget
+// columns (not a translation of them), so every header is explicitly labeled "Actual ..." rather
+// than reusing the budget table's own column names.
 function actualsColumns(providerIds, providerMeta) {
   const cols = [
-    { header: "Total scheduled", field: "scheduledActual" },
-    { header: "Total trips", field: "trips" },
-    { header: "Unaccommodated", field: "unaccommodated" },
+    { header: "Actual scheduled", field: "scheduled" },
+    { header: "Actual trips", field: "trips" },
+    { header: "Actual unaccommodated", field: "unaccommodated" },
   ];
   for (const id of providerIds) {
     const name = providerMeta[id]?.name || id;
-    cols.push({ header: `${name} scheduled`, providerId: id, field: "scheduledActual" });
-    cols.push({ header: `${name} trips`, providerId: id, field: "trips" });
-    cols.push({ header: `${name} hours`, providerId: id, field: "hours" });
-    cols.push({ header: `${name} cost`, providerId: id, field: "cost" });
+    cols.push({ header: `${name} actual scheduled`, providerId: id, field: "scheduled" });
+    cols.push({ header: `${name} actual trips`, providerId: id, field: "trips" });
+    cols.push({ header: `${name} actual hours`, providerId: id, field: "hours" });
+    cols.push({ header: `${name} actual cost`, providerId: id, field: "cost" });
   }
   return cols;
 }
 
-// Blank fill-in workbook, one sheet per year — union of every year already loaded plus the
-// current calendar year back MAX_TEMPLATE_YEARS, so the template is useful for backfilling
-// history even before any of those years exist in `days` yet.
+// Blank fill-in workbook, one sheet per year — union of every year already loaded (budget or
+// actuals) plus the current calendar year back MAX_TEMPLATE_YEARS, so the template is useful for
+// backfilling history even before any of those years have data yet.
 const MAX_TEMPLATE_YEARS = 5;
-function downloadActualsTemplate(providerIds, providerMeta, days) {
+function downloadActualsTemplate(providerIds, providerMeta, days, actuals) {
   const cols = actualsColumns(providerIds, providerMeta);
-  const offered = new Set(yearsPresent(days));
+  const offered = new Set([...yearsPresent(days), ...yearsPresent(actuals)]);
   for (let i = 0; i < MAX_TEMPLATE_YEARS; i++) offered.add(CURRENT_YEAR - i);
   const sortedYears = [...offered].sort((a, b) => b - a);
   const wb = XLSX.utils.book_new();
@@ -132,11 +126,9 @@ function downloadActualsTemplate(providerIds, providerMeta, days) {
 // Parses every sheet in the uploaded workbook, matching columns by exact header text against the
 // same labels downloadActualsTemplate writes (robust to reordered/extra columns since it looks
 // each header up rather than assuming position). Blank cells are simply omitted from the day's
-// update — they never clobber an existing value, so "fill in what you have" is safe. A day not
-// already in `days` (a historical year never imported from Annual Plan) is created fresh from
-// the upload alone; provider name/role for a brand-new day's entries come from `providerMeta`
-// (today's configured providers — the only ones a template could have offered columns for).
-function uploadActuals(file, providerIds, providerMeta, days, onDone) {
+// update — they never clobber an existing value. Merges into `actuals`, a data set kept fully
+// separate from the budget `days` — a date doesn't need a budget entry to receive actuals.
+function uploadActuals(file, providerIds, providerMeta, actuals, onDone) {
   const cols = actualsColumns(providerIds, providerMeta);
   const rd = new FileReader();
   rd.onload = () => {
@@ -173,23 +165,22 @@ function uploadActuals(file, providerIds, providerMeta, days, onDone) {
         }
       }
       if (!parsedDays) { onDone({ error: "Could not find any recognizable Date + value rows in that file — check it matches the downloaded template's columns." }); return; }
-      const merged = { ...days };
+      const merged = { ...actuals };
       for (const [iso, upd] of Object.entries(updates)) {
-        const base = merged[iso] || { dow: dowOfIso(iso), holidayName: null, trips: 0, unaccommodated: 0, byProvider: {} };
-        const nextDay = { ...base };
-        if (upd.trips != null) nextDay.trips = upd.trips;
-        if (upd.unaccommodated != null) nextDay.unaccommodated = upd.unaccommodated;
-        if (upd.scheduledActual != null) nextDay.scheduledActual = upd.scheduledActual;
-        const nextByProvider = { ...base.byProvider };
-        for (const [pid, pu] of Object.entries(upd.byProvider)) {
-          const baseP = nextByProvider[pid] || { name: providerMeta[pid]?.name || pid, role: providerMeta[pid]?.role || "capacity", trips: 0, hours: null, cost: 0 };
-          nextByProvider[pid] = { ...baseP, ...pu };
+        const base = merged[iso] || {};
+        const next = { ...base };
+        if (upd.scheduled != null) next.scheduled = upd.scheduled;
+        if (upd.trips != null) next.trips = upd.trips;
+        if (upd.unaccommodated != null) next.unaccommodated = upd.unaccommodated;
+        if (Object.keys(upd.byProvider).length) {
+          const nextByProvider = { ...(base.byProvider || {}) };
+          for (const [pid, pu] of Object.entries(upd.byProvider)) nextByProvider[pid] = { ...(nextByProvider[pid] || {}), ...pu };
+          next.byProvider = nextByProvider;
         }
-        nextDay.byProvider = nextByProvider;
-        merged[iso] = nextDay;
+        merged[iso] = next;
       }
       const skippedNote = (skippedRows || skippedValues) ? `, skipped ${skippedRows} unreadable row(s) and ${skippedValues} unreadable value(s)` : "";
-      onDone({ info: `Loaded actual data for ${parsedDays} day(s) across ${years.size} year(s)${skippedNote}.`, days: merged });
+      onDone({ info: `Loaded actual data for ${parsedDays} day(s) across ${years.size} year(s)${skippedNote}.`, actuals: merged });
     } catch (e) {
       onDone({ error: "Could not read that file — check it matches the downloaded template's columns." });
     }
@@ -209,6 +200,9 @@ export default function DailyServiceReport({ onHome, user, logout }) {
   const [tab, setTab] = useState("setup");
   const [source, setSource] = useState(() => clone(DAILYSERVICE_SAMPLE.source));
   const [days, setDays] = useState(() => clone(DAILYSERVICE_SAMPLE.days));
+  // Kept fully separate from `days` (the budget) so the two can be compared side by side rather
+  // than one overwriting the other.
+  const [actuals, setActuals] = useState({});
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState(null);
   // Default 9% matches the real DATS budget's own "Percentage Increase on scheduling night
@@ -273,27 +267,28 @@ export default function DailyServiceReport({ onHome, user, logout }) {
     for (const d of Object.values(days)) for (const [id, p] of Object.entries(d.byProvider || {})) meta[id] = { name: p.name, role: p.role };
     return meta;
   }, [days]);
-  const yearsLoaded = useMemo(() => yearsPresent(days), [days]);
+  const yearsLoaded = useMemo(() => [...new Set([...yearsPresent(days), ...yearsPresent(actuals)])].sort((a, b) => a - b), [days, actuals]);
 
   const [actualsUploadInfo, setActualsUploadInfo] = useState(null);
   const [actualsUploadError, setActualsUploadError] = useState(null);
-  const handleDownloadActualsTemplate = () => downloadActualsTemplate(providerIds, providerMeta, days);
+  const handleDownloadActualsTemplate = () => downloadActualsTemplate(providerIds, providerMeta, days, actuals);
   const handleUploadActuals = (file) => {
     setActualsUploadError(null);
-    uploadActuals(file, providerIds, providerMeta, days, (result) => {
+    uploadActuals(file, providerIds, providerMeta, actuals, (result) => {
       if (result.error) { setActualsUploadError(result.error); return; }
-      setDays(result.days);
+      setActuals(result.actuals);
       setActualsUploadInfo(result.info);
     });
   };
 
-  const buildPayload = () => ({ kind: "dailyservice", source, days, attritionPct });
+  const buildPayload = () => ({ kind: "dailyservice", source, days, actuals, attritionPct });
   const applyPayload = (p) => {
         if (p.source !== undefined) setSource(p.source);
         if (p.days) setDays(p.days);
+        if (p.actuals) setActuals(p.actuals);
         if (p.attritionPct != null) setAttritionPct(p.attritionPct);
   };
-  const payloadJson = useMemo(() => JSON.stringify(buildPayload()), [source, days, attritionPct]);
+  const payloadJson = useMemo(() => JSON.stringify(buildPayload()), [source, days, actuals, attritionPct]);
   const { items: signups, create: createSignup, rename: renameSignup, remove: removeSignup } = useSignupList("dailyservice");
   const [projectId, setProjectId] = useState(null);
   useEffect(() => {
@@ -364,7 +359,7 @@ export default function DailyServiceReport({ onHome, user, logout }) {
           }} />
         )}
         {tab === "calendar" && (
-          <CalendarTab {...{ days, providerIds, providerMeta, attritionPct }} />
+          <CalendarTab {...{ days, actuals, setActuals, providerIds, providerMeta, attritionPct }} />
         )}
       </div>
     </div>
@@ -380,10 +375,9 @@ function SetupTab({ source, annualPlanSignups, selectedPlanId, setSelectedPlanId
         <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 12 }}>
           Mirrors a common paratransit scheduling practice: schedule more trips the night before
           than are actually expected to happen, to offset day-of attrition (cancellations,
-          no-shows). The Daily Calendar's "Scheduled" figures are each day's delivered trips
-          scaled up by this rate, computed live — change it any time without re-importing the
-          budget. A day with its own uploaded scheduled count (see "Import actual day-by-day
-          data" below) shows that real figure instead of this estimate.
+          no-shows). The Daily Calendar's budget "Scheduled" figures are each day's delivered
+          trips scaled up by this rate, computed live — change it any time without re-importing
+          the budget. Real observed scheduled counts live separately, in Actuals (see below).
         </div>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
           Night-before attrition rate (%)
@@ -418,14 +412,18 @@ function SetupTab({ source, annualPlanSignups, selectedPlanId, setSelectedPlanId
       </div>
 
       <div style={cardStyle}>
-        <div style={hTitle}>Import actual day-by-day data</div>
+        <div style={hTitle}>Actual day-by-day data</div>
         <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 12 }}>
-          Download a fill-in template with the exact columns the Daily Calendar shows — Total
-          scheduled, Total trips, Unaccommodated, and each provider's Scheduled/Trips/Hours/Cost —
-          one sheet per year. Fill in whatever real numbers you have (leave the rest blank) and
-          upload it back: matching dates merge into the calendar, filling in or overwriting just
-          the values you provided; a date from a year never imported from Annual Plan is created
-          fresh. There's no year limit — this builds up a permanent day-by-day archive over time.
+          Actuals are a separate data set from the budget above, so the two can be compared side
+          by side rather than one overwriting the other. Turn on "Actuals" in the Daily
+          Calendar's filter bar to see them — every actual cell there is amber-colored, and
+          <b> clicking any actual cell lets you type a value directly</b> (a date needs an
+          existing row — from a budget import or a prior upload — before it can be hand-edited).
+          For bulk entry, download a fill-in template — Actual scheduled/trips/unaccommodated,
+          plus each provider's actual scheduled/trips/hours/cost, one sheet per year — fill in
+          whatever real numbers you have (leave the rest blank) and upload it back; blank cells
+          never overwrite an existing value. There's no year limit — this builds a permanent
+          actuals archive over time, independent of any single Annual Plan import.
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button style={nudgeBtn} disabled={!providerIds.length} onClick={downloadActualsTemplate}>
@@ -490,8 +488,38 @@ const chipBtn = (on) => ({
   fontWeight: 600, borderRadius: 2,
 });
 
-function CalendarTab({ days, providerIds, providerMeta, attritionPct }) {
-  const availableYears = useMemo(() => yearsPresent(days), [days]);
+// A budget cell rendered as plain text; an actual cell rendered the same way until clicked, at
+// which point it becomes a small input. Committing an empty value clears the field (`null`) so
+// "not yet reported" stays distinct from "reported as zero" — same philosophy the upload path
+// already uses for blank template cells.
+function EditableActualCell({ value, onCommit, color }) {
+  const [editing, setEditing] = useState(false);
+  const [txt, setTxt] = useState("");
+  if (!editing) {
+    return (
+      <td style={{ ...tdStyle, textAlign: "right", color: color || text, cursor: "pointer" }}
+        onClick={() => { setTxt(value != null ? String(value) : ""); setEditing(true); }}
+        title="Click to edit">
+        {value != null ? Math.round(value).toLocaleString() : "—"}
+      </td>
+    );
+  }
+  const commit = () => {
+    const t = txt.trim();
+    onCommit(t === "" ? null : (Number.isFinite(Number(t)) ? Number(t) : value));
+    setEditing(false);
+  };
+  return (
+    <td style={{ ...tdStyle, padding: 2 }}>
+      <input autoFocus type="text" inputMode="decimal" value={txt} onChange={(e) => setTxt(e.target.value)}
+        onBlur={commit} onKeyDown={(e) => { if (e.key === "Enter") commit(); if (e.key === "Escape") setEditing(false); }}
+        style={{ width: 70, padding: "2px 4px", border: "1px solid var(--supply-teal)", borderRadius: 2, fontSize: 12, textAlign: "right", background: card, color: text }} />
+    </td>
+  );
+}
+
+function CalendarTab({ days, actuals, setActuals, providerIds, providerMeta, attritionPct }) {
+  const availableYears = useMemo(() => [...new Set([...yearsPresent(days), ...yearsPresent(actuals)])].sort((a, b) => a - b), [days, actuals]);
   const [selectedYear, setSelectedYear] = useState(() => availableYears[availableYears.length - 1] || new Date().getFullYear());
   useEffect(() => {
     if (availableYears.length && !availableYears.includes(selectedYear)) setSelectedYear(availableYears[availableYears.length - 1]);
@@ -500,66 +528,115 @@ function CalendarTab({ days, providerIds, providerMeta, attritionPct }) {
   const [selectedMonths, setSelectedMonths] = useState(() => new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
   const toggleMonth = (mi) => setSelectedMonths((s) => { const n = new Set(s); n.has(mi) ? n.delete(mi) : n.add(mi); return n; });
 
-  // Two logical column groups mirroring the real sheet's parallel Start-of-Day/End-of-Day
-  // blocks — "scheduled" (night-before) vs "trips" (end-of-day delivered). One shared visibility
-  // map backs both the quick group-toggles and the fine-grained per-column checkboxes below, so
-  // there's a single source of truth rather than two competing filter systems.
+  // Three logical column groups: budget "scheduled" (night-before) and "trips" (end-of-day
+  // delivered), mirroring the real sheet's parallel blocks, plus "actuals" — a separate
+  // comparable data set, not a variant of the budget figures. One shared visibility map backs
+  // both the quick group-toggles and the fine-grained per-column checkboxes below.
   const schedKeys = useMemo(() => ["schedTotal", ...providerIds.map((id) => `sched:${id}`)], [providerIds]);
   const tripsKeys = useMemo(() => ["tripsTotal", "unaccom", ...providerIds.flatMap((id) => [`trips:${id}`, `hrs:${id}`, `cost:${id}`])], [providerIds]);
+  const actKeys = useMemo(() => ["actSchedTotal", "actTripsTotal", "actUnaccom", ...providerIds.flatMap((id) => [`actSched:${id}`, `actTrips:${id}`, `actHrs:${id}`, `actCost:${id}`])], [providerIds]);
   const [visibleCols, setVisibleCols] = useState(() => {
     const v = { holiday: true };
     for (const k of schedKeys) v[k] = true;
     for (const k of tripsKeys) v[k] = true;
+    for (const k of actKeys) v[k] = false;
     return v;
   });
   useEffect(() => {
-    // New providers (e.g. a fresh import) default to visible; never clobbers a choice already made.
+    // New providers (e.g. a fresh import) default budget columns to visible, actual columns to
+    // hidden (opt-in) — never clobbers a choice already made.
     setVisibleCols((v) => {
       const next = { ...v };
       let changed = false;
       for (const k of [...schedKeys, ...tripsKeys]) if (!(k in next)) { next[k] = true; changed = true; }
+      for (const k of actKeys) if (!(k in next)) { next[k] = false; changed = true; }
       return changed ? next : v;
     });
-  }, [schedKeys, tripsKeys]);
+  }, [schedKeys, tripsKeys, actKeys]);
   const setCol = (k, val) => setVisibleCols((v) => ({ ...v, [k]: val }));
   const setGroup = (keys, val) => setVisibleCols((v) => { const n = { ...v }; for (const k of keys) n[k] = val; return n; });
   const schedAnyOn = schedKeys.some((k) => visibleCols[k]);
   const tripsAnyOn = tripsKeys.some((k) => visibleCols[k]);
+  const actAnyOn = actKeys.some((k) => visibleCols[k]);
   const schedAllOn = schedKeys.every((k) => visibleCols[k]);
   const tripsAllOn = tripsKeys.every((k) => visibleCols[k]);
+  const actAllOn = actKeys.every((k) => visibleCols[k]);
   const [customizeOpen, setCustomizeOpen] = useState(false);
 
+  const setActualField = (iso, field, providerId, value) => {
+    setActuals((a) => {
+      const next = { ...a };
+      const base = next[iso] ? { ...next[iso] } : {};
+      if (providerId) {
+        const bp = { ...(base.byProvider || {}) };
+        const pbase = { ...(bp[providerId] || {}) };
+        if (value == null) delete pbase[field]; else pbase[field] = value;
+        bp[providerId] = pbase;
+        base.byProvider = bp;
+      } else {
+        if (value == null) delete base[field]; else base[field] = value;
+      }
+      next[iso] = base;
+      return next;
+    });
+  };
+
+  // Union of budget and actuals dates — a date with actuals but no budget import still gets a
+  // row, with budget columns rendering "—" for that date.
+  const allIsos = useMemo(() => new Set([...Object.keys(days), ...Object.keys(actuals)]), [days, actuals]);
   const dayRows = useMemo(() => (
-    Object.keys(days)
+    [...allIsos]
       .filter((iso) => iso.slice(0, 4) === String(selectedYear))
       .sort()
-      .map((iso) => ({ iso, month: monthOfIso(iso), ...days[iso] }))
+      .map((iso) => {
+        const d = days[iso];
+        return {
+          iso, month: monthOfIso(iso),
+          dow: d ? d.dow : dowOfIso(iso),
+          holidayName: d ? d.holidayName : null,
+          trips: d ? d.trips : null,
+          unaccommodated: d ? d.unaccommodated : null,
+          byProvider: d ? d.byProvider : {},
+          act: actuals[iso] || null,
+        };
+      })
       .filter((r) => selectedMonths.has(r.month))
-  ), [days, selectedYear, selectedMonths]);
+  ), [allIsos, days, actuals, selectedYear, selectedMonths]);
 
   // Grand totals across whatever's currently in view (selected year + months) — recomputed on
   // every filter change, not just once, so the footer always reflects what the table is showing.
   const totals = useMemo(() => {
-    const t = { schedTotal: 0, tripsTotal: 0, unaccom: 0, byProvider: {} };
-    for (const id of providerIds) t.byProvider[id] = { sched: 0, trips: 0, hrs: 0, cost: 0 };
+    const t = { schedTotal: 0, tripsTotal: 0, unaccom: 0, actSchedTotal: 0, actTripsTotal: 0, actUnaccom: 0, byProvider: {} };
+    for (const id of providerIds) t.byProvider[id] = { sched: 0, trips: 0, hrs: 0, cost: 0, actSched: 0, actTrips: 0, actHrs: 0, actCost: 0 };
     for (const r of dayRows) {
-      t.schedTotal += dayScheduled(r, attritionPct);
-      t.tripsTotal += r.trips;
+      t.schedTotal += scheduledTrips(r.trips || 0, attritionPct);
+      t.tripsTotal += r.trips || 0;
       t.unaccom += r.unaccommodated || 0;
+      t.actSchedTotal += r.act?.scheduled || 0;
+      t.actTripsTotal += r.act?.trips || 0;
+      t.actUnaccom += r.act?.unaccommodated || 0;
       for (const id of providerIds) {
         const p = r.byProvider[id];
-        if (!p) continue;
+        const ap = r.act?.byProvider?.[id];
         const pt = t.byProvider[id];
-        pt.sched += providerScheduled(p, attritionPct);
-        pt.trips += p.trips || 0;
-        pt.hrs += p.hours || 0;
-        pt.cost += p.cost || 0;
+        if (p) {
+          pt.sched += scheduledTrips(p.trips || 0, attritionPct);
+          pt.trips += p.trips || 0;
+          pt.hrs += p.hours || 0;
+          pt.cost += p.cost || 0;
+        }
+        if (ap) {
+          pt.actSched += ap.scheduled || 0;
+          pt.actTrips += ap.trips || 0;
+          pt.actHrs += ap.hours || 0;
+          pt.actCost += ap.cost || 0;
+        }
       }
     }
     return t;
   }, [dayRows, providerIds, attritionPct]);
 
-  const metricColCount = [...schedKeys, ...tripsKeys].filter((k) => visibleCols[k]).length;
+  const metricColCount = [...schedKeys, ...tripsKeys, ...actKeys].filter((k) => visibleCols[k]).length;
   const colCount = 2 + (visibleCols.holiday ? 1 : 0) + metricColCount;
 
   return (
@@ -571,9 +648,10 @@ function CalendarTab({ days, providerIds, providerMeta, attritionPct }) {
           Split/Budget tabs compute it — capacity providers take trips up to scheduled hours ×
           productivity in list order, remainder providers absorb what's left. Unaccommodated
           demand is flagged, never hidden. "Scheduled" columns are each delivered figure scaled
-          up by the {attritionPct}% night-before attrition rate set on the Setup tab, unless a
-          day has its own uploaded scheduled count, which is shown instead. Weekend rows are
-          shaded violet to set them apart from weekdays.
+          up by the {attritionPct}% night-before attrition rate set on the Setup tab. Actuals are
+          a separate data set for comparison — turn on "Actuals" below to see them, uploaded or
+          typed directly into a cell. Weekend rows are shaded violet to set them apart from
+          weekdays.
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginBottom: 8, padding: "8px 10px", background: "var(--tint-neutral-b)", border: "1px solid var(--border-light)" }}>
@@ -594,12 +672,16 @@ function CalendarTab({ days, providerIds, providerMeta, attritionPct }) {
 
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, cursor: "pointer" }}>
-              <input type="checkbox" checked={schedAllOn} onChange={(e) => { if (!e.target.checked && !tripsAnyOn) return; setGroup(schedKeys, e.target.checked); }} />
+              <input type="checkbox" checked={schedAllOn} onChange={(e) => { if (!e.target.checked && !tripsAnyOn && !actAnyOn) return; setGroup(schedKeys, e.target.checked); }} />
               Scheduled (night-before)
             </label>
             <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, cursor: "pointer" }}>
-              <input type="checkbox" checked={tripsAllOn} onChange={(e) => { if (!e.target.checked && !schedAnyOn) return; setGroup(tripsKeys, e.target.checked); }} />
+              <input type="checkbox" checked={tripsAllOn} onChange={(e) => { if (!e.target.checked && !schedAnyOn && !actAnyOn) return; setGroup(tripsKeys, e.target.checked); }} />
               Trips (end of day)
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, cursor: "pointer" }}>
+              <input type="checkbox" checked={actAllOn} onChange={(e) => { if (!e.target.checked && !schedAnyOn && !tripsAnyOn) return; setGroup(actKeys, e.target.checked); }} />
+              <span style={{ color: demandAmber, fontWeight: 700 }}>Actuals</span>
             </label>
           </div>
 
@@ -646,6 +728,28 @@ function CalendarTab({ days, providerIds, providerMeta, attritionPct }) {
                 </div>
               ))}
             </div>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: demandAmber, marginBottom: 4 }}>ACTUALS</div>
+              <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, cursor: "pointer", marginBottom: 2 }}>
+                <input type="checkbox" checked={!!visibleCols.actSchedTotal} onChange={(e) => setCol("actSchedTotal", e.target.checked)} /> Actual scheduled
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, cursor: "pointer", marginBottom: 2 }}>
+                <input type="checkbox" checked={!!visibleCols.actTripsTotal} onChange={(e) => setCol("actTripsTotal", e.target.checked)} /> Actual trips
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, cursor: "pointer", marginBottom: 2 }}>
+                <input type="checkbox" checked={!!visibleCols.actUnaccom} onChange={(e) => setCol("actUnaccom", e.target.checked)} /> Actual unaccommodated
+              </label>
+              {providerIds.map((id) => (
+                <div key={id} style={{ marginBottom: 2 }}>
+                  {["Sched", "Trips", "Hrs", "Cost"].map((suf) => (
+                    <label key={suf} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, cursor: "pointer" }}>
+                      <input type="checkbox" checked={!!visibleCols[`act${suf}:${id}`]} onChange={(e) => setCol(`act${suf}:${id}`, e.target.checked)} />
+                      {providerMeta[id]?.name} actual {suf === "Sched" ? "scheduled" : suf === "Trips" ? "trips" : suf === "Hrs" ? "hours" : "cost"}
+                    </label>
+                  ))}
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -667,6 +771,17 @@ function CalendarTab({ days, providerIds, providerMeta, attritionPct }) {
                     {visibleCols[`cost:${id}`] && <th style={{ ...thStyle, textAlign: "right" }}>{providerMeta[id]?.name} cost</th>}
                   </React.Fragment>
                 ))}
+                {visibleCols.actSchedTotal && <th style={{ ...thStyle, textAlign: "right", color: demandAmber }}>Actual scheduled</th>}
+                {visibleCols.actTripsTotal && <th style={{ ...thStyle, textAlign: "right", color: demandAmber }}>Actual trips</th>}
+                {visibleCols.actUnaccom && <th style={{ ...thStyle, textAlign: "right", color: demandAmber }}>Actual unaccommodated</th>}
+                {providerIds.map((id) => (
+                  <React.Fragment key={`act-${id}`}>
+                    {visibleCols[`actSched:${id}`] && <th style={{ ...thStyle, textAlign: "right", color: demandAmber }}>{providerMeta[id]?.name} actual scheduled</th>}
+                    {visibleCols[`actTrips:${id}`] && <th style={{ ...thStyle, textAlign: "right", color: demandAmber }}>{providerMeta[id]?.name} actual trips</th>}
+                    {visibleCols[`actHrs:${id}`] && <th style={{ ...thStyle, textAlign: "right", color: demandAmber }}>{providerMeta[id]?.name} actual hours</th>}
+                    {visibleCols[`actCost:${id}`] && <th style={{ ...thStyle, textAlign: "right", color: demandAmber }}>{providerMeta[id]?.name} actual cost</th>}
+                  </React.Fragment>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -679,22 +794,37 @@ function CalendarTab({ days, providerIds, providerMeta, attritionPct }) {
                   </tr>
                   {dayRows.filter((r) => r.month === mi).map((r) => {
                     const weekend = r.dow === 0 || r.dow === 6;
+                    const act = r.act;
                     return (
                       <tr key={r.iso} style={{ borderBottom: "1px solid var(--border-light)", background: weekend ? "var(--tint-weekend-b)" : undefined }}>
                         <td style={tdStyle}>{r.iso}</td>
                         <td style={tdStyle}>{DOW_SHORT[r.dow]}</td>
                         {visibleCols.holiday && <td style={{ ...tdStyle, color: r.holidayName ? gapRed : sampleGray }}>{r.holidayName || ""}</td>}
-                        {visibleCols.schedTotal && <td style={{ ...tdStyle, textAlign: "right", color: supplyTeal }}>{Math.round(dayScheduled(r, attritionPct)).toLocaleString()}</td>}
-                        {visibleCols.tripsTotal && <td style={{ ...tdStyle, textAlign: "right" }}>{Math.round(r.trips).toLocaleString()}</td>}
+                        {visibleCols.schedTotal && <td style={{ ...tdStyle, textAlign: "right", color: supplyTeal }}>{r.trips != null ? Math.round(scheduledTrips(r.trips, attritionPct)).toLocaleString() : "—"}</td>}
+                        {visibleCols.tripsTotal && <td style={{ ...tdStyle, textAlign: "right" }}>{r.trips != null ? Math.round(r.trips).toLocaleString() : "—"}</td>}
                         {visibleCols.unaccom && <td style={{ ...tdStyle, textAlign: "right", color: r.unaccommodated > 0 ? gapRed : sampleGray }}>{r.unaccommodated > 0 ? Math.round(r.unaccommodated).toLocaleString() : "—"}</td>}
                         {providerIds.map((id) => {
                           const p = r.byProvider[id];
                           return (
                             <React.Fragment key={id}>
-                              {visibleCols[`sched:${id}`] && <td style={{ ...tdStyle, textAlign: "right", color: supplyTeal }}>{p ? Math.round(providerScheduled(p, attritionPct)).toLocaleString() : "—"}</td>}
+                              {visibleCols[`sched:${id}`] && <td style={{ ...tdStyle, textAlign: "right", color: supplyTeal }}>{p ? Math.round(scheduledTrips(p.trips, attritionPct)).toLocaleString() : "—"}</td>}
                               {visibleCols[`trips:${id}`] && <td style={{ ...tdStyle, textAlign: "right" }}>{p ? Math.round(p.trips).toLocaleString() : "—"}</td>}
                               {visibleCols[`hrs:${id}`] && <td style={{ ...tdStyle, textAlign: "right", color: sampleGray }}>{p && p.hours != null ? Math.round(p.hours).toLocaleString() : "—"}</td>}
                               {visibleCols[`cost:${id}`] && <td style={{ ...tdStyle, textAlign: "right", color: sampleGray }}>{p ? `$${Math.round(p.cost).toLocaleString()}` : "—"}</td>}
+                            </React.Fragment>
+                          );
+                        })}
+                        {visibleCols.actSchedTotal && <EditableActualCell value={act?.scheduled ?? null} color={demandAmber} onCommit={(v) => setActualField(r.iso, "scheduled", null, v)} />}
+                        {visibleCols.actTripsTotal && <EditableActualCell value={act?.trips ?? null} color={demandAmber} onCommit={(v) => setActualField(r.iso, "trips", null, v)} />}
+                        {visibleCols.actUnaccom && <EditableActualCell value={act?.unaccommodated ?? null} color={demandAmber} onCommit={(v) => setActualField(r.iso, "unaccommodated", null, v)} />}
+                        {providerIds.map((id) => {
+                          const ap = act?.byProvider?.[id];
+                          return (
+                            <React.Fragment key={`act-${id}`}>
+                              {visibleCols[`actSched:${id}`] && <EditableActualCell value={ap?.scheduled ?? null} color={demandAmber} onCommit={(v) => setActualField(r.iso, "scheduled", id, v)} />}
+                              {visibleCols[`actTrips:${id}`] && <EditableActualCell value={ap?.trips ?? null} color={demandAmber} onCommit={(v) => setActualField(r.iso, "trips", id, v)} />}
+                              {visibleCols[`actHrs:${id}`] && <EditableActualCell value={ap?.hours ?? null} color={demandAmber} onCommit={(v) => setActualField(r.iso, "hours", id, v)} />}
+                              {visibleCols[`actCost:${id}`] && <EditableActualCell value={ap?.cost ?? null} color={demandAmber} onCommit={(v) => setActualField(r.iso, "cost", id, v)} />}
                             </React.Fragment>
                           );
                         })}
@@ -720,6 +850,20 @@ function CalendarTab({ days, providerIds, providerMeta, attritionPct }) {
                       {visibleCols[`trips:${id}`] && <td style={{ ...tdStyle, textAlign: "right" }}>{Math.round(pt.trips).toLocaleString()}</td>}
                       {visibleCols[`hrs:${id}`] && <td style={{ ...tdStyle, textAlign: "right", color: sampleGray }}>{Math.round(pt.hrs).toLocaleString()}</td>}
                       {visibleCols[`cost:${id}`] && <td style={{ ...tdStyle, textAlign: "right", color: sampleGray }}>${Math.round(pt.cost).toLocaleString()}</td>}
+                    </React.Fragment>
+                  );
+                })}
+                {visibleCols.actSchedTotal && <td style={{ ...tdStyle, textAlign: "right", color: demandAmber }}>{Math.round(totals.actSchedTotal).toLocaleString()}</td>}
+                {visibleCols.actTripsTotal && <td style={{ ...tdStyle, textAlign: "right", color: demandAmber }}>{Math.round(totals.actTripsTotal).toLocaleString()}</td>}
+                {visibleCols.actUnaccom && <td style={{ ...tdStyle, textAlign: "right", color: demandAmber }}>{Math.round(totals.actUnaccom).toLocaleString()}</td>}
+                {providerIds.map((id) => {
+                  const pt = totals.byProvider[id];
+                  return (
+                    <React.Fragment key={`act-${id}`}>
+                      {visibleCols[`actSched:${id}`] && <td style={{ ...tdStyle, textAlign: "right", color: demandAmber }}>{Math.round(pt.actSched).toLocaleString()}</td>}
+                      {visibleCols[`actTrips:${id}`] && <td style={{ ...tdStyle, textAlign: "right", color: demandAmber }}>{Math.round(pt.actTrips).toLocaleString()}</td>}
+                      {visibleCols[`actHrs:${id}`] && <td style={{ ...tdStyle, textAlign: "right", color: demandAmber }}>{Math.round(pt.actHrs).toLocaleString()}</td>}
+                      {visibleCols[`actCost:${id}`] && <td style={{ ...tdStyle, textAlign: "right", color: demandAmber }}>${Math.round(pt.actCost).toLocaleString()}</td>}
                     </React.Fragment>
                   );
                 })}
