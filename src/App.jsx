@@ -1056,10 +1056,12 @@ function occupancyDemand(DEM, glob) {
 }
 
 // The demand shape the optimizer chases: occupancy model (opt-in) or raw demand with edge staging.
+// deadheadEnabled defaults to true when unset (pre-toggle saves always had staging on); false
+// zeroes out the pull-out/pull-in tails entirely, same as if both minutes were 0.
 function targetDemand(DEM, glob) {
-  return glob && glob.occupancyTarget
-    ? occupancyDemand(DEM, glob)
-    : schedulingDemand(DEM, glob ? glob.deadheadOutMin : 0, glob ? glob.deadheadInMin : 0);
+  if (glob && glob.occupancyTarget) return occupancyDemand(DEM, glob);
+  const staged = !glob || glob.deadheadEnabled !== false;
+  return schedulingDemand(DEM, staged && glob ? glob.deadheadOutMin : 0, staged && glob ? glob.deadheadInMin : 0);
 }
 
 // Service span widened by the pull-out/pull-in lead times, for AUTOMATIC candidate legality
@@ -1068,10 +1070,12 @@ function targetDemand(DEM, glob) {
 // classification rule's end limit and the demand-side edge staging both allow it — the span
 // becomes a hard wall the deadhead settings can never actually reach. The raw span still
 // governs the minVeh bonus window (actual service, not staging) and manual edits, which stay
-// flag-only per doctrine.
+// flag-only per doctrine. Unchecking "pull-out/pull-in lead time" (glob.deadheadEnabled) drops
+// this back to the raw span, same as setting both minutes to 0.
 function effSpan(spans, d, glob) {
   const s = spans[d];
   if (!s) return s;
+  if (glob.deadheadEnabled === false) return s;
   return [s[0] - (glob.deadheadOutMin || 0), s[1] + (glob.deadheadInMin || 0)];
 }
 
@@ -2993,6 +2997,7 @@ export default function App({ onHome, user, logout }) {
           if (!Array.isArray(g.recycleWindow)) g.recycleWindow = [795, 900];
           if (g.recycleCount == null) g.recycleCount = 15;
           if (g.occupancyTarget == null) g.occupancyTarget = false;
+          if (g.deadheadEnabled == null) g.deadheadEnabled = true;
           if (g.min10 == null) g.min10 = 0;
           if (g.scheduleStability == null) g.scheduleStability = 3;
           setGlob(g);
@@ -3165,8 +3170,8 @@ export default function App({ onHome, user, logout }) {
 
   const holidayCountForDay = useMemo(() => holidays.filter((h) => h.runsAs === day).length, [holidays, day]);
   const ftCov = useMemo(() => buildSupply(board), [board]);
-  const eng = useMemo(() => computeEngine(DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime]);
-  const base = useMemo(() => computeEngine(DEM, buildSupply(baselineBoard), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, baselineBoard, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime]);
+  const eng = useMemo(() => computeEngine(DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.deadheadEnabled, glob.occupancyTarget, glob.avgCycleTime]);
+  const base = useMemo(() => computeEngine(DEM, buildSupply(baselineBoard), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, baselineBoard, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.deadheadEnabled, glob.occupancyTarget, glob.avgCycleTime]);
   const recycleViol = useMemo(() => recycleViolations(board, glob), [board, glob.recycleEnabled, glob.recycleTurnaround, glob.recycleWindow, glob.recycleCount]);
   const P = eng.perDay[day];
   // Week-wide requirement sizing: total capped vehicle-hours across all 7 days,
@@ -3221,7 +3226,7 @@ export default function App({ onHome, user, logout }) {
       map.set("rm" + o.id, (cur - score([...board.map(cloneSeg), cloneSeg(o)])) * 100);
     }
     return map;
-  }, [showDiff, changedCount, boardDiff, board, DEM, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.occupancyTarget, glob.avgCycleTime]);
+  }, [showDiff, changedCount, boardDiff, board, DEM, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.deadheadEnabled, glob.occupancyTarget, glob.avgCycleTime]);
   const deltaPill = (d) => d == null ? null : (
     <span style={{ fontWeight: 700, color: d >= 0 ? supplyTeal : gapRed }}> {d >= 0 ? "+" : ""}{d.toFixed(2)} cov</span>
   );
@@ -5852,6 +5857,13 @@ export default function App({ onHome, user, logout }) {
                   <b>Off-peak weighting</b> gives quiet times of day a bit more service than raw demand alone, since off-peak trips share rides less. 0 = follow demand exactly; higher % = flatter, more even coverage. Only compare scores between signups using the same weighting.<br /><br />
                   <b>Schedule stability</b> affects Suggestions, Deep optimize, Retime, and the Optimization monitor: 0 chases every coverage point regardless of disruption; higher = a stronger pull to keep shifts where they already are, only moving one when the coverage gain is worth it.
                 </div>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 12 }}>
+                  <input type="checkbox" checked={!!glob.occupancyTarget} onChange={(e) => setGlob((g) => ({ ...g, occupancyTarget: e.target.checked }))} />
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>Occupancy-based target (spread each trip across its cycle time)</span>
+                </label>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 6 }}>
+                  Spreads each trip's vehicle-need across its full cycle time (set in Rules → Deadhead & productivity) instead of one 5-minute booking slot, so a busy moment doesn't look like it needs one vehicle per booking. Affects only the coverage target line and what the optimizer chases — trip counts and ridership numbers don't change.
+                </div>
               </div>
 
               <div style={{ background: card, border: "1px solid var(--border)", padding: "12px 14px" }}>
@@ -5939,11 +5951,19 @@ export default function App({ onHome, user, logout }) {
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 600, marginBottom: 10 }}>
                   Deadhead & productivity
                 </div>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: 10 }}>
+                  <input type="checkbox" checked={glob.deadheadEnabled !== false} onChange={(e) => setGlob((g) => ({ ...g, deadheadEnabled: e.target.checked }))} />
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>Pull-out/pull-in lead time for first/last trips</span>
+                </label>
                 <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "10px 12px", alignItems: "center", fontSize: 13 }}>
-                  <span>Pull-out time before first trip (min)</span>
-                  <NumField value={glob.deadheadOutMin} step={5} onCommit={(v) => setGlob((g) => ({ ...g, deadheadOutMin: Math.round(v) }))} />
-                  <span>Pull-in time after last trip (min)</span>
-                  <NumField value={glob.deadheadInMin} step={5} onCommit={(v) => setGlob((g) => ({ ...g, deadheadInMin: Math.round(v) }))} />
+                  {glob.deadheadEnabled !== false && (
+                    <>
+                      <span>Pull-out time before first trip (min)</span>
+                      <NumField value={glob.deadheadOutMin} step={5} onCommit={(v) => setGlob((g) => ({ ...g, deadheadOutMin: Math.round(v) }))} />
+                      <span>Pull-in time after last trip (min)</span>
+                      <NumField value={glob.deadheadInMin} step={5} onCommit={(v) => setGlob((g) => ({ ...g, deadheadInMin: Math.round(v) }))} />
+                    </>
+                  )}
                   <span>Average trip cycle time (min)</span>
                   <NumField value={glob.avgCycleTime} step={0.5} onCommit={(v) => setGlob((g) => ({ ...g, avgCycleTime: v }))} />
                   <span>Share of demand served by this signup (%)</span>
@@ -5956,15 +5976,8 @@ export default function App({ onHome, user, logout }) {
                     from the calibration below while the demand file was inflated, fix the demand first (Demand tab), then recalibrate.
                   </div>
                 )}
-                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 10 }}>
-                  <input type="checkbox" checked={!!glob.occupancyTarget} onChange={(e) => setGlob((g) => ({ ...g, occupancyTarget: e.target.checked }))} />
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>Occupancy-based target (spread each trip across its cycle time)</span>
-                </label>
-                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 6 }}>
-                  Spreads each trip's vehicle-need across its full cycle time instead of one 5-minute booking slot, so a busy moment doesn't look like it needs one vehicle per booking. Affects only the coverage target line and what the optimizer chases — trip counts and ridership numbers don't change.
-                </div>
                 <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10 }}>
-                  Pull-out/pull-in give an auto-generated shift room to start before its first trip and end after its last. Cycle time and demand share size the signup on the Signup Builder tab (Size to requirement) — the calibration below checks your cycle time against what your real data implies. If contractors or other providers also serve this demand, set the share your fleet covers.
+                  Pull-out/pull-in give an auto-generated shift room to start before its first trip and end after its last — uncheck above to schedule flush with the service span instead, with no staging room (the two minute fields stay saved, just unused until re-enabled). Cycle time and demand share size the signup on the Signup Builder tab (Size to requirement) — the calibration below checks your cycle time against what your real data implies. If contractors or other providers also serve this demand, set the share your fleet covers.
                 </div>
                 {empiricalProductivity && empiricalProductivity.overall > 0 && (
                   empiricalProductivity.overall <= 7.5 ? (
