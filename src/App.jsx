@@ -2727,6 +2727,12 @@ export default function App({ onHome, user, logout }) {
   const [optBusy, setOptBusy] = useState(false);
   const [optResult, setOptResult] = useState(null);
   const [sugsStale, setSugsStale] = useState(false);
+  // Set (never by the general `mutate` wrapper — only by the "Apply" suggestion handler below) to
+  // auto-recompute suggestions right after accepting one, instead of leaving the user to notice
+  // the staleness message and click Recompute themselves. Deferred to an effect rather than called
+  // inline after mutate(), since `board`/`eng`/`DEM` in that same click handler are still last
+  // render's values — the effect runs after the mutation's re-render, once they're current.
+  const [pendingSugRecompute, setPendingSugRecompute] = useState(false);
   const [hist, setHist] = useState([]);
   const [future, setFuture] = useState([]); // redo stack — cleared by any new edit
   const [selId, setSelId] = useState(null);
@@ -3193,6 +3199,16 @@ export default function App({ onHome, user, logout }) {
   const holidayCountForDay = useMemo(() => holidays.filter((h) => h.runsAs === day).length, [holidays, day]);
   const ftCov = useMemo(() => buildSupply(board), [board]);
   const eng = useMemo(() => computeEngine(DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, ftCov, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.deadheadEnabled, glob.occupancyTarget, glob.avgCycleTime]);
+  // Auto-recompute suggestions right after accepting one (see the "Apply" button below), so the
+  // list is never left stale waiting on a manual Recompute click. Deferred to this effect — by
+  // the time it runs, `board`/`eng`/`DEM` above have already re-derived from the applied move.
+  useEffect(() => {
+    if (!pendingSugRecompute) return;
+    setSugs(findSuggestions(board, eng, DEM, allRules, glob, spans));
+    setSugsStale(false);
+    setPendingSugRecompute(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSugRecompute]);
   const base = useMemo(() => computeEngine(DEM, buildSupply(baselineBoard), includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob), [DEM, baselineBoard, includePT, glob.minVeh, spans, glob.maxFleet, glob.offPeakBias, glob.coveragePriority, glob.deadheadOutMin, glob.deadheadInMin, glob.deadheadEnabled, glob.occupancyTarget, glob.avgCycleTime]);
   const recycleViol = useMemo(() => recycleViolations(board, glob), [board, glob.recycleEnabled, glob.recycleTurnaround, glob.recycleWindow, glob.recycleCount]);
   const P = eng.perDay[day];
@@ -5516,6 +5532,7 @@ export default function App({ onHome, user, logout }) {
                   <button style={{ ...nudgeBtn, marginLeft: "auto" }}
                     onClick={() => {
                       mutate((b) => b.map((x) => x.id === s.id ? { ...cloneSeg(x), s: s.payload.s, e: s.payload.e, b: s.payload.b ? [...s.payload.b] : null } : x));
+                      setPendingSugRecompute(true);
                     }}>
                     Apply
                   </button>

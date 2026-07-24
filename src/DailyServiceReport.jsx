@@ -667,7 +667,9 @@ function CalendarTab({ days, actuals, setActuals, providerIds, providerMeta, att
             {MONTHS.map((label, mi) => (
               <span key={label} onClick={() => toggleMonth(mi)} style={chipBtn(selectedMonths.has(mi))}>{label}</span>
             ))}
-            <span onClick={() => setSelectedMonths(new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]))} style={{ fontSize: 11, color: supplyTeal, cursor: "pointer", marginLeft: 4, textDecoration: "underline" }}>All</span>
+            <span onClick={() => setSelectedMonths(selectedMonths.size === 12 ? new Set() : new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]))} style={{ fontSize: 11, color: supplyTeal, cursor: "pointer", marginLeft: 4, textDecoration: "underline" }}>
+              {selectedMonths.size === 12 ? "None" : "All"}
+            </span>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
