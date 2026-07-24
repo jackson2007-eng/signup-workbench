@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
-import { ResponsiveContainer, ComposedChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid } from "recharts";
+import { ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, Legend, CartesianGrid } from "recharts";
 import { NumField, Stat } from "./App.jsx";
 import { PhaseStrip } from "./CallCentre.jsx";
+import { buildProjection, yearsPresent } from "./AnnualPlan.jsx";
 import { VACATIONPLAN_SAMPLE } from "./vacationSampleData.js";
 import { useAccountProject, useSignupList, SaveStatus, AccountChip, SignupSwitcher } from "./useAccountProject.jsx";
 import { DARK_MODE_ENABLED } from "./themeFlag.js";
@@ -59,6 +60,32 @@ function suggestCaps(weeks, params, reducedIdx) {
   });
 }
 
+// Sums an imported Annual Plan's day-by-day trip forecast (demandByDate: {iso: trips}) into one
+// total per vacation week — kept as a derived memo off the raw daily map (not stored pre-bucketed)
+// so changing the vacation year/week-count never leaves stale week totals around; it just re-buckets.
+function weeklyDemandFrom(demandByDate, weeks) {
+  if (!demandByDate) return null;
+  return weeks.map((w) => {
+    let sum = 0, iso = w.start;
+    for (let i = 0; i < 7; i++) { sum += demandByDate[iso] || 0; iso = addDaysISO(iso, 1); }
+    return sum;
+  });
+}
+
+// Same headcount/baseline-% inputs as suggestCaps, but scales each week's cap by how that week's
+// trip demand compares to the year's average week — low-demand weeks (naturally slower for
+// ridership, and usually easier to run short-staffed) get room for MORE vacation, high-demand
+// weeks get room for LESS. Multiplier is clamped to [0.25, 2] so an unusually quiet single week
+// (e.g. a stat holiday with near-zero trips) can't blow the suggestion up to an absurd cap.
+function suggestCapsFromDemand(weeks, params, weeklyDemand) {
+  const avg = weeklyDemand.reduce((s, v) => s + v, 0) / (weeklyDemand.length || 1);
+  return weeks.map((w, i) => {
+    const relative = avg > 0 ? weeklyDemand[i] / avg : 1;
+    const mult = Math.max(0.25, Math.min(2, 2 - relative));
+    return Math.max(0, Math.round(((params.headcount || 0) * (params.basePct || 0) / 100) * mult));
+  });
+}
+
 /* ---------- allocation engine ----------
    Seniority-order greedy "auto-balance": each operator, in roster order, claims their
    entitled week-count from whichever eligible weeks currently have the MOST remaining room —
@@ -112,6 +139,45 @@ export default function VacationPlan({ onHome, user, logout }) {
   const [jurisdiction, setJurisdiction] = useState(() => clone(VACATIONPLAN_SAMPLE.jurisdiction));
   const rosterUpRef = useRef(null);
 
+  /* ---------- demand-based cap suggestion (imported from a saved Annual Plan) ---------- */
+  const [demandByDate, setDemandByDate] = useState(null); // {iso: trips} for the imported plan's whole year, or null
+  const [demandSource, setDemandSource] = useState(null); // {planId, planName, planYear, importedAt} or null
+  const [demandImporting, setDemandImporting] = useState(false);
+  const [demandImportError, setDemandImportError] = useState(null);
+  const { items: annualPlanSignups } = useSignupList("annualplan");
+  const [selectedDemandPlanId, setSelectedDemandPlanId] = useState("");
+  const importDemand = async () => {
+    if (!selectedDemandPlanId) return;
+    setDemandImporting(true);
+    setDemandImportError(null);
+    try {
+      const res = await fetch(`/api/projects/annualplan/${selectedDemandPlanId}`, { credentials: "include" });
+      const data = await res.json();
+      if (!res.ok || !data.payload) throw new Error("Could not load that Annual Plan signup.");
+      const p = data.payload;
+      const HD = (await import("date-holidays")).default;
+      const jur = p.jurisdiction || { country: "CA", region: "" };
+      const holidaysFor = (year) => {
+        const hd = new HD(jur.country, jur.region || undefined);
+        return hd.getHolidays(year).filter((h) => h.type === "public").map((h) => ({ date: h.date.slice(0, 10), name: h.name }));
+      };
+      const holidaysHistoryByYear = {};
+      for (const y of yearsPresent(p.history || {})) holidaysHistoryByYear[y] = holidaysFor(y);
+      const holidaysPlan = holidaysFor(p.planYear);
+      const { projected } = buildProjection(p.history, p.planYear, p.growthPct, holidaysHistoryByYear, holidaysPlan, p.dayOverrides || {});
+      const plan = (annualPlanSignups || []).find((s) => s.id === Number(selectedDemandPlanId));
+      setDemandByDate(projected);
+      setDemandSource({
+        planId: Number(selectedDemandPlanId), planName: plan ? plan.name : `Plan #${selectedDemandPlanId}`,
+        planYear: p.planYear, importedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      setDemandImportError(e.message || "Could not import that plan's demand.");
+    } finally {
+      setDemandImporting(false);
+    }
+  };
+
   /* ---------- statutory holidays (lazy-loaded, same pattern as Annual Plan) ---------- */
   const [hdCtor, setHdCtor] = useState(null);
   const [hdCountries, setHdCountries] = useState({});
@@ -130,6 +196,7 @@ export default function VacationPlan({ onHome, user, logout }) {
   }, [hdCtor, jurisdiction.country]);
 
   const weeks = useMemo(() => buildWeeks(yearStart, weekCount), [yearStart, weekCount]);
+  const weeklyDemand = useMemo(() => weeklyDemandFrom(demandByDate, weeks), [demandByDate, weeks]);
 
   const holidayWeekIdx = useMemo(() => {
     if (!hdCtor) return new Set();
@@ -195,8 +262,9 @@ export default function VacationPlan({ onHome, user, logout }) {
     setCaps((cs) => { const out = cs.slice(0, n); while (out.length < n) out.push(0); return out; });
   };
   const applySuggestedCaps = () => setCaps(suggestCaps(weeks, suggestParams, reducedWeekIdx));
+  const applySuggestedCapsFromDemand = () => { if (weeklyDemand) setCaps(suggestCapsFromDemand(weeks, suggestParams, weeklyDemand)); };
 
-  const buildPayload = () => ({ kind: "vacationplan", operators, yearStart, weekCount, caps, suggestParams, summerStart, summerEnd, jurisdiction });
+  const buildPayload = () => ({ kind: "vacationplan", operators, yearStart, weekCount, caps, suggestParams, summerStart, summerEnd, jurisdiction, demandByDate, demandSource });
   const applyPayload = (p) => {
         if (p.operators) setOperators(p.operators);
         if (p.yearStart) setYearStart(p.yearStart);
@@ -206,9 +274,11 @@ export default function VacationPlan({ onHome, user, logout }) {
         if (p.summerStart) setSummerStart(p.summerStart);
         if (p.summerEnd) setSummerEnd(p.summerEnd);
         if (p.jurisdiction) setJurisdiction(p.jurisdiction);
+        if (p.demandByDate !== undefined) setDemandByDate(p.demandByDate);
+        if (p.demandSource !== undefined) setDemandSource(p.demandSource);
   };
   const payloadJson = useMemo(() => JSON.stringify(buildPayload()), [
-    operators, yearStart, weekCount, caps, suggestParams, summerStart, summerEnd, jurisdiction,
+    operators, yearStart, weekCount, caps, suggestParams, summerStart, summerEnd, jurisdiction, demandByDate, demandSource,
   ]);
   const { items: signups, create: createSignup, rename: renameSignup, remove: removeSignup } = useSignupList("vacationplan");
   const [projectId, setProjectId] = useState(null);
@@ -286,6 +356,8 @@ export default function VacationPlan({ onHome, user, logout }) {
             yearStart, setYearStart, weekCount, setWeekCountClamped, weeks, caps, updateCap,
             suggestParams, setSuggestParams, applySuggestedCaps, summerStart, setSummerStart, summerEnd, setSummerEnd,
             jurisdiction, setJurisdiction, hdCountries, hdRegions, hdCtor, holidayWeekIdx, summerWeekIdx,
+            annualPlanSignups, selectedDemandPlanId, setSelectedDemandPlanId, importDemand, demandImporting, demandImportError,
+            demandSource, weeklyDemand, applySuggestedCapsFromDemand,
           }} />
         )}
         {tab === "allocation" && (
@@ -353,7 +425,12 @@ function CapsTab({
   yearStart, setYearStart, weekCount, setWeekCountClamped, weeks, caps, updateCap,
   suggestParams, setSuggestParams, applySuggestedCaps, summerStart, setSummerStart, summerEnd, setSummerEnd,
   jurisdiction, setJurisdiction, hdCountries, hdRegions, hdCtor, holidayWeekIdx, summerWeekIdx,
+  annualPlanSignups, selectedDemandPlanId, setSelectedDemandPlanId, importDemand, demandImporting, demandImportError,
+  demandSource, weeklyDemand, applySuggestedCapsFromDemand,
 }) {
+  const demandChartData = useMemo(() => weeks.map((w, i) => ({
+    week: fmtShort(w.start), cap: caps[w.index] || 0, demand: weeklyDemand ? weeklyDemand[i] : null,
+  })), [weeks, caps, weeklyDemand]);
   return (
     <div>
       <div style={cardStyle}>
@@ -381,6 +458,55 @@ function CapsTab({
         <div style={{ fontSize: 11.5, color: sampleGray, marginTop: 8 }}>
           Weeks run consecutively from the start date. Statutory-holiday weeks are auto-detected from the jurisdiction above; mark your own summer prime-time window below.
         </div>
+      </div>
+
+      <div style={cardStyle}>
+        <div style={hTitle}>Demand-based cap suggestion</div>
+        <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 10 }}>
+          Pulls a saved Annual Plan's day-by-day trip forecast and buckets it into these vacation
+          weeks, so you can see where ridership actually runs light or heavy across the year — the
+          real analytical question behind "where should vacation weeks go." Low-demand weeks get
+          room for more time off, high-demand weeks get less, when you apply the suggestion below.
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+          <select value={selectedDemandPlanId} onChange={(e) => setSelectedDemandPlanId(e.target.value)} style={{ padding: "6px 8px", borderRadius: 2, fontSize: 13, minWidth: 220 }}>
+            <option value="">Choose an Annual Plan signup…</option>
+            {annualPlanSignups === null && <option disabled>Loading your signups…</option>}
+            {annualPlanSignups && annualPlanSignups.length === 0 && <option disabled>No saved Annual Plan signups yet</option>}
+            {annualPlanSignups && annualPlanSignups.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} disabled={!selectedDemandPlanId || demandImporting} onClick={importDemand}>
+            {demandImporting ? "Importing…" : "Import demand"}
+          </button>
+          {demandSource && (
+            <span style={{ fontSize: 12, color: sampleGray }}>
+              Imported: <b style={{ color: text }}>{demandSource.planName}</b> ({demandSource.planYear}), {new Date(demandSource.importedAt).toLocaleDateString()}
+            </span>
+          )}
+        </div>
+        {demandImportError && <div style={{ color: gapRed, fontSize: 12.5, marginBottom: 10 }}>{demandImportError}</div>}
+        {weeklyDemand ? (
+          <>
+            <ResponsiveContainer width="100%" height={220}>
+              <ComposedChart data={demandChartData} margin={{ top: 4, right: 10, left: -6, bottom: 0 }}>
+                <CartesianGrid stroke="var(--border-light)" vertical={false} />
+                <XAxis dataKey="week" tick={{ fontSize: 10 }} tickLine={false} interval={3} />
+                <YAxis yAxisId="cap" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={30} />
+                <YAxis yAxisId="demand" orientation="right" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={40} />
+                <Tooltip contentStyle={{ fontSize: 12, border: "1px solid var(--border-light)" }} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Bar yAxisId="cap" dataKey="cap" name="Current cap" fill={supplyTeal} isAnimationActive={false} />
+                <Line yAxisId="demand" type="monotone" dataKey="demand" name="Trip demand" stroke={demandAmber} strokeWidth={2} dot={false} isAnimationActive={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 8 }}>
+              <button style={{ ...nudgeBtn, background: supplyTeal, color: "#fff", borderColor: supplyTeal }} onClick={applySuggestedCapsFromDemand}>Suggest caps from demand</button>
+              <span style={{ fontSize: 11.5, color: sampleGray }}>Uses the headcount and baseline % below, scaled per week against how that week's demand compares to the year's average.</span>
+            </div>
+          </>
+        ) : (
+          <div style={{ fontSize: 12, color: sampleGray }}>Import a plan above to see its demand shape against your current caps.</div>
+        )}
       </div>
 
       <div style={cardStyle}>
