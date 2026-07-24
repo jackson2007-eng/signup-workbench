@@ -501,7 +501,7 @@ function CalendarTab({ days, providerIds, providerMeta, attritionPct }) {
   const toggleMonth = (mi) => setSelectedMonths((s) => { const n = new Set(s); n.has(mi) ? n.delete(mi) : n.add(mi); return n; });
 
   // Two logical column groups mirroring the real sheet's parallel Start-of-Day/End-of-Day
-  // blocks — "scheduled" (night-before) vs "trips" (day-of delivered). One shared visibility
+  // blocks — "scheduled" (night-before) vs "trips" (end-of-day delivered). One shared visibility
   // map backs both the quick group-toggles and the fine-grained per-column checkboxes below, so
   // there's a single source of truth rather than two competing filter systems.
   const schedKeys = useMemo(() => ["schedTotal", ...providerIds.map((id) => `sched:${id}`)], [providerIds]);
@@ -536,6 +536,28 @@ function CalendarTab({ days, providerIds, providerMeta, attritionPct }) {
       .map((iso) => ({ iso, month: monthOfIso(iso), ...days[iso] }))
       .filter((r) => selectedMonths.has(r.month))
   ), [days, selectedYear, selectedMonths]);
+
+  // Grand totals across whatever's currently in view (selected year + months) — recomputed on
+  // every filter change, not just once, so the footer always reflects what the table is showing.
+  const totals = useMemo(() => {
+    const t = { schedTotal: 0, tripsTotal: 0, unaccom: 0, byProvider: {} };
+    for (const id of providerIds) t.byProvider[id] = { sched: 0, trips: 0, hrs: 0, cost: 0 };
+    for (const r of dayRows) {
+      t.schedTotal += dayScheduled(r, attritionPct);
+      t.tripsTotal += r.trips;
+      t.unaccom += r.unaccommodated || 0;
+      for (const id of providerIds) {
+        const p = r.byProvider[id];
+        if (!p) continue;
+        const pt = t.byProvider[id];
+        pt.sched += providerScheduled(p, attritionPct);
+        pt.trips += p.trips || 0;
+        pt.hrs += p.hours || 0;
+        pt.cost += p.cost || 0;
+      }
+    }
+    return t;
+  }, [dayRows, providerIds, attritionPct]);
 
   const metricColCount = [...schedKeys, ...tripsKeys].filter((k) => visibleCols[k]).length;
   const colCount = 2 + (visibleCols.holiday ? 1 : 0) + metricColCount;
@@ -577,7 +599,7 @@ function CalendarTab({ days, providerIds, providerMeta, attritionPct }) {
             </label>
             <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, cursor: "pointer" }}>
               <input type="checkbox" checked={tripsAllOn} onChange={(e) => { if (!e.target.checked && !schedAnyOn) return; setGroup(tripsKeys, e.target.checked); }} />
-              Trips (day-of)
+              Trips (end of day)
             </label>
           </div>
 
@@ -606,7 +628,7 @@ function CalendarTab({ days, providerIds, providerMeta, attritionPct }) {
               ))}
             </div>
             <div>
-              <div style={{ fontSize: 11, fontWeight: 600, color: sampleGray, marginBottom: 4 }}>TRIPS (DAY-OF)</div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: sampleGray, marginBottom: 4 }}>TRIPS (END OF DAY)</div>
               <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, cursor: "pointer", marginBottom: 2 }}>
                 <input type="checkbox" checked={!!visibleCols.tripsTotal} onChange={(e) => setCol("tripsTotal", e.target.checked)} /> Total trips
               </label>
@@ -682,6 +704,27 @@ function CalendarTab({ days, providerIds, providerMeta, attritionPct }) {
                 </React.Fragment>
               ))}
             </tbody>
+            <tfoot>
+              <tr style={{ position: "sticky", bottom: 0, background: card, borderTop: "2px solid var(--border)", fontWeight: 700 }}>
+                <td colSpan={2 + (visibleCols.holiday ? 1 : 0)} style={{ ...tdStyle, textAlign: "right" }}>
+                  Total ({dayRows.length} day{dayRows.length === 1 ? "" : "s"})
+                </td>
+                {visibleCols.schedTotal && <td style={{ ...tdStyle, textAlign: "right", color: supplyTeal }}>{Math.round(totals.schedTotal).toLocaleString()}</td>}
+                {visibleCols.tripsTotal && <td style={{ ...tdStyle, textAlign: "right" }}>{Math.round(totals.tripsTotal).toLocaleString()}</td>}
+                {visibleCols.unaccom && <td style={{ ...tdStyle, textAlign: "right", color: totals.unaccom > 0 ? gapRed : sampleGray }}>{totals.unaccom > 0 ? Math.round(totals.unaccom).toLocaleString() : "—"}</td>}
+                {providerIds.map((id) => {
+                  const pt = totals.byProvider[id];
+                  return (
+                    <React.Fragment key={id}>
+                      {visibleCols[`sched:${id}`] && <td style={{ ...tdStyle, textAlign: "right", color: supplyTeal }}>{Math.round(pt.sched).toLocaleString()}</td>}
+                      {visibleCols[`trips:${id}`] && <td style={{ ...tdStyle, textAlign: "right" }}>{Math.round(pt.trips).toLocaleString()}</td>}
+                      {visibleCols[`hrs:${id}`] && <td style={{ ...tdStyle, textAlign: "right", color: sampleGray }}>{Math.round(pt.hrs).toLocaleString()}</td>}
+                      {visibleCols[`cost:${id}`] && <td style={{ ...tdStyle, textAlign: "right", color: sampleGray }}>${Math.round(pt.cost).toLocaleString()}</td>}
+                    </React.Fragment>
+                  );
+                })}
+              </tr>
+            </tfoot>
           </table>
         </div>
       </div>
