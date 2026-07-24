@@ -2058,7 +2058,13 @@ function aggregateCoverageRows(rows, bucketMin) {
 function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity, avgCycleTime = 0, demandShare = 100, height = 320, selBand,
   supplyName = "Supply", targetName = "Demand-aligned target", unitLabel = "events", minName = "min", minUnitLabel = "vehicles", sugTooltip = true, extraSeries = null,
   eventsPerTrip = 1, // operator demand counts pickup+dropoff (2 events) per trip; siblings pass 1
-  onPointClick = null, onDutyCounts = null, slim = false, aggregateMin = 5, showTripBar = false, showTarget = true, showStaging = true, showCoverageFill = true }) {
+  onPointClick = null, onDutyCounts = null, slim = false, aggregateMin = 5, showTripBar = false, showTarget = true, showStaging = true, showCoverageFill = true,
+  // asShare: plot every series as each slot's % share of the day's own total instead of raw
+  // vehicle/trip counts — the literal quantity min(demand share, supply share) scores against,
+  // just visible instead of backed out into a vehicle-count-equivalent. Absolute reference
+  // lines (min vehicles, fleet cap, Little's-Law "required" lines) have no % meaning, so they
+  // hide themselves in this mode rather than plot nonsense.
+  asShare = false }) {
   const data = useMemo(() => {
     const bk = RAW.bookout[day];
     const bkMap = {};
@@ -2098,15 +2104,22 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
     let reqH = 0;
     for (let i = 0; i < N; i++) reqH += rawImp[i] / 12;
     const patRatio = avgCycleTime > 0 && daySup > 0 ? reqH / (daySup / 12) : null;
+    // Percent-of-day scale: dividing a raw vehicle-count-equivalent by the day's own total
+    // supply-slots and ×100 recovers the exact share the coverage score compares — target[i]
+    // is already dSh × daySupSlots (App.jsx computeEngine), so target × supScale = dSh × 100,
+    // and sup[i] × supScale = sSh × 100. Same min(share, share) comparison, just in % units
+    // instead of backed-out vehicle-count units.
+    const supScale = asShare && daySup > 0 ? 100 / daySup : 1;
+    const evScale = asShare && dayEv > 0 ? 100 / dayEv : 1;
     const rows = [];
     for (let i = 0; i < N; i++) {
-      const t = SLOT(i), tgt = P.target[i];
+      const t = SLOT(i), tgt = P.target[i] * supScale, sp = P.sup[i] * supScale;
       rows.push({
         time: fmt(t),
         target: Math.round(tgt * 10) / 10,
-        sup: P.sup[i],
-        covered: Math.round(Math.min(tgt, P.sup[i]) * 10) / 10,
-        gap: tgt - P.sup[i] > 0.05 ? Math.round(tgt * 10) / 10 : null,
+        sup: Math.round(sp * 10) / 10,
+        covered: Math.round(Math.min(tgt, sp) * 10) / 10,
+        gap: tgt - sp > 0.05 ? Math.round(tgt * 10) / 10 : null,
         bookout: bkMap[t] ?? null,
         // staging: target with no demand nearby — the pull-out/pull-in allowance at the
         // day's edges, not rider demand. Drawn in its own colour so it can't be misread.
@@ -2118,13 +2131,13 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         // trip occupies a vehicle (cycle/5) = vehicles required, then the cap if it bites
         cityTrips5: avgCycleTime > 0 ? Math.round(smoothedEv(i) * (demandShare > 0 ? demandShare / 100 : 1) / 2 * 10) / 10 : null,
         impRaw: avgCycleTime > 0 ? Math.round(rawImp[i] * 10) / 10 : null,
-        events: P.ev[i],
+        events: asShare ? Math.round(P.ev[i] * evScale * 10) / 10 * eventsPerTrip : P.ev[i],
         onDuty: onDutyCounts ? onDutyCounts[i] : null,
         ...(extraSeries ? Object.fromEntries(extraSeries.map((s) => [s.key, s.values && s.values[i] != null ? s.values[i] : null])) : {}),
       });
     }
     return rows;
-  }, [P, day, avgCycleTime, demandShare, fleetCap, extraSeries, onDutyCounts]);
+  }, [P, day, avgCycleTime, demandShare, fleetCap, extraSeries, onDutyCounts, asShare]);
   const aggregatedData = useMemo(() => aggregateCoverageRows(data, aggregateMin), [data, aggregateMin]);
   // Trip volume shares the ONE left axis with the vehicle series, plotted raw. The axis
   // auto-scales to the tallest series at the CURRENT resolution, so coarsening the buckets
@@ -2138,6 +2151,8 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
   }, [aggregatedData, showTripBar, eventsPerTrip]);
   // ~10 visible x-axis labels regardless of how many buckets that resolution produces
   const xInterval = Math.max(0, Math.ceil(displayData.length / 10) - 1);
+  const supplyLabel = asShare ? `${supplyName} (% of day)` : supplyName;
+  const targetLabel = asShare ? `${targetName} (% of day)` : targetName;
   return (
     <ResponsiveContainer width="100%" height={height}>
       <ComposedChart data={displayData} margin={{ top: 5, right: 14, left: -8, bottom: 0 }}
@@ -2150,9 +2165,10 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         } : undefined}>
         <CartesianGrid stroke="#EBF0F2" vertical={false} />
         <XAxis dataKey="time" tick={{ fontSize: 10.5 }} interval={xInterval} tickLine={false} />
-        <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+        <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} unit={asShare ? "%" : undefined} />
         <Tooltip
           formatter={(v, name, item) => {
+            const unit = asShare ? "%" : "";
             // the gap Area's drawing value is the TARGET height (so the red fill spans
             // supply→target); the tooltip must report the actual shortfall instead
             if (name === "Gap") {
@@ -2160,32 +2176,32 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
               const s = pl ? pl.sup : null;
               // at the day's edges the "gap" is the pull-out/pull-in staging allowance, not demand
               const lbl = showStaging && pl && pl.staging != null ? "Staging (pull-out/pull-in)" : "Gap";
-              return [s != null ? Math.round((v - s) * 10) / 10 : v, lbl];
+              return [`${s != null ? Math.round((v - s) * 10) / 10 : v}${unit}`, lbl];
             }
-            return [v, { target: targetName, sup: supplyName, covered: "Aligned", bookout: "Observed (sample)", reqPat: "Required (your deployment pattern)", impliedVeh: "Required (demand shape, capped)" }[name] || name];
+            return [`${v}${unit}`, { target: targetLabel, sup: supplyLabel, covered: "Aligned", bookout: "Observed (sample)", reqPat: "Required (your deployment pattern)", impliedVeh: "Required (demand shape, capped)" }[name] || name];
           }}
           labelFormatter={(l, pl) => {
             const r = pl && pl[0] && pl[0].payload;
             if (!r) return l;
             const evShown = r.events / eventsPerTrip;
-            const evTxt = evShown >= 10 ? Math.round(evShown).toString() : evShown.toFixed(1);
-            if (slim) return `${l} · ${evTxt} ${unitLabel}`; // clean mode: time + demand only
+            const evTxt = asShare ? `${evShown.toFixed(1)}%` : (evShown >= 10 ? Math.round(evShown).toString() : evShown.toFixed(1)) + " " + unitLabel;
+            if (slim) return `${l} · ${evTxt}`; // clean mode: time + demand only
             // show the requirement's own arithmetic in 5-minute units: city trips this slot,
             // each occupying a vehicle for the cycle, then the cap only when it bit
-            const sugTxt = sugTooltip && r.impliedVeh != null && r.cityTrips5 != null
+            const sugTxt = !asShare && sugTooltip && r.impliedVeh != null && r.cityTrips5 != null
               ? ` · ≈${r.cityTrips5} city trips/5 min (30-min avg) × ${avgCycleTime}-min cycle = ${r.impRaw}${r.impRaw > r.impliedVeh + 0.05 ? ` → ${r.impliedVeh.toFixed(1)} required (capped)` : " required"}`
               : "";
-            const impTxt = sugTooltip && r.reqPat != null ? ` · ${r.reqPat.toFixed(1)} required (your pattern)` : "";
+            const impTxt = !asShare && sugTooltip && r.reqPat != null ? ` · ${r.reqPat.toFixed(1)} required (your pattern)` : "";
             const dutyTxt = onPointClick && r.onDuty != null ? ` · ${r.onDuty} run${r.onDuty === 1 ? "" : "s"} on duty — click to mark this time` : "";
             return `${l} · ${evTxt} ${unitLabel}${sugTxt}${impTxt}${dutyTxt}`;
           }}
           contentStyle={{ fontSize: 12, border: "1px solid var(--border-light)" }} />
         <Legend wrapperStyle={{ fontSize: 12 }} />
         {showTripBar && (
-          <Area type="stepAfter" dataKey="tripBar" name="Trip volume (this period)" stroke="none" fill={demandAmber} fillOpacity={0.28} tooltipType="none" isAnimationActive={false} />
+          <Area type="stepAfter" dataKey="tripBar" name={asShare ? "Trip volume (% of day)" : "Trip volume (this period)"} stroke="none" fill={demandAmber} fillOpacity={0.28} tooltipType="none" isAnimationActive={false} />
         )}
         {showTarget && (
-          <Area type="stepAfter" dataKey="target" name={targetName} stroke={targetInk} strokeWidth={1.5} fill="#233746" fillOpacity={0.07} tooltipType={slim ? "none" : undefined} />
+          <Area type="stepAfter" dataKey="target" name={targetLabel} stroke={targetInk} strokeWidth={1.5} fill="#233746" fillOpacity={0.07} tooltipType={slim ? "none" : undefined} />
         )}
         {showCoverageFill && (
           <>
@@ -2199,16 +2215,19 @@ function CoverageChart({ P, day, minVeh, fleetCap, showBookout, showProductivity
         {showStaging && (
           <Area type="stepAfter" dataKey="staging" name="Pull-out/pull-in staging" stroke={bookoutViolet} strokeDasharray="4 3" strokeWidth={1.3} fill={bookoutViolet} fillOpacity={0.3} tooltipType="none" />
         )}
-        <Line type="stepAfter" dataKey="sup" name={supplyName} stroke={supplyTeal} strokeWidth={2.2} dot={false} />
-        <ReferenceLine y={minVeh} stroke={demandAmber} strokeDasharray="4 4" label={{ value: `${minName} ${minUnitLabel} ${minVeh}`, position: "insideBottomRight", fontSize: 10, fill: demandAmber }} />
-        {fleetCap > 0 && <ReferenceLine y={fleetCap} stroke={gapRed} strokeDasharray="6 3" label={{ value: `fleet cap ${fleetCap}`, position: "insideTopRight", fontSize: 10, fill: gapRed }} />}
+        <Line type="stepAfter" dataKey="sup" name={supplyLabel} stroke={supplyTeal} strokeWidth={2.2} dot={false} />
+        {/* min-vehicles floor, fleet cap, and the two Little's-Law "required" lines are all
+            absolute vehicle counts — no % meaning, so they hide themselves in share mode
+            rather than plot a number against a 0-100 axis that isn't theirs. */}
+        {!asShare && <ReferenceLine y={minVeh} stroke={demandAmber} strokeDasharray="4 4" label={{ value: `${minName} ${minUnitLabel} ${minVeh}`, position: "insideBottomRight", fontSize: 10, fill: demandAmber }} />}
+        {!asShare && fleetCap > 0 && <ReferenceLine y={fleetCap} stroke={gapRed} strokeDasharray="6 3" label={{ value: `fleet cap ${fleetCap}`, position: "insideTopRight", fontSize: 10, fill: gapRed }} />}
         {selBand && <ReferenceLine x={fmt(selBand[0])} stroke={ink} strokeDasharray="3 3" />}
         {selBand && <ReferenceLine x={fmt(Math.min(selBand[1], T1 - 5))} stroke={ink} strokeDasharray="3 3" />}
-        {showBookout && RAW.bookout[day] &&
+        {!asShare && showBookout && RAW.bookout[day] &&
           <Line type="monotone" dataKey="bookout" name="Observed (sample)" stroke={bookoutViolet} strokeWidth={1.6} strokeDasharray="5 4" dot={false} connectNulls />}
-        {showProductivity &&
+        {!asShare && showProductivity &&
           <Line type="stepAfter" dataKey="reqPat" name="Required (your deployment pattern)" stroke="var(--text-blue)" strokeWidth={1.8} strokeDasharray="6 3" dot={false} connectNulls />}
-        {showProductivity &&
+        {!asShare && showProductivity &&
           <Line type="stepAfter" dataKey="impliedVeh" name="Required (demand shape, capped)" stroke="#B0455E" strokeWidth={1.8} dot={false} connectNulls />}
         {extraSeries && extraSeries.map((s) => (
           <Line key={s.key} type="stepAfter" dataKey={s.key} name={s.name} stroke={s.color} strokeWidth={1.8} strokeDasharray={s.dash || undefined} dot={false} connectNulls />
@@ -2484,6 +2503,7 @@ export default function App({ onHome, user, logout }) {
   const [tab, setTab] = useState("rules");
   const [day, setDay] = useState("Wednesday");
   const [coverageResolution, setCoverageResolution] = useState(5); // minutes per chart bucket: 5/15/30/60
+  const [showSharePct, setShowSharePct] = useState(false); // Coverage chart: raw vehicle/trip counts vs. each slot's % share of the day (the literal quantity the score compares)
   const [includePT, setIncludePT] = useState(false);
   const [totalSigned, setTotalSigned] = useState(100); // default matches the Generate card's package count
   const [board, setBoard] = useState(() => RAW.segments.map(cloneSeg));
@@ -4636,19 +4656,30 @@ export default function App({ onHome, user, logout }) {
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 19, fontWeight: 600 }}>
                   {day} — service hours vs demand-aligned target
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 11, color: "var(--muted)" }}>Chart resolution</span>
-                  <input type="range" min={0} max={COVERAGE_RESOLUTIONS.length - 1} step={1}
-                    value={COVERAGE_RESOLUTIONS.indexOf(coverageResolution)}
-                    onChange={(e) => setCoverageResolution(COVERAGE_RESOLUTIONS[Number(e.target.value)])}
-                    style={{ width: 110, accentColor: supplyTeal }} />
-                  <span style={{ fontSize: 11, color: "var(--muted)", minWidth: 68 }}>
-                    {coverageResolution < 60 ? `${coverageResolution} min avg` : "1 hr avg"}
-                  </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 11, color: "var(--muted)" }}>
+                    <input type="checkbox" checked={showSharePct} onChange={(e) => setShowSharePct(e.target.checked)} />
+                    Show as % of day (vs. supply view)
+                  </label>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 11, color: "var(--muted)" }}>Chart resolution</span>
+                    <input type="range" min={0} max={COVERAGE_RESOLUTIONS.length - 1} step={1}
+                      value={COVERAGE_RESOLUTIONS.indexOf(coverageResolution)}
+                      onChange={(e) => setCoverageResolution(COVERAGE_RESOLUTIONS[Number(e.target.value)])}
+                      style={{ width: 110, accentColor: supplyTeal }} />
+                    <span style={{ fontSize: 11, color: "var(--muted)", minWidth: 68 }}>
+                      {coverageResolution < 60 ? `${coverageResolution} min avg` : "1 hr avg"}
+                    </span>
+                  </div>
                 </div>
               </div>
+              <div style={{ fontSize: 11.5, color: "var(--muted)", padding: "0 10px 8px" }}>
+                {showSharePct
+                  ? "Each line is that slot's % share of the day's own total — exactly what the coverage score compares (min of demand share vs. supply share). Absolute floors (min vehicles, fleet cap) don't apply here since they're counts, not shares."
+                  : "Supply view: raw vehicle/trip counts, with the target line rescaled to vehicle-count units for readability. Switch to % of day to see the literal shares the score is comparing."}
+              </div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={false} showProductivity={false} slim avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={340}
-                onDutyCounts={onDutyCounts} onPointClick={focusRun}
+                onDutyCounts={onDutyCounts} onPointClick={focusRun} asShare={showSharePct}
                 extraSeries={null} aggregateMin={coverageResolution} showTripBar eventsPerTrip={2} unitLabel="trips" />
               {ganttTimeFilter != null && (
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "var(--tint-teal-d)", border: `1px solid ${supplyTeal}`, padding: "8px 12px", margin: "6px 10px 0", fontSize: 13 }}>
@@ -5192,7 +5223,7 @@ export default function App({ onHome, user, logout }) {
                 Live {day} coverage
               </div>
               <CoverageChart P={P} day={day} minVeh={glob.minVeh} fleetCap={glob.maxFleet} showBookout={false} showProductivity={false} slim avgCycleTime={glob.avgCycleTime} demandShare={glob.demandShare} height={280}
-                showCoverageFill={false}
+                showCoverageFill={false} asShare={showSharePct}
                 selBand={sel ? [sel.s, sel.e] : null} onDutyCounts={onDutyCounts} onPointClick={(t) => { setSelId(null); setGanttTimeFilter(t); }} eventsPerTrip={2} unitLabel="trips" />
               <div style={{ fontSize: 11.5, color: "var(--muted)", padding: "2px 10px 10px" }}>
                 Dashed lines mark the selected shift. On desktop, the KPI strip and shift editor stay pinned while you scroll; on phones everything scrolls freely so the signup and this chart get the full screen.
