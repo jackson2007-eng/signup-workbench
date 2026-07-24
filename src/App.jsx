@@ -2018,7 +2018,7 @@ function requirementCurve(P, glob) {
 // recomputed from the bucket's averaged target/sup rather than averaging the already-derived
 // per-slot values — averaging a mostly-null "gap" column would overstate an intermittent
 // shortfall as if it applied across the whole bucket, instead of the bucket's true mean.
-const COVERAGE_RESOLUTIONS = [5, 15, 30, 60];
+const COVERAGE_RESOLUTIONS = [5, 15, 30];
 
 function aggregateCoverageRows(rows, bucketMin) {
   const bucketSlots = Math.round(bucketMin / 5);
@@ -2502,7 +2502,7 @@ export default function App({ onHome, user, logout }) {
   useEffect(() => { localStorage.setItem("theme", theme); }, [theme]);
   const [tab, setTab] = useState("rules");
   const [day, setDay] = useState("Wednesday");
-  const [coverageResolution, setCoverageResolution] = useState(5); // minutes per chart bucket: 5/15/30/60
+  const [coverageResolution, setCoverageResolution] = useState(5); // minutes per chart bucket: 5/15/30
   const [showSharePct, setShowSharePct] = useState(false); // Coverage chart: raw vehicle/trip counts vs. each slot's % share of the day (the literal quantity the score compares)
   const [includePT, setIncludePT] = useState(false);
   const [totalSigned, setTotalSigned] = useState(100); // default matches the Generate card's package count
@@ -4668,7 +4668,7 @@ export default function App({ onHome, user, logout }) {
                       onChange={(e) => setCoverageResolution(COVERAGE_RESOLUTIONS[Number(e.target.value)])}
                       style={{ width: 110, accentColor: supplyTeal }} />
                     <span style={{ fontSize: 11, color: "var(--muted)", minWidth: 68 }}>
-                      {coverageResolution < 60 ? `${coverageResolution} min avg` : "1 hr avg"}
+                      {coverageResolution} min avg
                     </span>
                   </div>
                 </div>
