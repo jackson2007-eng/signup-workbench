@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "transit-toolkit",
+  "name": "signup-workbench",
   "main": "worker/index.js",
   "compatibility_date": "2026-07-12",
   "observability": {
