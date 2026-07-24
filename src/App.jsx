@@ -2350,7 +2350,7 @@ function DeltaAreaChart({ delta, demandRef, fixedMax, width = 700, height = 168 
           </g>
         );
       })}
-      <path d={demandLine} fill="none" stroke={demandAmber} strokeWidth={1.2} opacity={0.35} />
+      <path d={demandLine} fill="none" stroke={demandAmber} strokeWidth={2.2} opacity={0.85} />
       <path d={areaPath(pos)} fill={supplyTeal} opacity={0.55} />
       <path d={areaPath(neg)} fill={gapRed} opacity={0.5} />
     </svg>
