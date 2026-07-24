@@ -1239,7 +1239,7 @@ function BudgetTab({ planYear, providers, rollup, annualTotals, providerColor })
               )}
 
               <tr style={{ borderTop: "2px solid var(--border)", fontWeight: 700 }}>
-                <td style={{ padding: "5px 8px" }}>Total DATS Operational Cost</td>
+                <td style={{ padding: "5px 8px" }}>Total operational cost</td>
                 {MONTHS.map((_, i) => <td key={i} style={tdStyle}>{money(monthCost(i))}</td>)}
                 <td style={tdStyle}>{money(grandCost)}</td>
               </tr>

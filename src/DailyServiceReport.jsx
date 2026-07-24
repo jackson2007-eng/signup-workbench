@@ -237,10 +237,11 @@ function SetupTab({ source, annualPlanSignups, selectedPlanId, setSelectedPlanId
       <div style={cardStyle}>
         <div style={hTitle}>Night-before scheduling buffer</div>
         <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 12 }}>
-          Mirrors a real DATS practice: schedule more trips the night before than are actually
-          expected to happen, to offset day-of attrition (cancellations, no-shows). The Daily
-          Calendar's "Scheduled" figures are each day's delivered trips scaled up by this %,
-          computed live — change it any time without re-importing the budget.
+          Mirrors a common paratransit scheduling practice: schedule more trips the night before
+          than are actually expected to happen, to offset day-of attrition (cancellations,
+          no-shows). The Daily Calendar's "Scheduled" figures are each day's delivered trips
+          scaled up by this %, computed live — change it any time without re-importing the
+          budget.
         </div>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
           Scheduling buffer (%)
