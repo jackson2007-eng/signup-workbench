@@ -572,13 +572,13 @@ export default function AnnualPlan({ onHome, user, logout }) {
           --paper: #F4F6F7; --card: #FFFFFF; --chrome: #182430; --text: #182430;
           --demand-amber: #D98324; --supply-teal: #0F7B7A; --gap-red: #C0392B; --bookout-violet: #6C5B9E;
           --sample-gray: #5B6B75; --border: #E2E8EA; --border-light: #D7DFE2; --border-input: #CBD5DA;
-          --tint-neutral-b: #EEF4F5; --tint-teal-b: #EEF6F6; --tint-red: #FBEDEB;
+          --tint-neutral-b: #EEF4F5; --tint-teal-b: #EEF6F6; --tint-red: #FBEDEB; --tint-amber-b: #FBF3E9;
         }
         [data-theme="dark"] {
           --paper: #12181D; --card: #1B242B; --chrome: #0B1014; --text: #E7ECEF;
           --demand-amber: #E8A552; --supply-teal: #2FB3AC; --gap-red: #E27A70; --bookout-violet: #A594D1;
           --sample-gray: #8B9AA5; --border: #2A343C; --border-light: #333F47; --border-input: #3A454D;
-          --tint-neutral-b: #1C262B; --tint-teal-b: #172227; --tint-red: #2E1714;
+          --tint-neutral-b: #1C262B; --tint-teal-b: #172227; --tint-red: #2E1714; --tint-amber-b: #2A2115;
         }
         body { background: var(--paper); }
         .apnav { cursor:pointer; padding:9px 16px; font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:15px; letter-spacing:.03em; border-bottom:3px solid transparent; color:var(--sample-gray); }
@@ -665,9 +665,23 @@ function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvid
   const [overId, setOverId] = useState(null);
   // Informational only (this app flags, never blocks) — a total over 100% just means the share
   // targets are more ambitious than the demand can literally cover once the waterfall runs;
-  // Split/Budget will show the real outcome.
-  const totalSharePct = providers.filter((p) => p.role === "capacity" && p.hoursMode === "share")
-    .reduce((sum, p) => sum + (p.marketSharePct || 0), 0);
+  // Split/Budget will show the real outcome. Shown as a persistent three-state running total
+  // (under/at/over 100%) rather than only warning past 100%, so it's just as visible that there's
+  // still unallocated share left as it is that targets have gone too far.
+  const shareProviders = providers.filter((p) => p.role === "capacity" && p.hoursMode === "share");
+  const totalSharePct = shareProviders.reduce((sum, p) => sum + (p.marketSharePct || 0), 0);
+  const totalShareRounded = Math.round(totalSharePct * 10) / 10;
+  const shareStatus = shareProviders.length === 0 ? null : totalShareRounded === 100 ? "ok" : totalShareRounded < 100 ? "under" : "over";
+  const shareStatusStyle = {
+    ok: { color: supplyTeal, background: "var(--tint-teal-b)" },
+    under: { color: demandAmber, background: "var(--tint-amber-b)" },
+    over: { color: gapRed, background: "var(--tint-red, #F6E4E1)" },
+  }[shareStatus];
+  const shareStatusDetail = shareStatus === "ok"
+    ? "Fully allocated."
+    : shareStatus === "under"
+    ? `${Math.round((100 - totalShareRounded) * 10) / 10}% of demand isn't targeted by any provider yet.`
+    : `${Math.round((totalShareRounded - 100) * 10) / 10}% more than demand can fully support — actual trips served (Split/Budget) will fall short of these targets once the capacity waterfall runs.`;
   return (
     <div>
       <div style={cardStyle}>
@@ -675,9 +689,10 @@ function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvid
         <div style={{ fontSize: 12.5, color: sampleGray, marginBottom: 12 }}>
           <b>Capacity providers</b> take trips up to scheduled hours × productivity for that day of week, in the order listed — hours can be set directly, computed from headcount or an uploaded signup board, or from a target <b>market share</b> of daily demand (worked backward through productivity into the hours that share requires). <b>Remainder providers</b> absorb whatever's left, priced per trip — in list order, the last one takes whatever the others didn't claim. Separately, each provider's dropdown marks whether it's an <b>In House Service Provider</b> or a <b>Contractor</b> — that's what the Budget tab's In House/Contractor totals roll up by, independent of the capacity/remainder split above. Drag the ⠿ handle to reorder; Split and Budget reflect the new order immediately. Add as many of each as you need.
         </div>
-        {totalSharePct > 100 && (
-          <div style={{ fontSize: 12, color: gapRed, background: "var(--tint-red, #F6E4E1)", border: "1px solid var(--border-light)", padding: "6px 10px", marginBottom: 12 }}>
-            Market-share targets across your capacity providers add up to {Math.round(totalSharePct)}% — more than the demand can fully support. Actual trips served (Split/Budget) will fall short of these targets once the capacity waterfall runs.
+        {shareStatus && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: shareStatusStyle.color, background: shareStatusStyle.background, border: "1px solid var(--border-light)", padding: "7px 11px", marginBottom: 12 }}>
+            <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, fontSize: 15 }}>{totalShareRounded}%</span>
+            <span>market share targeted across your {shareProviders.length} share-based provider{shareProviders.length === 1 ? "" : "s"}. {shareStatusDetail}</span>
           </div>
         )}
         {providers.map((p) => (
@@ -755,9 +770,17 @@ function ProvidersTab({ providers, updateProvider, updateProviderHour, addProvid
                   </div>
                 ) : p.hoursMode === "share" ? (
                   <div style={{ background: "var(--tint-neutral-b)", border: "1px solid var(--border-light)", borderRadius: 2, padding: "10px 12px", marginBottom: 8 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
                       <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>Target share of daily demand (%)
                         <NumField value={p.marketSharePct ?? 50} step={1} onCommit={(v) => setMarketShare(p.id, v)} /></label>
+                      {shareStatus && (
+                        <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 600, color: shareStatusStyle.color, background: shareStatusStyle.background, padding: "3px 9px", borderRadius: 2, border: "1px solid var(--border-light)" }}>
+                          All providers: {totalShareRounded}%
+                          {shareStatus === "under" && ` · ${Math.round((100 - totalShareRounded) * 10) / 10}% left to reach 100%`}
+                          {shareStatus === "over" && ` · ${Math.round((totalShareRounded - 100) * 10) / 10}% over 100%`}
+                          {shareStatus === "ok" && " · at 100% ✓"}
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: 12.5, color: sampleGray }}>
                       Hours below are worked backward from this share of the average day's projected demand, through weekday/weekend productivity — and update automatically whenever history, growth %, or productivity change, no re-entry needed. Actual trips served (Split/Budget) still depend on this provider's position in the capacity list above.
